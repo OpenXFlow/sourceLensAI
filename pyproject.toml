@@ -1,0 +1,105 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sourceLens"
+version = "0.1.0"
+description = "AI-powered tool to generate tutorials from codebases."
+readme = "README.md"
+authors = [
+  { name = "Your Name", email = "your.email@example.com" },
+]
+license = { file = "LICENSE" }
+requires-python = ">=3.9" # Specify your minimum Python version
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License", # Or your chosen license
+    "Operating System :: OS Independent",
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Documentation",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "pocketflow>=0.0.1", # Assuming this is still used
+    "PyYAML>=6.0",
+    "requests>=2.28.0",
+    "GitPython>=3.1.0",
+    "google-cloud-aiplatform>=1.25.0", # Keep only if using Vertex AI
+    "google-generativeai>=0.8.0", # Or just "google-generativeai"
+    # "anthropic>=0.20.0", # Uncomment if using Anthropic
+    # "openai>=1.0.0", # Uncomment if using OpenAI
+    "python-dotenv>=1.0.0", # Useful for loading .env for local dev secrets if needed
+    "attrs>=21.3.0", # Often useful for dataclass-like behavior with validation
+    "jsonschema>=4.0.0", # For validating config.json
+]
+# Add other direct dependencies here
+
+[project.urls]
+Homepage = "https://github.com/your-username/sourceLens" # Update URL
+Repository = "https://github.com/your-username/sourceLens" # Update URL
+
+[project.scripts]
+sourcelens = "sourcelens.main:main" # Defines the command-line entry point
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",    # For running tests
+    "ruff>=0.1.0",    # Linter and formatter
+    "mypy>=1.0",      # Static type checker
+    "pre-commit>=3.0", # For running checks before commit
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]  # Look for packages in the src directory
+
+[tool.ruff]
+line-length = 120 # Or your preferred line length
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "C",    # flake8-comprehensions
+    "B",    # flake8-bugbear
+    "D",    # pydocstyle
+    "UP",   # pyupgrade
+    "YTT",  # flake8-2020
+    "ANN",  # flake8-annotations
+    "ASYNC", # flake8-async
+    "S",    # bandit
+    "BLE",  # flake8-blind-except
+    "FBT",  # flake8-boolean-trap
+    "NPY",  # numpy-specific rules
+    "PD",   # pandas-vet
+    "PGH",  # pygrep-hooks
+    "PL",   # pylint (selected rules)
+    "PT",   # flake8-pytest-style
+    "PTH",  # flake8-pathlib
+    "RSE",  # ruff-specific errors
+    "RET",  # flake8-return
+    "SLF",  # flake8-self
+    "SIM",  # flake8-simplify
+    "TID",  # flake8-tidy-imports
+    "TCH",  # flake8-type-checking
+]
+ignore = [] # Add specific rules to ignore if needed
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+# docstring-code-line-length = null
+# You can add more formatting-specific options here if needed
+
+
+[tool.mypy]
+python_version = "3.9" # Match requires-python
+warn_return_any = true
+warn_unused_configs = true
+packages = ["sourcelens"]
+namespace_packages = true
+
+# End of pyproject.toml

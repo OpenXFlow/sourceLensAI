@@ -1,0 +1,246 @@
+{
+  "project": {
+    "default_name": null
+  },
+
+  "output": {
+    "base_dir": "output",
+    "language": "english"
+  },
+
+  "source": {
+    "max_file_size_bytes": 150000,
+    "use_relative_paths": true,
+    "default_exclude_patterns": [
+      "__pycache__/*", "venv/*", ".venv/*", "env/*", "ENV/*", "*.pyc", "*.pyo",
+      "*test*", "tests/*", "test_*.py", "*_test.py", "docs/*", "examples/*",
+      "dist/*", "build/*", "*.egg-info/*", ".git/*", ".github/*", ".vscode/*",
+      "node_modules/*", "output/*", "logs/*", ".cache/*", "*.log", "*.tmp",
+      "*.bak", ".DS_Store", "Thumbs.db", "*.swp", "*.swo",
+      "target/*", "*.class", "*.jar", "*.war", "*.ear",
+      "bin/*", "obj/*", "Debug/*", "Release/*", "*.o", "*.obj",
+      "*.a", "*.lib", "*.so", "*.dylib", "*.dll",
+      "vendor/*", "Pods/*", "tmp/*", "temp/*", "log/*"
+    ],
+    "language_profiles": [
+      {
+        "is_active": true,
+        "language": "python",
+        "default_include_patterns": [
+          "*.py", "*.pyi", "*.pyx", "*.ipynb", "requirements.txt", "setup.py",
+          "pyproject.toml", "README.md", "Dockerfile", "*.yaml", "*.yml",
+          "*.json", "*.sh", "Makefile"
+        ]
+      },
+      {
+        "is_active": false,
+        "language": "java",
+        "default_include_patterns": [
+          "*.java", "pom.xml", "build.gradle", "build.gradle.kts",
+          "settings.gradle", "settings.gradle.kts", "*.properties",
+          "*.xml", "*.yaml", "*.yml", "*.json", "README.md", "Dockerfile",
+          "*.sh", "mvnw", "mvnw.cmd", "gradlew", "gradlew.bat"
+        ]
+      },
+      {
+        "is_active": false,
+        "language": "javascript",
+        "default_include_patterns": [
+          "*.js", "*.jsx", "*.mjs", "*.cjs", "package.json", "package-lock.json",
+          "yarn.lock", "tsconfig.json", "jsconfig.json", "*.html", "*.css",
+          "*.scss", "*.less", "*.vue", "*.svelte", "README.md", "Dockerfile",
+          "*.yaml", "*.yml", "*.json", "*.sh"
+        ]
+      },
+      {
+        "is_active": false,
+        "language": "typescript",
+        "default_include_patterns": [
+          "*.ts", "*.tsx", "package.json", "package-lock.json", "yarn.lock",
+          "tsconfig.json", "tslint.json", "*.html", "*.css", "*.scss", "*.less",
+          "*.vue", "*.svelte", "README.md", "Dockerfile", "*.yaml", "*.yml",
+          "*.json", "*.sh"
+        ]
+      },
+      {
+        "is_active": false,
+        "language": "csharp",
+        "default_include_patterns": [
+          "*.cs", "*.csproj", "*.sln", "appsettings.json", "*.config",
+          "*.xaml", "*.xml", "README.md", "Dockerfile", "*.yaml", "*.yml",
+          "*.json", "*.sh", "*.ps1"
+        ]
+      },
+      {
+        "is_active": false,
+        "language": "cpp",
+        "default_include_patterns": [
+          "*.cpp", "*.hpp", "*.cc", "*.hh", "*.cxx", "*.hxx", "*.c", "*.h",
+          "Makefile", "makefile", "*.mk", "CMakeLists.txt", "*.cmake",
+          "*.yaml", "*.yml", "*.json", "*.ini", "*.conf",
+          "README.md", "Dockerfile", "*.sh"
+        ]
+      },
+      {
+        "is_active": false,
+        "language": "c",
+        "default_include_patterns": [
+           "*.c", "*.h",
+           "Makefile", "makefile", "*.mk", "CMakeLists.txt", "*.cmake",
+           "*.yaml", "*.yml", "*.json", "*.ini", "*.conf",
+           "README.md", "Dockerfile", "*.sh"
+        ]
+      },
+      {
+        "is_active": false,
+        "language": "php",
+        "default_include_patterns": [
+          "*.php", "composer.json", "composer.lock", "phpunit.xml", "*.xml",
+          "*.yaml", "*.yml", "*.json", "*.ini", "README.md", "Dockerfile", "*.sh"
+        ]
+      },
+      {
+        "is_active": false,
+        "language": "swift",
+        "default_include_patterns": [
+          "*.swift", "Package.swift", "*.xcodeproj/*", "*.xcworkspace/*",
+          "*.storyboard", "*.xib", "*.plist", "Podfile", "Podfile.lock",
+          "Cartfile", "Cartfile.resolved", "README.md", "Dockerfile",
+          "*.yaml", "*.yml", "*.json", "*.sh"
+        ]
+      },
+      {
+        "is_active": false,
+        "language": "go",
+        "default_include_patterns": [
+          "*.go", "go.mod", "go.sum", "Makefile", "*.yaml", "*.yml",
+          "*.json", "README.md", "Dockerfile", "*.sh"
+        ]
+      },
+      {
+        "is_active": false,
+        "language": "ruby",
+        "default_include_patterns": [
+          "*.rb", "Gemfile", "Gemfile.lock", "Rakefile", "*.gemspec",
+          "config.ru", "*.yaml", "*.yml", "*.json", "README.md", "Dockerfile",
+          "*.sh"
+        ]
+      }
+    ]
+  },
+  "logging": {
+    "log_dir": "logs",
+    "log_level": "INFO"
+  },
+  "cache": {
+    "llm_cache_file": ".cache/llm_cache.json"
+  },
+  "github": {
+    "token": "YOUR_GIT_HUB_TOKEN"
+  },
+  "llm": {
+    "max_retries": 5,
+    "retry_wait_seconds": 20,
+    "use_cache": true,
+    "providers": [
+      {
+        "is_active": true,
+        "is_local_llm": false,
+        "provider": "gemini",
+        "model": "gemini-2.0-flash",
+        "api_key": "YOUR_API_KEY",
+        "api_base_url": null
+      },
+      {
+        "is_active": false,
+        "is_local_llm": false,
+        "provider": "gemini",
+        "model": "gemini-1.5-pro-latest",
+        "api_key": null,
+        "api_base_url": null
+      },
+      {
+        "is_active": false,
+        "is_local_llm": false,
+        "provider": "anthropic",
+        "model": "claude-3-opus-20240229",
+        "api_key": null,
+        "api_base_url": null
+      },
+      {
+        "is_active": false,
+        "is_local_llm": false,
+        "provider": "anthropic",
+        "model": "claude-3-sonnet-20240229",
+        "api_key": null,
+        "api_base_url": null
+      },
+      {
+        "is_active": false,
+        "is_local_llm": false,
+        "provider": "openai",
+        "model": "gpt-4-turbo",
+        "api_key": null,
+        "api_base_url": null
+      },
+      {
+        "is_active": false,
+        "is_local_llm": false,
+        "provider": "openai",
+        "model": "gpt-4o",
+        "api_key": null,
+        "api_base_url": null
+      },
+      {
+        "is_active": false,
+        "is_local_llm": false,
+        "provider": "vertexai",
+        "model": "gemini-1.5-pro-preview-0409",
+        "api_key": null,
+        "api_base_url": null,
+        "vertex_project": null,
+        "vertex_location": null
+      },
+      {
+        "is_active": false,
+        "is_local_llm": false,
+        "provider": "perplexity",
+        "model": "llama-3-sonar-large-32k-chat",
+        "api_key": null,
+        "api_base_url": null
+      },
+      {
+        "is_active": false,
+        "is_local_llm": true,
+        "provider": "openai_compatible_local",
+        "model": "llama3:8b",
+        "api_key": null,
+        "api_base_url": "http://localhost:11434/v1"
+      },
+      {
+        "is_active": false,
+        "is_local_llm": true,
+        "provider": "openai_compatible_local",
+        "model": "mistral:7b",
+        "api_key": null,
+        "api_base_url": "http://localhost:11434/v1"
+      },
+      {
+        "is_active": false,
+        "is_local_llm": true,
+        "provider": "openai_compatible_local",
+        "model": "local-model/llama3-70b-instruct",
+        "api_key": null,
+        "api_base_url": "http://localhost:1234/v1"
+      },
+      {
+        "is_active": false,
+        "is_local_llm": true,
+        "provider": "openai_compatible_local",
+        "model": "mixtral-8x7b-instruct-v0.1",
+        "api_key": null,
+        "api_base_url": "http://192.168.1.100:8080/v1"
+      }
+    ]
+  }
+}
