@@ -1,8 +1,14 @@
-```markdown
-# sourceLens
+<h1 align="center">sourceLens: AI-Powered Source Code Tutorials</h1>
 
-[![License: GNU GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-<!-- Add other badges as needed -->
+<p align="center">
+  <a href="https://www.gnu.org/licenses/gpl-3.0"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPL v3"></a>
+</p>
+
+*Feeling lost in a new codebase? `sourceLens` uses AI to analyze code repositories (GitHub/local) and automatically generate beginner-friendly tutorials explaining how it works.*
+
+<p align="center">
+  <img src="./docs/assets/banner.png" alt="sourceLens Banner" width="800"/>
+</p>
 
 `sourceLens` is an AI-powered command-line tool that analyzes source code (GitHub/local) and generates beginner-friendly Markdown tutorials explaining its structure and concepts.
 
