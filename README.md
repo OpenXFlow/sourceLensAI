@@ -1,23 +1,25 @@
-<h1 align="center">sourceLens: AI-Powered Source Code Tutorials</h1>
+<h1 align="center">sourceLens:  AI-powered tool to generate tutorials from source code.</h1>
 
 <p align="center">
   <a href="https://www.gnu.org/licenses/gpl-3.0"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPL v3"></a>
 </p>
 
-*Feeling lost in a new codebase? `sourceLens` uses AI to analyze code repositories (GitHub/local) and automatically generate beginner-friendly tutorials explaining how it works.*
+`sourceLens` uses AI (Cloud LLM / Local LLM) to analyze code repositories ( GitHub repo / Local repo) and automatically generate beginner-friendly tutorials explaining how it works.
+
 
 <p align="center">
-  <img src="./docs/assets/banner.png" alt="sourceLens Banner" width="800"/>
+  <img src="./docs/assets/banner1.png" alt="sourceLens Banner" width="600"/>
 </p>
 
-`sourceLens` is an AI-powered command-line tool that analyzes source code (GitHub/local) and generates beginner-friendly Markdown tutorials explaining its structure and concepts.
+
 
 ## Key Features
 
 *   **Code Input:** Fetches code from GitHub repositories (public/private) or local directories.
-*   **AI Analysis:** Uses configurable Large Language Models (LLMs like Gemini, etc.) to identify core concepts, map their relationships, and determine a logical learning path.
+*   **AI Analysis:** Uses configurable Large Language Models (LLMs like Gemini, Anthropic ,Openai ,Vertexai ,Perplexity etc.) to identify core concepts, map their relationships, and determine a logical learning path.
 *   **Tutorial Generation:** Creates structured Markdown tutorials with an index, individual chapters, and explanations in potentially multiple languages.
-*   **Filtering:** Supports include/exclude patterns and file size limits for focused analysis.
+*   **Filtering:** Supports include/exclude patterns and file size limits for focused analysis. Supported languages like python, java, javascript, typescript, csharp, cpp/c, php , swift, go, ruby . Easily extensible for other programming languages
+
 *   **Configurable:** Operation is controlled via a `config.json` file, with support for environment variables for secrets.
 
 ## Installation
@@ -94,7 +96,7 @@ sourcelens [OPTIONS] (--repo REPO_URL | --dir LOCAL_DIR)
 
 ```bash
 # Analyze a GitHub repo (assuming keys are in environment variables or config.json)
-sourcelens --repo https://github.com/darijo2yahoocom/sourceLensAI
+sourcelens --repo https://github.com/The-Pocket/PocketFlow
 
 # Analyze a local directory
 sourcelens --dir ../my-local-project/src
@@ -108,4 +110,7 @@ Generated tutorials appear in the configured output directory (e.g., `output/you
 ## License
 
 This project is licensed under the GNU GPL v3 License - see the LICENSE file for details.
+<p align="left">
+  <img src="./docs/assets/banner2.png" alt="sourceLens Banner" width="200"/>
+</p>
 ```
