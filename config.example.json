@@ -125,7 +125,15 @@
           "config.ru", "*.yaml", "*.yml", "*.json", "README.md", "Dockerfile",
           "*.sh"
         ]
-      }
+      },
+      {
+      "is_active": false,
+      "language": "rust",
+      "default_include_patterns": [
+        "*.rs","Cargo.toml","Cargo.lock","build.rs","README.md","Dockerfile",
+        "*.yaml", "*.yml","*.json","*.toml","*.sh"
+        ]
+    }
     ]
   },
   "logging": {

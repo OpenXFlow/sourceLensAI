@@ -1,4 +1,4 @@
-<h1 align="center">sourceLens:  AI-powered tool to generate tutorials from source code.</h1>
+<h1 align="center">sourceLens:  AI-powered tool to generate tutorials from source code or codebase .</h1>
 
 <p align="center">
   <a href="https://www.gnu.org/licenses/gpl-3.0"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPL v3"></a>
@@ -18,7 +18,7 @@
 *   **Code Input:** Fetches code from GitHub repositories (public/private) or local directories.
 *   **AI Analysis:** Uses configurable Large Language Models (LLMs like Gemini, Anthropic ,Openai ,Vertexai ,Perplexity etc.) to identify core concepts, map their relationships, and determine a logical learning path.
 *   **Tutorial Generation:** Creates structured Markdown tutorials with an index, individual chapters, and explanations in potentially multiple languages.
-*   **Filtering:** Supports include/exclude patterns and file size limits for focused analysis. Supported languages like python, java, javascript, typescript, csharp, cpp/c, php , swift, go, ruby . Easily extensible for other programming languages
+*   **Filtering:** Supports include/exclude patterns and file size limits for focused analysis. Supported languages like python, java, javascript, typescript, csharp, cpp/c, php , swift, go, ruby ,rust . Easily extensible for other programming languages
 
 *   **Configurable:** Operation is controlled via a `config.json` file, with support for environment variables for secrets.
 
