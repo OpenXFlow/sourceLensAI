@@ -5,9 +5,23 @@
 
   "output": {
     "base_dir": "output",
-    "language": "english"
-  },
+    "language": "english",
 
+    "diagram_generation": {
+      "separate_markup_file_generated": false,
+      "format": "mermaid",
+      "include_relationship_flowchart": true,
+      "include_class_diagram": true,
+      "include_package_diagram": true,
+      "include_sequence_diagrams": {
+        "enabled": true,
+        "max_diagrams": 5,
+        "scenarios": [
+          "primary_success_flow"
+           ]
+      }
+    }
+  },
   "source": {
     "max_file_size_bytes": 150000,
     "use_relative_paths": true,
@@ -125,15 +139,7 @@
           "config.ru", "*.yaml", "*.yml", "*.json", "README.md", "Dockerfile",
           "*.sh"
         ]
-      },
-      {
-      "is_active": false,
-      "language": "rust",
-      "default_include_patterns": [
-        "*.rs","Cargo.toml","Cargo.lock","build.rs","README.md","Dockerfile",
-        "*.yaml", "*.yml","*.json","*.toml","*.sh"
-        ]
-    }
+      }
     ]
   },
   "logging": {

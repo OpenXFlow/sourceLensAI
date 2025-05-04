@@ -22,12 +22,16 @@
 
 *   **Configurable:** Operation is controlled via a `config.json` file, with support for environment variables for secrets.
 
+
 ## Installation
 
 **Prerequisites:**
 
 *   Python 3.9 or higher
 *   Git
+<p align="left">
+  <img src="./docs/assets/banner3.png" alt="sourceLens Banner" width="180"/>
+</p>
 
 **Steps:**
 
@@ -73,6 +77,7 @@ Configuration is primarily handled via `config.json`.
 
     **IMPORTANT:** `config.json` is ignored by Git (`.gitignore`). Even if using environment variables, **do NOT commit `config.json`** as it might contain other configuration details or accidentally hold secrets later.
 
+
 ## Usage
 
 Run from the command line, providing a source:
@@ -111,6 +116,7 @@ Generated tutorials appear in the configured output directory (e.g., `output/you
 
 This project is licensed under the GNU GPL v3 License - see the LICENSE file for details.
 <p align="left">
-  <img src="./docs/assets/banner2.png" alt="sourceLens Banner" width="200"/>
+  <img src="./docs/assets/banner2.png" alt="sourceLens Banner". 
+  width="100"/>
 </p>
 ```
