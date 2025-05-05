@@ -4,9 +4,8 @@
 
 Provides functions to format prompts dynamically based on context data, ensuring
 consistency and maintainability. Includes prompts for identifying abstractions,
-analyzing relationships, ordering chapters, writing chapter content, and generating
-various diagram types (flowchart, class, package, sequence). This version includes
-enhanced formatting instructions for diagram generation prompts.
+analyzing relationships, ordering chapters, writing chapter content, identifying
+dynamic scenarios, and generating various diagram types.
 """
 
 from dataclasses import dataclass, field
@@ -15,15 +14,11 @@ from typing import Any, Optional, TypeAlias
 # Type Aliases matching those used in nodes for context clarity
 AbstractionsList: TypeAlias = list[dict[str, Any]]
 RelationshipsDict: TypeAlias = dict[str, Any]
-# Metadata for a single chapter used during prompt generation
 ChapterMetadata: TypeAlias = dict[str, Any]  # keys: num, name, filename, abstraction_index
 
 # --- Constants ---
-# Maximum number of lines for code snippets included in chapter prompts
 CODE_BLOCK_MAX_LINES = 20
-# Default relationship label if not provided in analysis
 DEFAULT_RELATIONSHIP_LABEL = "related to"
-# Maximum characters for relationship labels in flowcharts
 MAX_FLOWCHART_LABEL_LEN = 30
 
 
@@ -68,18 +63,23 @@ class SequenceDiagramContext:
         project_name: Name of the project.
         scenario_name: The key name identifying the scenario (e.g., 'main_success_flow').
         scenario_description: A textual description of the scenario to be visualized.
-        abstractions: List of identified abstractions (primarily for context).
-        relationships: Dictionary of relationships summary/details (primarily for context).
         diagram_format: The target diagram format (currently only 'mermaid').
+        # Note: abstractions and relationships are no longer directly passed here
+        # for the revised prompt, but kept in dataclass for potential future use.
+        abstractions: AbstractionsList = field(default_factory=list)
+        relationships: RelationshipsDict = field(default_factory=dict)
 
     """
 
     project_name: str
     scenario_name: str
     scenario_description: str
-    abstractions: AbstractionsList = field(default_factory=list)
-    relationships: RelationshipsDict = field(default_factory=dict)
     diagram_format: str = "mermaid"
+    # Keep these fields even if not used in current prompt version
+    abstractions: AbstractionsList = field(
+        default_factory=list, repr=False
+    )  # repr=False to avoid logging potentially large lists
+    relationships: RelationshipsDict = field(default_factory=dict, repr=False)
 
 
 # --- Prompt Formatting Functions ---
@@ -345,6 +345,59 @@ or concluding remarks outside the ```yaml block.
 """
 
 
+# --- NEW PROMPT ---
+def format_identify_scenarios_prompt(
+    project_name: str, abstraction_listing: str, context_summary: str, max_scenarios: int
+) -> str:
+    """Format prompt for LLM to identify key interaction scenarios for sequence diagrams.
+
+    Args:
+        project_name: The name of the project.
+        abstraction_listing: String listing identified abstractions (Index # Name).
+        context_summary: String containing the project summary.
+        max_scenarios: The maximum number of scenarios to suggest.
+
+    Returns:
+        A formatted string prompting the LLM to output a YAML list of scenario descriptions.
+
+    """
+    return f"""
+Analyze the provided project information for '{project_name}'. Your goal is to identify {max_scenarios} key
+interaction scenarios that would be most useful to visualize with sequence diagrams for a beginner
+understanding the project's flow.
+
+**Identified Abstractions (Index # Name):**
+{abstraction_listing}
+
+**Project Summary:**
+{context_summary}
+
+**Task:**
+Suggest {max_scenarios} distinct and important scenarios based on the abstractions and summary.
+Focus on typical user interactions, core processing flows, or significant error handling paths if applicable.
+Describe each scenario concisely in one sentence, focusing on the interaction or goal.
+
+**Output Format:**
+Format your response STRICTLY as a YAML list of strings enclosed within a single ```yaml code block.
+Each string in the list should be a concise description of one scenario.
+
+**Example Output:**
+```yaml
+- User logs in successfully and accesses their dashboard.
+- Processing a new data entry including validation and storage.
+- Handling a connection error when fetching external data.
+- User updates their profile information.
+- Generating a monthly report based on stored data.
+```
+
+Provide ONLY the YAML output block containing the list of scenario descriptions.
+Do not include any introductory text, explanations, or concluding remarks outside the ```yaml block.
+"""
+
+
+# --- Chapter Writing Prompts (Unchanged) ---
+
+
 def _prepare_chapter_language_hints(language: str) -> dict[str, str]:
     """Prepare language-specific hint strings for the chapter writing prompt."""
     hints: dict[str, str] = {
@@ -394,6 +447,12 @@ def _prepare_chapter_transitions(data: WriteChapterContext, lang_hints: dict[str
             "conclusion": "Esto concluye nuestro vistazo a este tema.",
             "prev_link": "Previamente, vimos",
             "next_link": "A continuación, examinaremos",
+        },
+        "slovak": {
+            "intro": "Začnime skúmať tento koncept.",
+            "conclusion": "Týmto končíme náš pohľad na túto tému.",
+            "prev_link": "Predtým sme sa pozreli na",
+            "next_link": "Ďalej preskúmame",
         },
         # Add other languages here
     }
@@ -472,9 +531,6 @@ def _prepare_chapter_instructions(
     return "\n".join(instr_parts).format(**hints)
 
 
-# --- End of Chapter Prompt Helpers ---
-
-
 def format_write_chapter_prompt(context: WriteChapterContext) -> str:
     """Format the detailed LLM prompt for writing a single tutorial chapter's content.
 
@@ -527,7 +583,7 @@ starting *directly* with the H1 heading:
 """
 
 
-# --- Prompts for Diagram Generation (REVISED) ---
+# --- Diagram Generation Prompts (Flowchart, Class, Package unchanged) ---
 
 
 def format_relationship_flowchart_prompt(
@@ -673,12 +729,10 @@ def format_class_diagram_prompt(
         +submit_data(user String, data Dict) String
     }
     class Utils {
-        <<Module>>
         +format_message(name String, message String) String$
         +validate_input(data Dict) Boolean$
     }
     class Config {
-        <<Module>>
         +API_ENDPOINT: str$
         +get_timeout() int$
     }
@@ -768,14 +822,23 @@ NO ```mermaid wrapper. NO extra text.
 """
 
 
+# --- Sequence Diagram Prompt (Revised - No context injection) ---
+
+
 def format_sequence_diagram_prompt(context: SequenceDiagramContext) -> str:
     """Format the prompt for the LLM to generate a sequence diagram (Mermaid).
 
+    Relies solely on the scenario description and general knowledge of software
+    components to generate the diagram. Context about specific abstractions/relationships
+    of the analyzed project is intentionally omitted to focus the LLM on the scenario flow.
+
     Args:
-        context: A SequenceDiagramContext object containing scenario details and project context.
+        context: A SequenceDiagramContext object containing scenario name, description,
+                 project name, and target diagram format.
 
     Returns:
-        A formatted string prompting the LLM to generate raw Mermaid sequence diagram markup.
+        A formatted string prompting the LLM to generate raw Mermaid sequence diagram markup
+        based *only* on the scenario description.
 
     """
     if context.diagram_format != "mermaid":
@@ -784,32 +847,31 @@ def format_sequence_diagram_prompt(context: SequenceDiagramContext) -> str:
             f"Please request 'mermaid'."
         )
 
-    potential_participants = [str(a.get("name", f"Concept_{i}")) for i, a in enumerate(context.abstractions)]
-    participants_hint = (
-        f"Potential Participants (for context): {', '.join(potential_participants)}\n" if potential_participants else ""
-    )
-    relationships_summary = str(context.relationships.get("summary", "N/A"))
-
-    # --- Enhanced Instructions ---
+    # --- Enhanced Instructions with STRONG emphasis on format ---
     instructions = """
 **Instructions for Generating Mermaid Sequence Diagram:**
-1.  **Diagram Type:** You MUST start the diagram block *DIRECTLY* with `sequenceDiagram`.
-2.  **Participants:** Define participants relevant to the scenario using `participant Alias as "Clear Label"`.
-    Choose clear, concise labels (e.g., "CLI", "DataProcessor", "Utils Module", "LLM API").
-3.  **Messages:** Show interactions chronologically using message arrows (`->>`, `->`, `-->>`, `-->`).
-    Add descriptive labels to messages.
-4.  **Activations:** Use `activate` and `deactivate` to show participant lifelines accurately. Ensure they are balanced.
-5.  **Control Flow:** Use `alt`, `opt`, `loop`, `par` where needed to represent conditional logic, options,
-    loops, or parallel actions described in the scenario.
-6.  **Notes:** Use `note right of Participant: Text` or `note over P1,P2: Text` for brief explanations if necessary.
-7.  **Focus:** The diagram MUST accurately reflect the sequence of events described in the
-    **Scenario Description**. Base interactions on this description.
-8.  **Output Format:** Your response MUST contain ONLY the raw Mermaid code.
-    - It MUST start *DIRECTLY* with the line `sequenceDiagram`.
-    - It MUST NOT be enclosed in ```mermaid or any other markdown code fences.
-    - Do NOT include any explanations, titles, or text before or after the Mermaid code.
-"""
 
+**CRITICAL OUTPUT FORMAT RULE:** Your entire response MUST start *DIRECTLY* with the line `sequenceDiagram`.
+There should be absolutely NO text, explanations, or markdown formatting (like ```mermaid) before this line.
+
+1.  **Diagram Type:** The first line MUST be `sequenceDiagram`.
+2.  **Participants:** Define participants relevant to the scenario using `participant Alias as "Clear Label"`.
+    Choose clear, concise labels reflecting common software components (e.g., "CLI", "Flow Orchestrator",
+    "FetchNode", "AnalyzeNode", "LLM_API", "FileSystem", "GitHub"). Use aliases if labels have spaces.
+3.  **Messages:** Show interactions chronologically based on the Scenario Description using message arrows
+    (`->>`, `->`, `-->>`, `-->`). Add descriptive labels to messages (e.g., `CLI->>Flow: start_analysis(repo)`).
+4.  **Activations:** Use `activate` and `deactivate` appropriately to show participant lifelines. Ensure activations are balanced.
+5.  **Control Flow:** Use `alt`, `opt`, `loop`, `par` where the Scenario Description implies conditional logic,
+    options, loops, or parallel actions.
+6.  **Notes:** Use `note right of Participant: Text` or `note over P1,P2: Text` for brief explanations ONLY if essential
+    to clarify a step from the scenario description.
+7.  **Focus:** The diagram MUST accurately reflect the sequence of events described ONLY in the **Scenario Description**.
+    Infer standard interactions between typical components based on the description.
+8.  **Final Output Format Check:** Ensure the response contains ONLY the raw Mermaid code starting exactly with
+    `sequenceDiagram` and does NOT include any ```mermaid wrapper or any other text before or after the code block.
+"""  # noqa: E501
+
+    # Note: No project-specific context (abstractions, relationships) is injected here anymore.
     return f"""
 Generate a **Mermaid sequence diagram** for the project '{context.project_name}'
 illustrating the specific scenario: **'{context.scenario_name}'**.
@@ -817,16 +879,13 @@ illustrating the specific scenario: **'{context.scenario_name}'**.
 **Scenario Description:**
 {context.scenario_description}
 
-**General Project Context (Background Only):**
-{participants_hint}Relationships Summary: {relationships_summary}
-
-**Task:** Create the sequence diagram based *only* on the **Scenario Description**.
-Infer likely interactions between components as needed to fulfill the scenario. Follow the instructions
-below with extreme precision.
+**Task:** Create the sequence diagram based *strictly and only* on the **Scenario Description** provided above.
+Infer likely interactions between standard software components (CLI, Flow, Nodes, Utilities, APIs, etc.)
+as needed to fulfill the scenario description. Follow the formatting instructions below with ABSOLUTE precision.
 
 {instructions}
 
-**Example Output Format (RAW Mermaid Content Only):**
+**Example Output Format (RAW Mermaid Content Only - MUST start like this):**
 sequenceDiagram
     participant User
     participant Processor as "DataProcessor"
@@ -853,8 +912,8 @@ sequenceDiagram
     end
     deactivate Processor
 
-**CRITICAL:** Provide ONLY the raw Mermaid sequence diagram content, starting EXACTLY with `sequenceDiagram`.
-NO ```mermaid wrapper. NO extra text.
+**CRITICAL REMINDER:** Provide ONLY the raw Mermaid sequence diagram content, starting EXACTLY with `sequenceDiagram`.
+NO ```mermaid wrapper. NO introductory or concluding text.
 """
 
 

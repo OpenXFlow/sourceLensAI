@@ -15,17 +15,21 @@ AbstractionsList: TypeAlias = list[dict[str, Any]]
 RelationshipsDict: TypeAlias = dict[str, Any]
 ChapterOrderList: TypeAlias = list[int]
 ChapterContentList: TypeAlias = list[str]
-ChapterFileData: TypeAlias = dict[str, Any]
+ChapterFileData: TypeAlias = dict[str, Any]  # Represents data for one chapter file
 DiagramMarkup: TypeAlias = str
-SequenceDiagramsList: TypeAlias = list[DiagramMarkup]  # Type for list of sequence diagrams
-DiagramConfigDict: TypeAlias = dict[str, Any]  # Type for diagram_generation config section
-SequenceDiagramConfigDict: TypeAlias = dict[str, Any]  # Type for include_sequence_diagrams config
+SequenceDiagramsList: TypeAlias = list[DiagramMarkup]
+DiagramConfigDict: TypeAlias = dict[str, Any]
+SequenceDiagramConfigDict: TypeAlias = dict[str, Any]
+IdentifiedScenarioList: TypeAlias = list[str]  # From IdentifyScenariosNode
 
-# Specific types for this node's prep/exec results
 CombinePrepResult: TypeAlias = bool
 CombineExecResult: TypeAlias = None
 
 logger = logging.getLogger(__name__)
+
+# --- Constants ---
+DIAGRAMS_CHAPTER_TITLE = "Architecture Diagrams"
+DIAGRAMS_FILENAME_BASE = "diagrams"
 
 
 # --- Dataclasses ---
@@ -64,26 +68,18 @@ class FooterInfo:
 
 @dataclass(frozen=True)
 class IndexContext:
-    """Encapsulates context needed to prepare the index file content.
+    """Encapsulates context needed to prepare the index.md file content.
 
     Attributes:
         project_name: The name of the project.
         relationships_data: Dictionary containing relationship summary and details.
         footer_info: FooterInfo dataclass instance.
-        # --- Arguments with defaults MUST come after non-default arguments ---
         repo_url: The URL of the source GitHub repository, if applicable.
         local_dir: The path to the source local directory, if applicable.
         relationship_flowchart_markup: Mermaid markup for the relationship flowchart.
-        class_diagram_markup: Mermaid markup for the class diagram.
-        package_diagram_markup: Mermaid markup for the package diagram.
-        sequence_diagrams_markup: List of Mermaid markups for sequence diagrams.
-        chapter_files_data: List of dictionaries, each representing a chapter file.
+        chapter_files_data: List of dictionaries representing all chapter files (including diagrams).
         diagram_config: The 'diagram_generation' section from the configuration.
-        # --- Derived fields (initialized in __post_init__) ---
         include_rel_flowchart: Flag to include the relationship flowchart.
-        include_class_diag: Flag to include the class diagram.
-        include_pkg_diag: Flag to include the package diagram.
-        include_sequence_diagrams: Config dictionary for sequence diagrams.
 
     """
 
@@ -96,62 +92,50 @@ class IndexContext:
     repo_url: Optional[str] = None
     local_dir: Optional[str] = None
     relationship_flowchart_markup: Optional[DiagramMarkup] = None
-    class_diagram_markup: Optional[DiagramMarkup] = None
-    package_diagram_markup: Optional[DiagramMarkup] = None
-    sequence_diagrams_markup: Optional[SequenceDiagramsList] = None
     chapter_files_data: list[ChapterFileData] = field(default_factory=list)
     diagram_config: DiagramConfigDict = field(default_factory=dict)
 
-    # Derived fields (can stay at the end as init=False)
+    # Derived fields
     include_rel_flowchart: bool = field(init=False)
-    include_class_diag: bool = field(init=False)
-    include_pkg_diag: bool = field(init=False)
-    include_sequence_diagrams: SequenceDiagramConfigDict = field(init=False)
 
     def __post_init__(self) -> None:
         """Set derived diagram flags after initialization."""
-        # Use object.__setattr__ because the class is frozen
         object.__setattr__(
             self, "include_rel_flowchart", self.diagram_config.get("include_relationship_flowchart", False)
         )
-        object.__setattr__(self, "include_class_diag", self.diagram_config.get("include_class_diagram", False))
-        object.__setattr__(self, "include_pkg_diag", self.diagram_config.get("include_package_diagram", False))
-        object.__setattr__(self, "include_sequence_diagrams", self.diagram_config.get("include_sequence_diagrams", {}))
 
 
 class CombineTutorial(BaseNode):
     """Combine generated tutorial parts into final Markdown files.
 
-    Reads processed data and diagram markups from shared state, assembles
-    index.md and chapter files, adds attributions, and writes the tutorial structure.
-    Includes logic to embed sequence diagrams if configured and available.
+    Assembles index.md (with only relationship flowchart), standard chapter files,
+    and a dedicated diagrams chapter (containing class, package, sequence diagrams).
+    Adds attributions and writes the complete tutorial structure.
     """
 
     def _prepare_index_content(self, context: IndexContext) -> str:
-        """Prepare the full Markdown content for the index.md file using context object.
+        """Prepare the full Markdown content for the index.md file.
 
-        Includes logic to embed relationship, class, package, and sequence diagrams
-        if they are enabled in the configuration and markup is available in the context.
+        Includes project summary, source info, relationship flowchart (if enabled),
+        and the list of chapter links (including the diagrams chapter link).
 
         Args:
-            context: An IndexContext object containing all necessary data and configuration flags.
+            context: An IndexContext object containing necessary data.
 
         Returns:
             A string containing the complete Markdown content for index.md.
 
         """
-        # Project Title and Summary
+        self._log_info("Preparing index.md content...")
         summary_raw = context.relationships_data.get("summary", f"Tutorial for {context.project_name}.")
         summary = str(summary_raw or f"Tutorial for {context.project_name}.")
         index_content_parts: list[str] = [f"# Tutorial: {context.project_name}\n\n{summary}\n"]
 
-        # Source Information
         source_info = ""
         if context.repo_url:
             source_info = f"**Source Repository:** [{context.repo_url}]({context.repo_url})"
         elif context.local_dir:
             try:
-                # Attempt to resolve to an absolute path for clarity
                 resolved_path = Path(context.local_dir).resolve(strict=True)
                 source_info = f"**Source Directory:** `{resolved_path}`"
             except (OSError, ValueError) as e:
@@ -162,9 +146,9 @@ class CombineTutorial(BaseNode):
         if source_info:
             index_content_parts.append(f"{source_info}\n")
 
-        diagram_format = context.diagram_config.get("format", "mermaid")  # Get format from config
+        diagram_format = context.diagram_config.get("format", "mermaid")
 
-        # Embed Relationship Flowchart
+        # --- Embed ONLY Relationship Flowchart ---
         if context.include_rel_flowchart:
             if context.relationship_flowchart_markup:
                 index_content_parts.extend(
@@ -175,76 +159,14 @@ class CombineTutorial(BaseNode):
                 )
                 self._log_info("Embedding relationship flowchart into index.md.")
             else:
-                self._log_warning("Relationship flowchart enabled but no markup found in shared state.")
+                self._log_warning("Relationship flowchart enabled but no markup found for index.md.")
+        # --- Class, Package, Sequence diagrams are NOT embedded here ---
 
-        # Embed Class Diagram
-        if context.include_class_diag:
-            if context.class_diagram_markup:
-                index_content_parts.extend(
-                    [
-                        "## Class Diagram\n",
-                        f"```{diagram_format}\n{context.class_diagram_markup}\n```\n",
-                    ]
-                )
-                self._log_info("Embedding class diagram into index.md.")
-            else:
-                self._log_warning("Class diagram enabled but no markup found in shared state.")
-
-        # Embed Package Diagram
-        if context.include_pkg_diag:
-            if context.package_diagram_markup:
-                index_content_parts.extend(
-                    [
-                        "## Package Dependencies\n",
-                        f"```{diagram_format}\n{context.package_diagram_markup}\n```\n",
-                    ]
-                )
-                self._log_info("Embedding package diagram into index.md.")
-            else:
-                self._log_warning("Package diagram enabled but no markup found in shared state.")
-
-        # Embed Sequence Diagrams
-        seq_config = context.include_sequence_diagrams  # Get the nested config dict
-        # Check if sequence diagrams are enabled within their specific config
-        if seq_config.get("enabled", False):
-            # Check if diagrams should be embedded (vs. separate files)
-            # Currently always embedding if enabled and present, separate file logic is in _write_output_files
-            if context.sequence_diagrams_markup:
-                index_content_parts.append("## Sequence Diagrams\n")
-                scenarios_list = seq_config.get("scenarios", [])
-                num_scenarios = len(scenarios_list)
-                num_markups = len(context.sequence_diagrams_markup)
-
-                if num_markups != num_scenarios and num_markups > 0:  # Log only if markups were generated
-                    logger.warning(
-                        "Mismatch between number of sequence diagram markups (%d) and configured scenarios (%d). "
-                        "Displaying available diagrams.",
-                        num_markups,
-                        num_scenarios,
-                    )
-
-                for i, seq_markup in enumerate(context.sequence_diagrams_markup):
-                    # Try to get scenario name, provide default if lists don't match or index out of bounds
-                    scenario_name = scenarios_list[i] if i < num_scenarios else f"Sequence Diagram {i + 1}"
-                    # Sanitize name for heading if needed, but display original if possible
-                    safe_heading_name = scenario_name.replace("_", " ").capitalize()
-                    index_content_parts.extend(
-                        [
-                            f"### Scenario: {safe_heading_name}\n",
-                            f"```{diagram_format}\n{seq_markup}\n```\n",
-                        ]
-                    )
-                self._log_info("Embedding %d sequence diagram(s) into index.md.", len(context.sequence_diagrams_markup))
-            else:
-                self._log_warning("Sequence diagrams enabled but no markup found in shared state.")
-
-        # Chapters List
+        # Chapters List (includes link to the diagrams chapter if generated)
         index_content_parts.append("## Chapters\n")
         try:
-            # Sort chapters based on the 'num' key assigned during generation
             sorted_chapters = sorted(context.chapter_files_data, key=lambda x: x.get("num", float("inf")))
         except TypeError:
-            # Fallback if sorting fails (e.g., 'num' missing or not comparable)
             logger.warning("Cannot sort chapters based on 'num' key. Using original order.")
             sorted_chapters = context.chapter_files_data
 
@@ -253,47 +175,40 @@ class CombineTutorial(BaseNode):
             num = ch_data.get("num")
             name = ch_data.get("name")
             fname = ch_data.get("filename")
-            # Ensure all parts needed for the link are valid
             if isinstance(num, int) and isinstance(name, str) and isinstance(fname, str):
                 chapter_links.append(f"{num}. [{name}]({fname})")
             else:
                 logger.warning("Skipping chapter link due to invalid data format: %s", ch_data)
 
         index_content_parts.append("\n".join(chapter_links))
-
-        # Footer
-        footer = context.footer_info.format_footer()
-        index_content_parts.append(footer)  # Footer already contains necessary leading newlines
-
+        index_content_parts.append(context.footer_info.format_footer())  # Add footer
         self._log_info("Prepared index.md content string.")
         return "\n".join(index_content_parts)
 
-    def _prepare_chapter_file_data(
+    def _prepare_standard_chapters_data(
         self,
         abstractions: AbstractionsList,
         chapter_order: ChapterOrderList,
         chapters_content: ChapterContentList,
         footer_info: FooterInfo,
     ) -> list[ChapterFileData]:
-        """Prepare data structure for each chapter file, adding dynamic footer.
+        """Prepare data structure for each standard chapter file, adding dynamic footer.
 
         Args:
-            abstractions: List of identified abstraction dictionaries from analysis.
+            abstractions: List of identified abstraction dictionaries.
             chapter_order: Ordered list of abstraction indices representing chapter sequence.
             chapters_content: List of generated Markdown content strings for each chapter.
             footer_info: Dataclass containing LLM and source language details for the footer.
 
         Returns:
-            A list of dictionaries, each representing a chapter file with its
-            filename, content (including footer), name, abstraction index, and chapter number.
+            A list of dictionaries for standard chapters (filename, content, name, index, number).
 
         """
-        chapter_files_data: list[ChapterFileData] = []
+        standard_chapters_data: list[ChapterFileData] = []
         num_abstractions = len(abstractions)
         num_content_items = len(chapters_content)
         num_order_items = len(chapter_order)
 
-        # Use the minimum length to avoid index errors if lists mismatch
         effective_chapter_count = min(num_order_items, num_content_items)
         if num_order_items != num_content_items:
             logger.warning(
@@ -306,14 +221,10 @@ class CombineTutorial(BaseNode):
         footer = footer_info.format_footer()
         for i in range(effective_chapter_count):
             abs_idx = chapter_order[i]
-            # Validate abstraction index before accessing abstractions list
             if not (0 <= abs_idx < num_abstractions):
-                logger.warning(
-                    "Skipping chapter preparation: Invalid abstraction index %d found at order position %d.", abs_idx, i
-                )
+                logger.warning("Skipping chapter preparation: Invalid abstraction index %d.", abs_idx)
                 continue
 
-            # Safely get abstraction name
             try:
                 abs_name_raw = abstractions[abs_idx].get("name", f"Chapter {i + 1}")
                 abs_name = str(abs_name_raw or f"Chapter {i + 1}")
@@ -321,20 +232,15 @@ class CombineTutorial(BaseNode):
                 logger.error("Index error accessing abstraction name at index %d. Using default.", abs_idx)
                 abs_name = f"Chapter {i + 1}"
 
-            # Generate filename
             safe_name = sanitize_filename(abs_name)
             filename = f"{i + 1:02d}_{safe_name}.md"
-
-            # Get chapter content, ensuring it's a string
             ch_content_raw = chapters_content[i]
             ch_content = str(ch_content_raw or "")
 
-            # Add footer if it's not already appended
             if not ch_content.rstrip().endswith(footer.strip()):
                 ch_content += footer
 
-            # Append chapter data to the list
-            chapter_files_data.append(
+            standard_chapters_data.append(
                 {
                     "filename": filename,
                     "content": ch_content,
@@ -344,55 +250,163 @@ class CombineTutorial(BaseNode):
                 }
             )
 
-        self._log_info("Prepared data for %d chapter files.", len(chapter_files_data))
-        return chapter_files_data
+        self._log_info("Prepared data for %d standard chapter files.", len(standard_chapters_data))
+        return standard_chapters_data
+
+    def _prepare_diagrams_chapter_data(
+        self,
+        shared: SharedState,  # Access shared state directly
+        diagram_config: DiagramConfigDict,
+        footer_info: FooterInfo,
+        next_chapter_num: int,
+    ) -> Optional[ChapterFileData]:
+        """Prepare the data structure for the dedicated diagrams chapter.
+
+        Checks configuration and shared state for generated diagrams (Class, Package, Sequence).
+        If any relevant diagrams are found, it generates the Markdown content and
+        returns the data structure for the diagrams chapter file.
+
+        Args:
+            shared: The shared state dictionary to retrieve diagram markups.
+            diagram_config: The 'diagram_generation' configuration section.
+            footer_info: FooterInfo object for adding the standard footer.
+            next_chapter_num: The number to assign to this chapter.
+
+        Returns:
+            A dictionary representing the diagrams chapter file data (filename, content, etc.),
+            or None if no diagrams are enabled or available.
+
+        """
+        content_parts: list[str] = []
+        diagram_format = diagram_config.get("format", "mermaid")
+        include_class = diagram_config.get("include_class_diagram", False)
+        include_pkg = diagram_config.get("include_package_diagram", False)
+        seq_config = diagram_config.get("include_sequence_diagrams", {})
+        include_seq = seq_config.get("enabled", False)
+
+        # Retrieve markups from shared state
+        class_diag_markup = shared.get("class_diagram_markup")
+        pkg_diag_markup = shared.get("package_diagram_markup")
+        seq_diag_markups = shared.get("sequence_diagrams_markup")  # List or None
+        identified_scenarios = shared.get("identified_scenarios", [])  # List or None/empty
+
+        has_content = False
+
+        # Add Class Diagram
+        if include_class and class_diag_markup:
+            content_parts.extend(
+                [
+                    "## Class Diagram\n",
+                    f"```{diagram_format}\n{class_diag_markup}\n```\n",
+                ]
+            )
+            self._log_info("Adding Class Diagram to diagrams chapter content.")
+            has_content = True
+        elif include_class:
+            self._log_warning("Class diagram enabled but no markup found for diagrams chapter.")
+
+        # Add Package Diagram
+        if include_pkg and pkg_diag_markup:
+            content_parts.extend(
+                [
+                    "## Package Dependencies\n",
+                    f"```{diagram_format}\n{pkg_diag_markup}\n```\n",
+                ]
+            )
+            self._log_info("Adding Package Diagram to diagrams chapter content.")
+            has_content = True
+        elif include_pkg:
+            self._log_warning("Package diagram enabled but no markup found for diagrams chapter.")
+
+        # Add Sequence Diagrams
+        if include_seq and seq_diag_markups:
+            content_parts.append("## Sequence Diagrams\n")
+            num_markups = len(seq_diag_markups)
+            num_scenarios = len(identified_scenarios) if isinstance(identified_scenarios, list) else 0
+
+            if num_markups > 0 and num_markups != num_scenarios:
+                logger.warning(
+                    "Mismatch between number of sequence diagram markups (%d) and identified scenarios (%d). "
+                    "Using generic titles if needed.",
+                    num_markups,
+                    num_scenarios,
+                )
+
+            for i, seq_markup in enumerate(seq_diag_markups):
+                # Use identified scenario description as title if available
+                scenario_title = (
+                    identified_scenarios[i]
+                    if isinstance(identified_scenarios, list) and i < num_scenarios
+                    else f"Scenario {i + 1}"
+                )
+                content_parts.extend(
+                    [
+                        f"### {scenario_title}\n",  # Use scenario description as title
+                        f"```{diagram_format}\n{seq_markup}\n```\n",
+                    ]
+                )
+            self._log_info("Adding %d Sequence Diagram(s) to diagrams chapter content.", len(seq_diag_markups))
+            has_content = True
+        elif include_seq:
+            self._log_warning("Sequence diagrams enabled but no markup found for diagrams chapter.")
+
+        # Only return chapter data if content exists
+        if has_content:
+            full_content = f"# {DIAGRAMS_CHAPTER_TITLE}\n\n" + "\n".join(content_parts)
+            footer = footer_info.format_footer()
+            full_content += footer
+
+            diagrams_filename = f"{next_chapter_num:02d}_{DIAGRAMS_FILENAME_BASE}.md"
+            self._log_info("Prepared data for '%s' chapter (%s).", DIAGRAMS_CHAPTER_TITLE, diagrams_filename)
+            return {
+                "filename": diagrams_filename,
+                "content": full_content,
+                "name": DIAGRAMS_CHAPTER_TITLE,
+                "num": next_chapter_num,
+                "abstraction_index": -1,  # Indicates no specific abstraction
+            }
+        self._log_info("No diagrams enabled or available. Skipping diagrams chapter.")
+        return None
 
     def _write_output_files(
         self,
         output_path: Path,
         index_content: str,
-        chapter_files_data: list[ChapterFileData],
-        sequence_diagrams_markup: Optional[SequenceDiagramsList],
-        diagram_config: DiagramConfigDict,
+        all_chapter_files_data: list[ChapterFileData],  # Now includes diagrams chapter
     ) -> bool:
-        """Write the index.md, chapter files, and potentially separate diagram files.
-
-        Creates the output directory if it doesn't exist. Writes the main index file,
-        then iterates through chapter data to write individual chapter files. If configured,
-        also writes sequence diagrams to separate files.
+        """Write the index.md and all generated chapter files (including diagrams chapter).
 
         Args:
             output_path: Target directory Path object for the tutorial files.
             index_content: Complete Markdown content for the index.md file.
-            chapter_files_data: List of dictionaries, each containing 'filename' and 'content'.
-            sequence_diagrams_markup: List of markup strings for sequence diagrams.
-            diagram_config: Dictionary containing configuration for diagram generation.
+            all_chapter_files_data: List of dicts with 'filename' and 'content' for all chapters.
 
         Returns:
             True if the output directory was created and index/chapter write operations
-            were attempted (even if some file writes failed). False only if the base
-            output directory creation fails.
+            were attempted. False only if the base output directory creation fails.
 
         """
-        write_success_flag = True  # Tracks if *all* writes succeed
         try:
             output_path.mkdir(parents=True, exist_ok=True)
             resolved_path = output_path.resolve()
             self._log_info("Ensured output directory exists: %s", resolved_path)
 
-            # Write index file (critical step)
+            # Write index file
             index_filepath = resolved_path / "index.md"
             try:
                 index_filepath.write_text(index_content, encoding="utf-8")
                 self._log_info("Wrote index file: %s", index_filepath)
             except OSError as e:
                 self._log_error("CRITICAL: Failed to write index file %s: %s", index_filepath, e, exc=e)
-                return False  # If index can't be written, consider it a critical failure
+                return False
 
-            # Write chapter files
-            for ch_info in chapter_files_data:
+            # Write all chapter files
+            write_success_flag = True
+            for ch_info in all_chapter_files_data:
                 fname = ch_info.get("filename")
                 content = ch_info.get("content")
+                chapter_name = ch_info.get("name", "Unknown")  # For logging
+
                 if not (isinstance(fname, str) and fname and isinstance(content, str)):
                     logger.warning("Skipping chapter write due to invalid filename/content: %s", ch_info)
                     write_success_flag = False
@@ -401,49 +415,22 @@ class CombineTutorial(BaseNode):
                 ch_filepath = resolved_path / fname
                 try:
                     ch_filepath.write_text(content, encoding="utf-8")
-                    self._log_info("Wrote chapter file: %s", ch_filepath)
+                    self._log_info("Wrote chapter file: %s ('%s')", ch_filepath, chapter_name)
                 except OSError as e:
-                    self._log_error("Failed to write chapter file %s: %s", ch_filepath, e, exc=e)
-                    write_success_flag = False  # Mark partial failure, but continue
+                    self._log_error("Failed to write chapter file %s ('%s'): %s", ch_filepath, chapter_name, e, exc=e)
+                    write_success_flag = False
 
-            # Write separate sequence diagram files if configured AND markups exist
-            if diagram_config.get("separate_markup_file_generated", False) and sequence_diagrams_markup:
-                self._log_info("Writing sequence diagrams to separate files...")
-                diag_format = diagram_config.get("format", "mermaid")
-                seq_config = diagram_config.get("include_sequence_diagrams", {})
-                scenarios_list = seq_config.get("scenarios", [])
-                num_scenarios = len(scenarios_list)
+            if not write_success_flag:
+                self._log_warning("One or more chapter file writes failed. Check previous logs.")
 
-                for i, seq_markup in enumerate(sequence_diagrams_markup):
-                    # Determine filename based on scenario name or index
-                    scenario_name = scenarios_list[i] if i < num_scenarios else f"sequence_{i + 1}"
-                    safe_scenario_name = sanitize_filename(scenario_name)
-                    seq_filename = f"{safe_scenario_name}.{diag_format}"
-                    seq_filepath = resolved_path / seq_filename
-                    try:
-                        seq_filepath.write_text(seq_markup, encoding="utf-8")
-                        self._log_info("Wrote sequence diagram file: %s", seq_filepath.name)
-                    except OSError as e:
-                        self._log_error("Failed to write sequence diagram file %s: %s", seq_filepath.name, e, exc=e)
-                        write_success_flag = False  # Mark partial failure
+            return True
 
         except OSError as e:
-            # Error creating the base output directory
             self._log_error("CRITICAL: Failed to create base output directory %s: %s", output_path, e, exc=e)
-            return False  # Cannot proceed if output dir fails
-
-        if not write_success_flag:
-            self._log_warning("One or more chapter or diagram file writes failed. Check previous logs.")
-
-        # Return True indicating the write process was attempted
-        return True
+            return False
 
     def prep(self, shared: SharedState) -> CombinePrepResult:
         """Prepare all data, generate final content strings, and write output files.
-
-        Gathers necessary data from the shared state, prepares context and footer information,
-        generates index content (including diagrams based on config), prepares chapter data,
-        and triggers the writing of all tutorial files to the output directory.
 
         Args:
             shared: The shared state dictionary containing all processed data.
@@ -458,7 +445,7 @@ class CombineTutorial(BaseNode):
         write_operation_initiated = False
 
         try:
-            # Retrieve necessary data from shared state
+            # --- Retrieve data from shared state ---
             project_name: str = self._get_required_shared(shared, "project_name")
             output_base_dir_str: str = self._get_required_shared(shared, "output_dir")
             relationships_data: RelationshipsDict = self._get_required_shared(shared, "relationships")
@@ -473,64 +460,59 @@ class CombineTutorial(BaseNode):
             diagram_config: DiagramConfigDict = output_config.get("diagram_generation", {})
             repo_url: Optional[str] = shared.get("repo_url")
             local_dir: Optional[str] = shared.get("local_dir")
+            rel_flowchart_markup = shared.get("relationship_flowchart_markup")  # Only this goes in index
 
-            # Retrieve generated diagram markups from shared state
-            rel_flowchart_markup = shared.get("relationship_flowchart_markup")
-            class_diag_markup = shared.get("class_diagram_markup")
-            pkg_diag_markup = shared.get("package_diagram_markup")
-            seq_diag_markups = shared.get("sequence_diagrams_markup")  # List[str] or None
-
-            # Create FooterInfo
+            # --- Prepare Basic Info ---
             footer_info = FooterInfo(
                 provider_name=llm_config.get("provider", "UnknownProvider"),
                 model_name=llm_config.get("model", "UnknownModel"),
                 is_local=llm_config.get("is_local_llm", False),
                 source_language=source_config.get("language", "UnknownLanguage"),
             )
-
-            # Determine output path
             safe_project_dir_name = sanitize_filename(project_name, allow_underscores=False).replace("_", "-")
             output_path = Path(output_base_dir_str) / safe_project_dir_name
 
-            # Prepare chapter data (adds footer)
-            chapter_files_data = self._prepare_chapter_file_data(
+            # --- Prepare Chapter Data (Standard Chapters + Diagrams Chapter) ---
+            all_chapters_data: list[ChapterFileData] = self._prepare_standard_chapters_data(
                 abstractions, chapter_order, chapters_content, footer_info
             )
+            next_chap_num = len(all_chapters_data) + 1
 
-            # Create IndexContext including all necessary data and configs
+            # Prepare and potentially add the diagrams chapter data
+            diagrams_chapter_data = self._prepare_diagrams_chapter_data(
+                shared=shared,  # Pass shared state to access diagrams
+                diagram_config=diagram_config,
+                footer_info=footer_info,
+                next_chapter_num=next_chap_num,
+            )
+            if diagrams_chapter_data:
+                all_chapters_data.append(diagrams_chapter_data)
+
+            # --- Prepare Index Content ---
             index_context = IndexContext(
                 project_name=project_name,
                 relationships_data=relationships_data,
                 footer_info=footer_info,
                 repo_url=repo_url,
                 local_dir=local_dir,
-                relationship_flowchart_markup=rel_flowchart_markup,
-                class_diagram_markup=class_diag_markup,
-                package_diagram_markup=pkg_diag_markup,
-                sequence_diagrams_markup=seq_diag_markups,  # Pass the list or None
-                chapter_files_data=chapter_files_data,
-                diagram_config=diagram_config,  # Pass the whole diagram config
+                relationship_flowchart_markup=rel_flowchart_markup,  # Only this diagram for index
+                chapter_files_data=all_chapters_data,  # Pass list including diagrams chapter link
+                diagram_config=diagram_config,
             )
-            # Generate Index Content (now includes sequence diagrams logic)
             index_content = self._prepare_index_content(index_context)
 
-            # Perform file writing
+            # --- Write Files ---
             write_successful = self._write_output_files(
                 output_path,
                 index_content,
-                chapter_files_data,
-                seq_diag_markups,  # Pass markups for potential separate file writing
-                diagram_config,
+                all_chapters_data,  # Write all chapters including diagrams
             )
 
-            # Determine final status based on write_successful
-            write_operation_initiated = True  # Reached writing stage
+            write_operation_initiated = True
             if write_successful:
-                # Even if write_successful is True, some non-critical files might have failed
                 final_output_path_str = str(output_path.resolve())
                 self._log_info("File writing process completed (may include partial errors).")
             else:
-                # write_successful is False typically means directory or index write failed
                 self._log_error("File writing failed critically (e.g., output dir or index.md).")
 
         except (ValueError, KeyError) as e:
@@ -544,7 +526,6 @@ class CombineTutorial(BaseNode):
             write_operation_initiated = False
 
         finally:
-            # Update shared state regardless of success/failure
             shared["final_output_dir"] = final_output_path_str
             if final_output_path_str is None and write_operation_initiated:
                 self._log_warning("Final output directory could not be set due to critical write errors.")
@@ -554,34 +535,15 @@ class CombineTutorial(BaseNode):
         return write_operation_initiated
 
     def exec(self, prep_res: CombinePrepResult) -> CombineExecResult:
-        """Execute step for CombineTutorial (no-op).
-
-        The primary work (content preparation and file writing) is performed
-        in the `prep` phase.
-
-        Args:
-            prep_res: The boolean result from the `prep` phase.
-
-        Returns:
-            None.
-
-        """
+        """Execute step for CombineTutorial (no-op)."""
         self._log_info("CombineTutorial exec step running (prep result: %s). No action taken.", prep_res)
         if not prep_res:
             self._log_warning("CombineTutorial prep step indicated failure or critical errors.")
         return None
 
     def post(self, shared: SharedState, prep_res: CombinePrepResult, exec_res: CombineExecResult) -> None:
-        """Post-execution step for CombineTutorial. Logs the final completion status.
-
-        Args:
-            shared: The shared state dictionary, potentially updated with 'final_output_dir'.
-            prep_res: The boolean result from the `prep` phase.
-            exec_res: The result from the `exec` phase (always None).
-
-        """
+        """Post-execution step for CombineTutorial. Logs the final completion status."""
         final_dir = shared.get("final_output_dir")
-        # Status depends on prep_res (critical setup/write ok) AND final_dir being set
         status = "successfully" if prep_res and final_dir else "with errors (check logs for details)"
         self._log_info(f"CombineTutorial post-processing finished {status}. Final output directory: {final_dir}")
 

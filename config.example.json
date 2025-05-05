@@ -8,17 +8,13 @@
     "language": "english",
 
     "diagram_generation": {
-      "separate_markup_file_generated": false,
       "format": "mermaid",
       "include_relationship_flowchart": true,
       "include_class_diagram": true,
       "include_package_diagram": true,
       "include_sequence_diagrams": {
         "enabled": true,
-        "max_diagrams": 5,
-        "scenarios": [
-          "primary_success_flow"
-           ]
+        "max_diagrams": 5
       }
     }
   },
