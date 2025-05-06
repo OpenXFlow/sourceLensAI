@@ -242,7 +242,6 @@ class CombineTutorial(BaseNode):
     # --- Core Node Methods ---
     def _prepare_index_content(self, context: IndexContext) -> str:
         """Prepare the full Markdown content for the index.md file."""
-        # ... (Implementation remains the same) ...
         self._log_info("Preparing index.md content...")
         summary_raw = context.relationships_data.get("summary", f"Tutorial for {context.project_name}.")
         summary = str(summary_raw or f"Tutorial for {context.project_name}.")
@@ -296,7 +295,6 @@ class CombineTutorial(BaseNode):
         self, abstractions: AbstractionsList, chapter_order: ChapterOrderList, chapters_content: ChapterContentList
     ) -> list[ChapterFileData]:
         """Prepare initial data structure for standard chapter files."""
-        # ... (Implementation remains the same) ...
         standard_chapters_data: list[ChapterFileData] = []
         num_abstractions = len(abstractions)
         num_content_items = len(chapters_content)
@@ -415,7 +413,6 @@ class CombineTutorial(BaseNode):
         self, output_path: Path, index_content: str, all_chapter_files_data: list[ChapterFileData]
     ) -> bool:
         """Write the index.md and all chapter files."""
-        # ... (Implementation remains the same) ...
         try:
             output_path.mkdir(parents=True, exist_ok=True)
             resolved_path = output_path.resolve()
@@ -454,7 +451,6 @@ class CombineTutorial(BaseNode):
 
     def _retrieve_shared_data(self, shared: SharedState) -> SharedDataForCombine:
         """Retrieve all necessary data from shared state for combination."""
-        # ... (Implementation remains the same) ...
         return {
             "project_name": self._get_required_shared(shared, "project_name"),
             "output_base_dir": self._get_required_shared(shared, "output_dir"),
@@ -472,7 +468,6 @@ class CombineTutorial(BaseNode):
 
     def prep(self, shared: SharedState) -> CombinePrepResult:
         """Prepare data, generate content, add footers/links, write files."""
-        # ... (Implementation remains the same) ...
         self._log_info("Starting tutorial combination and file writing...")
         final_output_path_str: Optional[str] = None
         write_operation_initiated = False

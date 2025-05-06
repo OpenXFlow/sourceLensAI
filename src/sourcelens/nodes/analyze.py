@@ -2,16 +2,12 @@
 
 """Nodes responsible for analyzing the codebase using an LLM."""
 
+import contextlib  # For SIM105
 import logging
-
-# Import Mapping from collections.abc for type hints
-from typing import Any, Optional, TypeAlias, Union
+from typing import Any, Final, Optional, TypeAlias, Union
 
 from sourcelens.nodes.base_node import BaseNode, SharedState
-from sourcelens.prompts import (
-    format_analyze_relationships_prompt,
-    format_identify_abstractions_prompt,
-)
+from sourcelens.prompts import AbstractionPrompts
 from sourcelens.utils.helpers import get_content_for_indices
 from sourcelens.utils.llm_api import LlmApiError, call_llm
 from sourcelens.utils.validation import (
@@ -31,22 +27,20 @@ RawIndexEntry: TypeAlias = Union[str, int, float, None]
 
 logger = logging.getLogger(__name__)
 
-# --- Schemas for LLM Output Validation ---
+# --- Constants ---
+MAX_RAW_OUTPUT_SNIPPET_LEN: Final[int] = 500  # For PLR2004
+
+# --- Schemas ---
 ABSTRACTION_ITEM_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        # Ensure name and description are required and are strings
         "name": {"type": "string", "minLength": 1},
         "description": {"type": "string", "minLength": 1},
-        "file_indices": {
-            "type": "array",
-            "items": {"type": ["integer", "string"]},  # Allow string representation of index
-        },
+        "file_indices": {"type": "array", "items": {"type": ["integer", "string"]}},
     },
     "required": ["name", "description", "file_indices"],
     "additionalProperties": False,
 }
-
 RELATIONSHIP_ITEM_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -57,73 +51,91 @@ RELATIONSHIP_ITEM_SCHEMA: dict[str, Any] = {
     "required": ["from_abstraction", "to_abstraction", "label"],
     "additionalProperties": False,
 }
-
 RELATIONSHIPS_DICT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "summary": {"type": "string", "minLength": 1},
-        "relationships": {
-            "type": "array",
-            "items": RELATIONSHIP_ITEM_SCHEMA,
-            # minItems set dynamically in exec
-        },
+        "relationships": {"type": "array", "items": RELATIONSHIP_ITEM_SCHEMA},
     },
     "required": ["summary", "relationships"],
     "additionalProperties": False,
 }
 
 
-# --- IdentifyAbstractions Node ---
-
-
 class IdentifyAbstractions(BaseNode):
     """Identify core abstractions from the codebase using an LLM."""
+
+    def _try_parse_index_from_string(self, entry_str: str, path_to_index_map: PathToIndexMap) -> Optional[int]:
+        """Attempt to parse an integer index from a string entry.
+
+        Handles formats like "idx # comment" or just "idx" or a file path.
+
+        Args:
+            entry_str: The string entry to parse.
+            path_to_index_map: Mapping from file paths to their index.
+
+        Returns:
+            The parsed integer index if successful, otherwise None.
+
+        """
+        parsed_idx: Optional[int] = None
+        # SIM105 Fix: Use contextlib.suppress
+        if "#" in entry_str:
+            with contextlib.suppress(ValueError, IndexError):
+                parsed_idx = int(entry_str.split("#", 1)[0].strip())
+
+        if parsed_idx is None:  # Check if still None after attempting to parse with comment
+            with contextlib.suppress(ValueError):
+                parsed_idx = int(entry_str)
+
+        if parsed_idx is None and entry_str in path_to_index_map:  # Check path map if other parsing failed
+            parsed_idx = path_to_index_map[entry_str]
+        elif parsed_idx is None and entry_str not in path_to_index_map and not entry_str.isdigit():
+            # Log only if it's not a simple number string and not in path map
+            logger.debug("Failed to parse index string or match path: '%s'", entry_str)
+        return parsed_idx
 
     def _parse_single_index(
         self, idx_entry: RawIndexEntry, path_to_index_map: PathToIndexMap, file_count: int
     ) -> Optional[int]:
-        """Parse a single file index entry from the LLM response."""
-        # ... (Implementation remains the same) ...
+        """Parse a single file index entry from the LLM response.
+
+        Args:
+            idx_entry: Raw entry from 'file_indices' list.
+            path_to_index_map: Mapping from file paths to their index.
+            file_count: Total number of files for bounds checking.
+
+        Returns:
+            Parsed integer index if valid and within bounds, otherwise None.
+
+        """
         parsed_idx: Optional[int] = None
         try:
             if isinstance(idx_entry, int):
                 parsed_idx = idx_entry
             elif isinstance(idx_entry, str):
-                entry_str = idx_entry.strip()
-                if "#" in entry_str:
-                    try:
-                        parsed_idx = int(entry_str.split("#", 1)[0].strip())
-                    except (ValueError, IndexError):
-                        pass
-                if parsed_idx is None:
-                    try:
-                        parsed_idx = int(entry_str)
-                    except ValueError:
-                        if entry_str in path_to_index_map:
-                            parsed_idx = path_to_index_map[entry_str]
-                        else:
-                            logger.debug("Failed parse/match index str: '%s'", entry_str)
+                parsed_idx = self._try_parse_index_from_string(idx_entry.strip(), path_to_index_map)
             elif isinstance(idx_entry, float) and idx_entry.is_integer():
                 parsed_idx = int(idx_entry)
             elif idx_entry is None:
-                return None  # Skip None values silently now
+                return None
             else:
                 logger.warning("Unexpected type '%s' for index: '%s'.", type(idx_entry).__name__, idx_entry)
                 return None
+
+            if parsed_idx is not None and 0 <= parsed_idx < file_count:
+                return parsed_idx
             if parsed_idx is not None:
-                if 0 <= parsed_idx < file_count:
-                    return parsed_idx
                 logger.warning("Index %d out of range [0, %d).", parsed_idx, file_count)
-                return None
+            return None
         except (ValueError, TypeError) as e:
-            logger.warning("Could not parse index '%s': %s.", idx_entry, e)
-        return None
+            logger.warning("Could not parse index entry '%s': %s.", idx_entry, e)
+            return None
 
     def _parse_and_validate_indices(
         self, raw_indices: list[Any], path_to_index_map: PathToIndexMap, file_count: int, item_name: str
     ) -> list[int]:
         """Parse and validate file indices from LLM response for one item."""
-        # ... (Implementation remains the same) ...
         validated_indices: set[int] = set()
         if not isinstance(raw_indices, list):
             logger.warning("Invalid type for 'file_indices' in '%s': %s.", item_name, type(raw_indices).__name__)
@@ -134,40 +146,34 @@ class IdentifyAbstractions(BaseNode):
                 validated_indices.add(valid_idx)
         if not validated_indices:
             logger.warning("No valid indices found/parsed for '%s'.", item_name)
-        return sorted(validated_indices)
+        return sorted(validated_indices)  # C414 Fix: No list() needed for set
 
     def prep(self, shared: SharedState) -> dict[str, Any]:
-        """Prepare the context and parameters needed for the LLM prompt.
+        """Prepare context and parameters for abstraction identification LLM prompt.
 
-        Parameters
-        ----------
-        shared : SharedState
-            The shared state containing data required for preparation.
+        Args:
+            shared: The shared state dictionary.
 
-        Returns
-        -------
-        dict[str, Any]
-            A dictionary containing the prepared context and parameters.
+        Returns:
+            A dictionary with context, file listing, counts, and configs for `exec`.
+
+        Raises:
+            ValueError: If required keys are missing from `shared`.
 
         """
-        # ... (Implementation remains the same) ...
         self._log_info("Preparing context for abstraction identification...")
         files_data: FileData = self._get_required_shared(shared, "files")
         project_name: str = self._get_required_shared(shared, "project_name")
         llm_config: dict[str, Any] = self._get_required_shared(shared, "llm_config")
         cache_config: dict[str, Any] = self._get_required_shared(shared, "cache_config")
         language: str = shared.get("language", "english")
-        context_list: list[str] = []
-        file_info: list[tuple[int, str]] = []
-        for i, (path, content) in enumerate(files_data):
-            entry = f"--- File Index {i}: {path} ---\n{content}\n\n"
-            context_list.append(entry)
-            file_info.append((i, path))
-        context = "".join(context_list)
-        file_listing_for_prompt = "\n".join([f"- {idx} # {path}" for idx, path in file_info])
+        context_list: list[str] = [
+            f"--- File Index {i}: {path} ---\n{content}\n\n" for i, (path, content) in enumerate(files_data)
+        ]
+        file_info_for_prompt: list[str] = [f"- {i} # {path}" for i, (path, _) in enumerate(files_data)]
         return {
-            "context": context,
-            "file_listing": file_listing_for_prompt,
+            "context": "".join(context_list),
+            "file_listing": "\n".join(file_info_for_prompt),
             "file_count": len(files_data),
             "project_name": project_name,
             "language": language,
@@ -176,139 +182,141 @@ class IdentifyAbstractions(BaseNode):
             "files_data": files_data,
         }
 
+    def _process_raw_abstractions(
+        self, raw_abstractions: list[Any], files_data: FileData, file_count: int
+    ) -> AbstractionsList:
+        """Process and validate a list of raw abstraction items.
+
+        Args:
+            raw_abstractions: List of items parsed from LLM's YAML response.
+            files_data: Original list of (path, content) tuples.
+            file_count: Total number of files.
+
+        Returns:
+            A list of validated abstraction dictionaries.
+
+        """
+        validated_abstractions: AbstractionsList = []
+        path_to_index_map: PathToIndexMap = {path: i for i, (path, _) in enumerate(files_data)}
+        for item in raw_abstractions:
+            item_name = item.get("name")
+            item_desc = item.get("description")
+            raw_indices_list = item.get("file_indices", [])
+            if not (isinstance(item_name, str) and item_name and isinstance(item_desc, str) and item_desc):
+                logger.warning("Skip abstraction missing/invalid name/desc: %s", item)
+                continue
+            if not isinstance(raw_indices_list, list):
+                logger.warning("File indices for '%s' not list.", item_name)
+                raw_indices_list = []
+            unique_indices = self._parse_and_validate_indices(
+                raw_indices_list, path_to_index_map, file_count, item_name
+            )
+            validated_abstractions.append({"name": item_name, "description": item_desc, "files": unique_indices})
+        return validated_abstractions
+
     def exec(self, prep_res: dict[str, Any]) -> AbstractionsList:
-        """Execute the core logic: call LLM, parse, validate abstractions."""
-        context: str = prep_res["context"]
-        file_listing: str = prep_res["file_listing"]
-        file_count: int = prep_res["file_count"]
-        project_name: str = prep_res["project_name"]
-        language: str = prep_res["language"]
+        """Execute LLM call, parse, and validate identified abstractions.
+
+        Args:
+            prep_res: Dictionary from the `prep` method.
+
+        Returns:
+            A list of validated abstraction dictionaries, or an empty list on failure.
+
+        """
         llm_config: dict[str, Any] = prep_res["llm_config"]
         cache_config: dict[str, Any] = prep_res["cache_config"]
-        files_data: FileData = prep_res["files_data"]
-
+        project_name: str = prep_res["project_name"]
         self._log_info(f"Identifying abstractions for '{project_name}' using LLM...")
-        prompt = format_identify_abstractions_prompt(
-            project_name=project_name, context=context, file_listing=file_listing, language=language
+        prompt = AbstractionPrompts.format_identify_abstractions_prompt(
+            project_name=project_name,
+            context=prep_res["context"],
+            file_listing=prep_res["file_listing"],
+            language=prep_res["language"],
         )
-
-        response: str
         try:
             response = call_llm(prompt, llm_config, cache_config)
         except LlmApiError as e:
-            self._log_error("LLM call failed for abstractions: %s", e, exc=e)
-            # If LLM call itself fails after retries, return empty list to allow flow continuation
-            # This prevents crashing the entire process for transient API issues
-            return []  # Allow continuation
-
-        # --- MODIFIED: Wrap validation/parsing in try/except ---
+            self._log_error("LLM call failed: %s", e, exc=e)
+            return []
         try:
-            raw_abstractions = validate_yaml_list(raw_llm_output=response, item_schema=ABSTRACTION_ITEM_SCHEMA)
+            raw_abstractions = validate_yaml_list(response, ABSTRACTION_ITEM_SCHEMA)
         except ValidationFailure as e_val:
-            self._log_error("YAML validation/parsing failed for abstractions: %s", e_val)
-            if e_val.raw_output:
-                MAX_SNIPPET_LENGTH = 500
-                snippet = e_val.raw_output[:MAX_SNIPPET_LENGTH] + (
-                    "..." if len(e_val.raw_output) > MAX_SNIPPET_LENGTH else ""
+            self._log_error("YAML validation failed for abstractions: %s", e_val)
+            if e_val.raw_output:  # PLR2004 Fix: Use constant
+                snippet = e_val.raw_output[:MAX_RAW_OUTPUT_SNIPPET_LEN] + (
+                    "..." if len(e_val.raw_output) > MAX_RAW_OUTPUT_SNIPPET_LEN else ""
                 )
-                logger.warning("Problematic raw LLM output snippet:\n---\n%s\n---", snippet)
-            return []  # Return empty on validation/parsing failure
-
-        # --- Processing valid YAML (if validation passed) ---
+                logger.warning("Problematic raw LLM output:\n---\n%s\n---", snippet)
+            return []
         try:
-            validated_abstractions: AbstractionsList = []
-            path_to_index_map: PathToIndexMap = {path: i for i, (path, _) in enumerate(files_data)}
-
-            for item in raw_abstractions:  # raw_abstractions is now guaranteed to be a list
-                item_name = item.get("name")
-                item_desc = item.get("description")
-                raw_indices_list = item.get("file_indices", [])
-                if not item_name or not item_desc:
-                    logger.warning("Skip abstraction missing name/desc: %s", item)
-                    continue
-                if not isinstance(raw_indices_list, list):
-                    logger.warning("Indices not list for '%s'.", item_name)
-                    raw_indices_list = []
-                unique_indices = self._parse_and_validate_indices(
-                    raw_indices_list, path_to_index_map, file_count, str(item_name)
-                )
-                validated_abstractions.append(
-                    {"name": str(item_name), "description": str(item_desc), "files": unique_indices}
-                )
-
+            validated_abstractions = self._process_raw_abstractions(
+                raw_abstractions, prep_res["files_data"], prep_res["file_count"]
+            )
             if not validated_abstractions and raw_abstractions:
-                self._log_warning("LLM response parsed, but no valid abstractions remained after processing.")
+                self._log_warning("LLM parsed, but no valid abstractions remained.")
             elif not validated_abstractions:
-                self._log_warning("No valid abstractions found in LLM response (potentially filtered by schema).")
-
-            self._log_info(f"Successfully processed {len(validated_abstractions)} abstractions.")
+                self._log_warning("No valid abstractions in LLM response.")
+            else:
+                self._log_info(f"Successfully processed {len(validated_abstractions)} abstractions.")
             return validated_abstractions
-
-        except Exception as e_proc:  # Catch other unexpected processing errors AFTER validation
-            self._log_error("Unexpected error processing validated abstractions: %s", e_proc, exc=e_proc)
-            return []  # Return empty on internal processing error
+        except (ValueError, TypeError) as e_proc:  # Catching specific exceptions
+            self._log_error("Error processing validated abstractions: %s", e_proc, exc=e_proc)
+            return []
 
     def post(self, shared: SharedState, prep_res: dict[str, Any], exec_res: AbstractionsList) -> None:
-        """Update the shared state with the identified abstractions."""
-        # ... (Implementation remains the same) ...
+        """Update the shared state with identified abstractions.
+
+        Args:
+            shared: The shared state dictionary.
+            prep_res: Result from `prep` (unused).
+            exec_res: Result from `exec` (list of abstractions).
+
+        """
         if isinstance(exec_res, list):
             shared["abstractions"] = exec_res
             self._log_info(f"Stored {len(exec_res)} abstractions.")
         else:
-            self._log_error("Invalid exec result: %s. Storing empty.", type(exec_res).__name__)
+            self._log_error("Invalid exec result type: %s.", type(exec_res).__name__)
             shared["abstractions"] = []
 
 
-# --- AnalyzeRelationships Node (remains the same) ---
 class AnalyzeRelationships(BaseNode):
     """Analyze relationships between identified abstractions using an LLM."""
 
     def _parse_single_relationship(
         self, rel_item: dict[str, Any], num_abstractions: int
     ) -> Optional[tuple[RelationshipDetail, set[int]]]:
-        # ...
+        """Parse and validate a single relationship item from LLM response."""
         try:
             from_entry = rel_item.get("from_abstraction")
-            from_idx: int
-            if isinstance(from_entry, int):
-                from_idx = from_entry
-            elif isinstance(from_entry, str):
-                from_idx = int(from_entry.split("#", 1)[0].strip())
-            else:
-                from_idx = int(str(from_entry).strip())
             to_entry = rel_item.get("to_abstraction")
-            to_idx: int
-            if isinstance(to_entry, int):
-                to_idx = to_entry
-            elif isinstance(to_entry, str):
-                to_idx = int(to_entry.split("#", 1)[0].strip())
-            else:
-                to_idx = int(str(to_entry).strip())
             label = rel_item.get("label")
-            if not isinstance(label, str) or not label.strip():
-                raise ValueError("Missing 'label'.")
-            label = label.strip()
+            from_idx = (
+                int(str(from_entry).split("#", 1)[0].strip()) if isinstance(from_entry, (str, int, float)) else None
+            )
+            to_idx = int(str(to_entry).split("#", 1)[0].strip()) if isinstance(to_entry, (str, int, float)) else None
+            if from_idx is None or to_idx is None or not isinstance(label, str) or not label.strip():
+                raise ValueError("Missing/invalid from/to or label.")
             if not (0 <= from_idx < num_abstractions and 0 <= to_idx < num_abstractions):
                 raise ValueError(f"Index out of range: {from_idx}, {to_idx}.")
-            validated_rel: RelationshipDetail = {"from": from_idx, "to": to_idx, "label": label}
-            involved: set[int] = {from_idx, to_idx}
-            return validated_rel, involved
-        except (ValueError, TypeError, KeyError, AttributeError) as e:
-            logger.warning("Could not parse relationship: %s. Error: %s.", rel_item, e)
+            return {"from": from_idx, "to": to_idx, "label": label.strip()}, {from_idx, to_idx}
+        except (ValueError, TypeError, KeyError, AttributeError) as e:  # PLE1206 Fix: Pass all format args
+            logger.warning("Could not parse relationship. Item: %s. Error: %s", rel_item, e)
             return None
 
     def _parse_and_validate_relationships(
         self, raw_rels_list: list[Any], num_abstractions: int
     ) -> tuple[list[RelationshipDetail], set[int]]:
-        # ...
+        """Parse and validate the list of relationship details."""
         validated_relationships: list[RelationshipDetail] = []
         involved_indices: set[int] = set()
         if not isinstance(raw_rels_list, list):
-            logger.warning("Expected list, got %s.", type(raw_rels_list).__name__)
+            logger.warning("Expected list for relationships, got %s.", type(raw_rels_list).__name__)
             return [], set()
         for rel_item in raw_rels_list:
             if not isinstance(rel_item, dict):
-                logger.warning("Skipping non-dict: %s", rel_item)
+                logger.warning("Skipping non-dict rel item: %s", rel_item)
                 continue
             parsed_result = self._parse_single_relationship(rel_item, num_abstractions)
             if parsed_result:
@@ -317,19 +325,8 @@ class AnalyzeRelationships(BaseNode):
                 involved_indices.update(involved)
         return validated_relationships, involved_indices
 
-    def prep(self, shared: SharedState) -> dict[str, Any]:
-        # ...
-        self._log_info("Preparing context for relationship analysis...")
-        abstractions: AbstractionsList = self._get_required_shared(shared, "abstractions")
-        files_data: FileData = self._get_required_shared(shared, "files")
-        project_name: str = self._get_required_shared(shared, "project_name")
-        language: str = shared.get("language", "english")
-        llm_config: dict[str, Any] = self._get_required_shared(shared, "llm_config")
-        cache_config: dict[str, Any] = self._get_required_shared(shared, "cache_config")
-        num_abstractions = len(abstractions)
-        if num_abstractions == 0:
-            self._log_warning("No abstractions found.")
-            return {"num_abstractions": 0}
+    def _build_relationship_context(self, abstractions: AbstractionsList, files_data: FileData) -> tuple[str, str]:
+        """Build context string and abstraction listing for the LLM prompt."""
         context_builder: list[str] = ["Identified Abstractions:"]
         all_relevant_indices: set[int] = set()
         abstraction_info_for_prompt: list[str] = []
@@ -338,12 +335,11 @@ class AnalyzeRelationships(BaseNode):
             abstr_desc = str(abstr.get("description", "N/A"))
             file_indices = [idx for idx in abstr.get("files", []) if isinstance(idx, int)]
             file_indices_str = ", ".join(map(str, file_indices)) if file_indices else "None"
-            info_line = f"- Index {i}: {abstr_name}\n  Desc: {abstr_desc}\n  Files: [{file_indices_str}]"
-            context_builder.append(info_line)
+            context_builder.append(f"- Index {i}: {abstr_name}\n  Desc: {abstr_desc}\n  Files: [{file_indices_str}]")
             abstraction_info_for_prompt.append(f"- {i} # {abstr_name}")
             all_relevant_indices.update(file_indices)
         context_builder.append("\nRelevant File Snippets:")
-        relevant_files_content_map = get_content_for_indices(files_data, sorted(all_relevant_indices))
+        relevant_files_content_map = get_content_for_indices(files_data, sorted(all_relevant_indices))  # C414 Fix
         if relevant_files_content_map:
             snippet_context = "\n\n".join(
                 f"--- File: {idx_path.split('# ', 1)[1] if '# ' in idx_path else idx_path} ---\n{content}"
@@ -352,12 +348,33 @@ class AnalyzeRelationships(BaseNode):
             context_builder.append(snippet_context)
         else:
             context_builder.append("No specific file content linked.")
-        context_str = "\n".join(context_builder)
-        abstraction_listing_str = "\n".join(abstraction_info_for_prompt)
+        return "\n".join(context_builder), "\n".join(abstraction_info_for_prompt)
+
+    def prep(self, shared: SharedState) -> dict[str, Any]:
+        """Prepare context for relationship analysis LLM prompt."""
+        self._log_info("Preparing context for relationship analysis...")
+        abstractions: AbstractionsList = self._get_required_shared(shared, "abstractions")
+        llm_config: dict[str, Any] = self._get_required_shared(shared, "llm_config")
+        cache_config: dict[str, Any] = self._get_required_shared(shared, "cache_config")
+        project_name: str = self._get_required_shared(shared, "project_name")
+        language: str = shared.get("language", "english")
+        if not abstractions:
+            self._log_warning("No abstractions for relationship analysis.")
+            return {
+                "num_abstractions": 0,
+                "llm_config": llm_config,
+                "cache_config": cache_config,
+                "project_name": project_name,
+                "language": language,
+                "context": "",
+                "abstraction_listing": "",
+            }
+        files_data: FileData = self._get_required_shared(shared, "files")
+        context_str, abstraction_listing_str = self._build_relationship_context(abstractions, files_data)
         return {
             "context": context_str,
             "abstraction_listing": abstraction_listing_str,
-            "num_abstractions": num_abstractions,
+            "num_abstractions": len(abstractions),
             "project_name": project_name,
             "language": language,
             "llm_config": llm_config,
@@ -365,94 +382,67 @@ class AnalyzeRelationships(BaseNode):
         }
 
     def exec(self, prep_res: dict[str, Any]) -> RelationshipsDict:
-        """Execute the core logic for analyzing relationships.
-
-        Parameters
-        ----------
-        prep_res : dict[str, Any]
-            The prepared context and parameters needed for the analysis.
-
-        Returns
-        -------
-        RelationshipsDict
-            A dictionary containing the summary and details of the analyzed relationships.
-
-        Raises
-        ------
-        ValidationFailure
-            If validation of the LLM response fails or no valid relationships are found.
-
-        """
-        # ...
+        """Execute LLM call to analyze relationships, parse, and validate."""
         num_abstractions: int = prep_res.get("num_abstractions", 0)
         project_name: str = prep_res.get("project_name", "Unknown Project")
         if num_abstractions == 0:
-            return {"summary": "No abstractions identified.", "details": []}
-        context: str = prep_res["context"]
-        abstraction_listing: str = prep_res["abstraction_listing"]
+            return {"summary": "No abstractions to analyze.", "details": []}
         language: str = prep_res["language"]
         llm_config: dict[str, Any] = prep_res["llm_config"]
         cache_config: dict[str, Any] = prep_res["cache_config"]
         self._log_info(f"Analyzing relationships for '{project_name}' using LLM...")
-        prompt = format_analyze_relationships_prompt(
+        prompt = AbstractionPrompts.format_analyze_relationships_prompt(
             project_name=project_name,
-            context=context,
-            abstraction_listing=abstraction_listing,
+            context=prep_res["context"],
+            abstraction_listing=prep_res["abstraction_listing"],
             num_abstractions=num_abstractions,
             language=language,
         )
-        response: str
         try:
             response = call_llm(prompt, llm_config, cache_config)
         except LlmApiError as e:
             self._log_error("LLM call failed for relationships: %s", e, exc=e)
-            raise
+            return {"summary": "LLM API Error.", "details": []}
         try:
-            current_dict_schema = RELATIONSHIPS_DICT_SCHEMA.copy()
-            min_rels = 1 if num_abstractions > 1 else 0
-            if "properties" in current_dict_schema and "relationships" in current_dict_schema.get("properties", {}):
-                current_dict_schema["properties"]["relationships"]["minItems"] = min_rels
+            schema = RELATIONSHIPS_DICT_SCHEMA.copy()
+            properties = schema.get("properties")
+            # PGH003 Fix: More specific ignore or check type
+            if isinstance(properties, dict) and isinstance(properties.get("relationships"), dict):
+                properties["relationships"]["minItems"] = 1 if num_abstractions > 1 else 0
             else:
                 logger.error("Schema structure error.")
                 raise ValidationFailure("Internal schema error.")
-            relationships_data = validate_yaml_dict(raw_llm_output=response, dict_schema=current_dict_schema)
-            raw_rels_list = relationships_data.get("relationships", [])
-            validated_rels, involved = self._parse_and_validate_relationships(raw_rels_list, num_abstractions)
-            if num_abstractions > 1:
-                missing = set(range(num_abstractions)) - involved
-            if missing:
-                logger.warning("Relationship analysis incomplete. Missing: %s", sorted(missing))
-            if not validated_rels and num_abstractions > 1:
-                raise ValidationFailure("No valid relationships found.")
-            self._log_info("Generated summary and %d valid relationships.", len(validated_rels))
-            return {"summary": relationships_data["summary"], "details": validated_rels}
-        except ValidationFailure as e:
-            self._log_error("Validation failed processing relationships: %s", e)
-            raise
-        except Exception as e:
-            self._log_error("Unexpected error processing relationships: %s", e, exc=e)
-            raise ValidationFailure(f"Unexpected processing error: {e}") from e
+            relationships_data = validate_yaml_dict(response, schema)
+            raw_rels = relationships_data.get("relationships", [])
+            if not isinstance(raw_rels, list):
+                raw_rels = []
+            valid_rels, involved = self._parse_and_validate_relationships(raw_rels, num_abstractions)
+            if num_abstractions > 1 and not valid_rels:
+                self._log_warning("No valid relationships found.")
+            elif num_abstractions > 1 and len(involved) < num_abstractions:
+                missing_indices = set(range(num_abstractions)) - involved
+                self._log_warning("Relationship analysis incomplete. Missing: %s", sorted(missing_indices))  # C414 Fix
+            self._log_info(f"Generated summary and {len(valid_rels)} relationships.")
+            return {"summary": str(relationships_data.get("summary", "")), "details": valid_rels}
+        except ValidationFailure as e_val:
+            self._log_error("Validation failed for relationships: %s", e_val)
+            if e_val.raw_output:
+                logger.warning(
+                    "Problematic YAML for relationships:\n%s", e_val.raw_output[:MAX_RAW_OUTPUT_SNIPPET_LEN]
+                )  # PLR2004 Fix
+            return {"summary": "Validation error.", "details": []}
+        except (ValueError, TypeError, KeyError) as e_proc:  # Catch specific exceptions
+            self._log_error("Error processing relationships: %s", e_proc, exc=e_proc)
+            return {"summary": "Processing error.", "details": []}
 
     def post(self, shared: SharedState, prep_res: dict[str, Any], exec_res: RelationshipsDict) -> None:
-        """Update the shared state with the analyzed relationships.
-
-        Parameters
-        ----------
-        shared : SharedState
-            The shared state to be updated with the relationships data.
-        prep_res : dict[str, Any]
-            The prepared context and parameters used for the analysis.
-        exec_res : RelationshipsDict
-            The results of the relationship analysis to be stored in the shared state.
-
-        """
-        # ...
-        if isinstance(exec_res, dict):
+        """Update shared state with analyzed relationships."""
+        if isinstance(exec_res, dict) and "summary" in exec_res and "details" in exec_res:
             shared["relationships"] = exec_res
             self._log_info("Stored relationship analysis results.")
         else:
-            self._log_error("Invalid exec result: %s. Storing error.", type(exec_res).__name__)
-            shared["relationships"] = {"summary": "Error.", "details": []}
+            self._log_error("Invalid exec result for relationships: %s.", type(exec_res).__name__)
+            shared["relationships"] = {"summary": "Error or no data.", "details": []}
 
 
 # End of src/sourcelens/nodes/analyze.py
