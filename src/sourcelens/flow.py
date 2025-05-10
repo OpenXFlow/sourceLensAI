@@ -4,7 +4,7 @@
 
 Instantiates and connects the various processing nodes using a flow execution library
 (like PocketFlow) to generate tutorials from source code. Includes dynamic scenario
-identification for sequence diagrams.
+identification for sequence diagrams and optional source code index generation.
 """
 
 import logging
@@ -17,15 +17,15 @@ from sourcelens.nodes.fetch import FetchCode
 from sourcelens.nodes.generate_diagrams import GenerateDiagramsNode
 
 # --- Import the new node ---
+from sourcelens.nodes.generate_source_index import GenerateSourceIndexNode
 from sourcelens.nodes.identify_scenarios import IdentifyScenariosNode
 from sourcelens.nodes.structure import OrderChapters
 from sourcelens.nodes.write import WriteChapters
 
 # Use TYPE_CHECKING block for imports needed only for type hints
-# Replace 'pocketflow.Flow' with your actual flow execution library if different
 if TYPE_CHECKING:
     try:
-        from pocketflow import Flow
+        from pocketflow import Flow  # type: ignore[import-untyped] # PGH003 for untyped 3rd party
     except ImportError:
         Flow = Any  # type: ignore[misc, assignment]
 
@@ -39,8 +39,9 @@ def create_tutorial_flow(llm_config: ConfigDict, cache_config: ConfigDict) -> "F
     """Create and configure the SourceLens tutorial generation flow.
 
     Instantiates all processing nodes (fetching, analyzing, ordering, scenario
-    identification, diagram generation, writing chapters, combining output),
-    passing necessary configurations. Defines the execution sequence of these nodes.
+    identification, diagram generation, writing chapters, source index generation,
+    combining output), passing necessary configurations. Defines the execution
+    sequence of these nodes.
 
     Args:
         llm_config: Processed configuration dictionary for the active LLM provider.
@@ -54,51 +55,60 @@ def create_tutorial_flow(llm_config: ConfigDict, cache_config: ConfigDict) -> "F
                      cannot be imported.
 
     """
-    logger.info("Creating tutorial generation flow with dynamic scenario identification...")
+    logger.info("Creating tutorial generation flow...")
 
     # --- Node Instantiation ---
-    max_retries = llm_config.get("max_retries", 3)
-    retry_wait = llm_config.get("retry_wait_seconds", 10)
-    logger.debug("Initializing LLM nodes with max_retries=%d, retry_wait=%d", max_retries, retry_wait)
+    max_retries_llm = llm_config.get("max_retries", 3)
+    retry_wait_llm = llm_config.get("retry_wait_seconds", 10)
+    logger.info("Initializing LLM-based nodes with max_retries=%d, retry_wait=%d", max_retries_llm, retry_wait_llm)
 
     # Instantiate nodes
-    fetch_code = FetchCode()
-    identify_abstractions = IdentifyAbstractions(max_retries=max_retries, wait=retry_wait)
-    analyze_relationships = AnalyzeRelationships(max_retries=max_retries, wait=retry_wait)
-    order_chapters = OrderChapters(max_retries=max_retries, wait=retry_wait)
-    # --- Instantiate the new node ---
-    identify_scenarios = IdentifyScenariosNode(max_retries=max_retries, wait=retry_wait)
-    generate_diagrams = GenerateDiagramsNode(max_retries=max_retries, wait=retry_wait)
-    write_chapters = WriteChapters(max_retries=max_retries, wait=retry_wait)
-    combine_tutorial = CombineTutorial()
+    fetch_code = FetchCode()  # No LLM retries needed for its core logic
+    identify_abstractions = IdentifyAbstractions(max_retries=max_retries_llm, wait=retry_wait_llm)
+    analyze_relationships = AnalyzeRelationships(max_retries=max_retries_llm, wait=retry_wait_llm)
+    order_chapters = OrderChapters(max_retries=max_retries_llm, wait=retry_wait_llm)
+    identify_scenarios = IdentifyScenariosNode(max_retries=max_retries_llm, wait=retry_wait_llm)
+    generate_diagrams = GenerateDiagramsNode(max_retries=max_retries_llm, wait=retry_wait_llm)
+    write_chapters = WriteChapters(max_retries=max_retries_llm, wait=retry_wait_llm)
+
+    # GenerateSourceIndexNode does not call LLM, so retries are for potential
+    # internal errors if any were to be handled by PocketFlow's retry mechanism.
+    # Setting max_retries to 1 ensures its exec() method is called once.
+    generate_source_index = GenerateSourceIndexNode(max_retries=1, wait=0)
+    logger.info("Initialized GenerateSourceIndexNode with max_retries=1, wait=0 to ensure exec call.")
+
+    combine_tutorial = CombineTutorial()  # No LLM retries needed for its core logic
 
     # --- Flow Definition ---
     # Fetch -> Identify Abstractions -> Analyze Relationships -> Order Chapters
-    # -> Identify Scenarios -> Generate Diagrams -> Write Chapters -> Combine
+    # -> Identify Scenarios -> Generate Diagrams -> Write Chapters
+    # -> Generate Source Index -> Combine
     (
         fetch_code
         >> identify_abstractions
         >> analyze_relationships
         >> order_chapters
-        # --- Add new node to identify scenarios before generating diagrams ---
         >> identify_scenarios
-        >> generate_diagrams  # GenerateDiagramsNode now uses identified scenarios
+        >> generate_diagrams
         >> write_chapters
+        # --- Add new node before combine ---
+        >> generate_source_index
         >> combine_tutorial
     )
     logger.info(
-        "Flow sequence defined: Fetch -> IdentifyAbs -> AnalyzeRel -> OrderChap -> IdentifyScen -> GenDiag -> WriteChap -> Combine"
+        "Flow sequence defined: Fetch -> IdentifyAbs -> AnalyzeRel -> OrderChap -> "
+        "IdentifyScen -> GenDiag -> WriteChap -> GenSourceIndex -> Combine"
     )
 
     # --- Flow Creation ---
     try:
         # Replace 'pocketflow' if using a different library
-        from pocketflow import Flow
+        from pocketflow import Flow as PocketFlowRunner  # Alias to avoid confusion
     except ImportError as e:
         logger.error("Flow execution library (e.g., PocketFlow) not found. Cannot create flow.")
         raise ImportError("PocketFlow library is required to create the execution flow.") from e
 
-    flow_instance: Flow = Flow(start=fetch_code)
+    flow_instance: PocketFlowRunner = PocketFlowRunner(start=fetch_code)
     logger.info("Flow instance created successfully.")
 
     return flow_instance

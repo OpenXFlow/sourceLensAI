@@ -7,6 +7,7 @@ integrating with the PocketFlow library.
 """
 
 import logging
+import sys
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from typing import Any, Optional, TypeAlias, TypeVar
@@ -36,23 +37,31 @@ except ImportError:
 SharedState: TypeAlias = dict[str, Any]
 
 # --- Type Variables ---
-# For specifying return types while maintaining some flexibility
 PrepResultType = TypeVar("PrepResultType")
 ExecResultType = TypeVar("ExecResultType")
 PrepItemType = TypeVar("PrepItemType")
 ExecItemResultType = TypeVar("ExecItemResultType")
-# TypeVar for _get_required_shared
 SharedValueType = TypeVar("SharedValueType")
 
 
 class BaseNode(PocketFlowNode, ABC):
     """Abstract Base Class for standard processing nodes in the SourceLens flow."""
 
+    _logger: logging.Logger
+    _supports_stacklevel: bool = sys.version_info >= (3, 8)
+
     def __init__(self, max_retries: int = 0, wait: int = 0) -> None:
-        """Initialize the BaseNode with retry parameters."""
+        """Initialize the BaseNode with retry parameters and logger.
+
+        Args:
+            max_retries: Maximum number of retries for the node execution
+                         managed by the flow runner. Defaults to 0.
+            wait: Wait time in seconds between retries. Defaults to 0.
+
+        """
         super().__init__(max_retries=max_retries, wait=wait)
-        # Get logger instance specific to the subclass name
         self._logger = logging.getLogger(self.__class__.__name__)
+        # No internal exec result storage; relying on PocketFlow
 
     @abstractmethod
     def prep(self, shared: SharedState) -> PrepResultType:
@@ -69,7 +78,7 @@ class BaseNode(PocketFlowNode, ABC):
             ValueError: If required data is missing from the shared state.
 
         """
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
 
     @abstractmethod
     def exec(self, prep_res: PrepResultType) -> ExecResultType:
@@ -85,7 +94,7 @@ class BaseNode(PocketFlowNode, ABC):
             NotImplementedError: If the subclass does not implement this method.
 
         """
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
 
     @abstractmethod
     def post(self, shared: SharedState, prep_res: PrepResultType, exec_res: ExecResultType) -> None:
@@ -94,7 +103,8 @@ class BaseNode(PocketFlowNode, ABC):
         Args:
             shared: The shared state dictionary to update.
             prep_res: The result returned by the `prep` method.
-            exec_res: The result returned by the `exec` method.
+            exec_res: The result returned by the `exec` method, passed by the
+                      flow runner (e.g., PocketFlow).
 
         Returns:
             None.
@@ -103,25 +113,15 @@ class BaseNode(PocketFlowNode, ABC):
             NotImplementedError: If the subclass does not implement this method.
 
         """
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
+
+    # --- _run override REMOVED ---
+    # Rely on PocketFlow's internal _run or _orch mechanisms.
 
     # --- Helper Methods ---
-    def _get_required_shared(self, shared: SharedState, key: str) -> SharedValueType:  # Using TypeVar
-        """Safely retrieve a required value from the shared state dictionary.
-
-        Args:
-            shared: The shared state dictionary.
-            key: The key to retrieve.
-
-        Returns:
-            The value associated with the key. The type is inferred by the caller
-            or can be specified using type hints at the call site.
-
-        Raises:
-            ValueError: If the key is missing or its value is None.
-
-        """
-        value: Optional[SharedValueType] = shared.get(key)  # Assume type matches TypeVar
+    def _get_required_shared(self, shared: SharedState, key: str) -> SharedValueType:
+        """Safely retrieve a required value from the shared state dictionary."""
+        value: Optional[SharedValueType] = shared.get(key)
         if value is None:
             self._log_error("Missing required key '%s' in shared state.", key)
             raise ValueError(
@@ -129,89 +129,54 @@ class BaseNode(PocketFlowNode, ABC):
             )
         return value
 
-    def _log_info(self, message: str, *args: object) -> None:  # Changed Any to object
+    def _log_info(self, message: str, *args: object) -> None:
         """Log an informational message using the node's logger."""
-        self._logger.info(message, *args)
+        if self._supports_stacklevel:
+            self._logger.info(message, *args, stacklevel=2)
+        else:
+            self._logger.info(message, *args)
 
-    def _log_warning(self, message: str, *args: object) -> None:  # Changed Any to object
+    def _log_warning(self, message: str, *args: object) -> None:
         """Log a warning message using the node's logger."""
-        self._logger.warning(message, *args)
+        if self._supports_stacklevel:
+            self._logger.warning(message, *args, stacklevel=2)
+        else:
+            self._logger.warning(message, *args)
 
-    def _log_error(
-        self,
-        message: str,
-        *args: object,
-        exc_info: bool = False,  # Changed Any to object
-    ) -> None:
-        """Log an error message, optionally including exception info.
-
-        Args:
-            message: The log message format string.
-            *args: Arguments to format the message string.
-            exc_info: If True, exception information is added to the log message.
-                      Defaults to False.
-
-        """
-        self._logger.error(message, *args, exc_info=exc_info)
+    def _log_error(self, message: str, *args: object, exc_info: bool = False) -> None:
+        """Log an error message, optionally including exception info."""
+        if self._supports_stacklevel:
+            self._logger.error(message, *args, exc_info=exc_info, stacklevel=2)
+        else:
+            self._logger.error(message, *args, exc_info=exc_info)
 
 
 class BaseBatchNode(PocketFlowBatchNode, BaseNode, ABC):
     """Abstract Base Class for batch processing nodes in the SourceLens flow."""
 
-    # Inherits __init__ from BaseNode
+    def __init__(self, max_retries: int = 0, wait: int = 0) -> None:
+        """Initialize the BaseBatchNode."""
+        super().__init__(max_retries=max_retries, wait=wait)
 
     @abstractmethod
     def prep(self, shared: SharedState) -> Iterable[PrepItemType]:
-        """Prepare an iterable of items for batch processing.
-
-        Args:
-            shared: The shared state dictionary.
-
-        Returns:
-            An iterable where each element is prepared data for one execution item.
-
-        Raises:
-            NotImplementedError: If the subclass does not implement this method.
-
-        """
-        raise NotImplementedError
+        """Prepare an iterable of items for batch processing."""
+        raise NotImplementedError  # pragma: no cover
 
     @abstractmethod
-    def exec(self, item: PrepItemType) -> ExecItemResultType:
-        """Execute the core logic for a single item in the batch.
-
-        Args:
-            item: A single item prepared by the `prep` method.
-
-        Returns:
-            The result of processing the single item.
-
-        Raises:
-            NotImplementedError: If the subclass does not implement this method.
-
-        """
-        raise NotImplementedError
+    def exec(self, item: PrepItemType) -> ExecItemResultType:  # Receives a single item
+        """Execute the core logic for a single item in the batch."""
+        raise NotImplementedError  # pragma: no cover
 
     @abstractmethod
     def post(
-        self, shared: SharedState, prep_res: Iterable[PrepItemType], exec_res_list: list[ExecItemResultType]
+        self,
+        shared: SharedState,
+        prep_res: Iterable[PrepItemType],
+        exec_res_list: list[ExecItemResultType],  # Receives list of results
     ) -> None:
-        """Update the shared state with the results from all batch items.
-
-        Args:
-            shared: The shared state dictionary to update.
-            prep_res: The iterable returned by the `prep` method.
-            exec_res_list: A list containing the results from executing `exec`
-                           on each item yielded by `prep_res`.
-
-        Returns:
-            None.
-
-        Raises:
-            NotImplementedError: If the subclass does not implement this method.
-
-        """
-        raise NotImplementedError
+        """Update the shared state with the results from all batch items."""
+        raise NotImplementedError  # pragma: no cover
 
 
 # End of src/sourcelens/nodes/base_node.py

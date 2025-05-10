@@ -19,6 +19,7 @@ from .fetch import FetchCode
 from .generate_diagrams import GenerateDiagramsNode
 
 # --- Import the new node ---
+from .generate_source_index import GenerateSourceIndexNode  # Added import
 from .identify_scenarios import IdentifyScenariosNode
 from .structure import OrderChapters
 from .write import WriteChapters
@@ -34,6 +35,7 @@ __all__ = [
     "OrderChapters",
     "IdentifyScenariosNode",
     "GenerateDiagramsNode",
+    "GenerateSourceIndexNode",  # Added new node
     "WriteChapters",
     "CombineTutorial",
 ]

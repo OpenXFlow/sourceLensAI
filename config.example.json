@@ -2,11 +2,9 @@
   "project": {
     "default_name": null
   },
-
   "output": {
     "base_dir": "output",
     "language": "english",
-
     "diagram_generation": {
       "format": "mermaid",
       "include_relationship_flowchart": true,
@@ -16,7 +14,8 @@
         "enabled": true,
         "max_diagrams": 5
       }
-    }
+    },
+    "include_source_index": true
   },
   "source": {
     "max_file_size_bytes": 150000,
@@ -36,6 +35,7 @@
       {
         "is_active": true,
         "language": "python",
+        "source_index_parser": "ast",
         "default_include_patterns": [
           "*.py", "*.pyi", "*.pyx", "*.ipynb", "requirements.txt", "setup.py",
           "pyproject.toml", "README.md", "Dockerfile", "*.yaml", "*.yml",
@@ -45,6 +45,7 @@
       {
         "is_active": false,
         "language": "java",
+        "source_index_parser": "llm",
         "default_include_patterns": [
           "*.java", "pom.xml", "build.gradle", "build.gradle.kts",
           "settings.gradle", "settings.gradle.kts", "*.properties",
@@ -55,6 +56,7 @@
       {
         "is_active": false,
         "language": "javascript",
+        "source_index_parser": "llm",
         "default_include_patterns": [
           "*.js", "*.jsx", "*.mjs", "*.cjs", "package.json", "package-lock.json",
           "yarn.lock", "tsconfig.json", "jsconfig.json", "*.html", "*.css",
@@ -65,6 +67,7 @@
       {
         "is_active": false,
         "language": "typescript",
+        "source_index_parser": "llm",
         "default_include_patterns": [
           "*.ts", "*.tsx", "package.json", "package-lock.json", "yarn.lock",
           "tsconfig.json", "tslint.json", "*.html", "*.css", "*.scss", "*.less",
@@ -75,6 +78,7 @@
       {
         "is_active": false,
         "language": "csharp",
+        "source_index_parser": "llm",
         "default_include_patterns": [
           "*.cs", "*.csproj", "*.sln", "appsettings.json", "*.config",
           "*.xaml", "*.xml", "README.md", "Dockerfile", "*.yaml", "*.yml",
@@ -84,6 +88,7 @@
       {
         "is_active": false,
         "language": "cpp",
+        "source_index_parser": "llm",
         "default_include_patterns": [
           "*.cpp", "*.hpp", "*.cc", "*.hh", "*.cxx", "*.hxx", "*.c", "*.h",
           "Makefile", "makefile", "*.mk", "CMakeLists.txt", "*.cmake",
@@ -94,6 +99,7 @@
       {
         "is_active": false,
         "language": "c",
+        "source_index_parser": "llm",
         "default_include_patterns": [
            "*.c", "*.h",
            "Makefile", "makefile", "*.mk", "CMakeLists.txt", "*.cmake",
@@ -104,6 +110,7 @@
       {
         "is_active": false,
         "language": "php",
+        "source_index_parser": "llm",
         "default_include_patterns": [
           "*.php", "composer.json", "composer.lock", "phpunit.xml", "*.xml",
           "*.yaml", "*.yml", "*.json", "*.ini", "README.md", "Dockerfile", "*.sh"
@@ -112,6 +119,7 @@
       {
         "is_active": false,
         "language": "swift",
+        "source_index_parser": "llm",
         "default_include_patterns": [
           "*.swift", "Package.swift", "*.xcodeproj/*", "*.xcworkspace/*",
           "*.storyboard", "*.xib", "*.plist", "Podfile", "Podfile.lock",
@@ -122,6 +130,7 @@
       {
         "is_active": false,
         "language": "go",
+        "source_index_parser": "llm",
         "default_include_patterns": [
           "*.go", "go.mod", "go.sum", "Makefile", "*.yaml", "*.yml",
           "*.json", "README.md", "Dockerfile", "*.sh"
@@ -130,6 +139,7 @@
       {
         "is_active": false,
         "language": "ruby",
+        "source_index_parser": "llm",
         "default_include_patterns": [
           "*.rb", "Gemfile", "Gemfile.lock", "Rakefile", "*.gemspec",
           "config.ru", "*.yaml", "*.yml", "*.json", "README.md", "Dockerfile",
@@ -140,7 +150,7 @@
   },
   "logging": {
     "log_dir": "logs",
-    "log_level": "INFO"
+    "log_level": "DEBUG"
   },
   "cache": {
     "llm_cache_file": ".cache/llm_cache.json"
