@@ -3,35 +3,18 @@
 """Abstract base classes for processing nodes in the SourceLens workflow.
 
 Defines the common structure and helper methods for standard and batch nodes,
-integrating with the PocketFlow library.
+integrating with the SourceLens internal flow engine.
 """
 
 import logging
 import sys
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
+from collections.abc import Iterable  # Correct import
 from typing import Any, Optional, TypeAlias, TypeVar
 
-# Adjust imports based on your chosen flow library
-try:
-    from pocketflow import BatchNode as PocketFlowBatchNode
-    from pocketflow import Node as PocketFlowNode
-except ImportError:
-    print("Warning: PocketFlow library not found. Using dummy classes for type checking.")
-
-    # Define dummy classes
-    class PocketFlowNode:  # type: ignore[no-redef]
-        """Dummy Node class if PocketFlow is not installed."""
-
-        def __init__(self, max_retries: int = 0, wait: int = 0) -> None:
-            """Initialize dummy node."""
-            pass  # pragma: no cover
-
-    class PocketFlowBatchNode(PocketFlowNode):  # type: ignore[no-redef]
-        """Dummy BatchNode class if PocketFlow is not installed."""
-
-        pass  # pragma: no cover
-
+# Import Node and BatchNode from the integrated flow engine
+from sourcelens.core.flow_engine import BatchNode as CoreBatchNode
+from sourcelens.core.flow_engine import Node as CoreNode
 
 # Type alias for shared state dictionary
 SharedState: TypeAlias = dict[str, Any]
@@ -44,7 +27,7 @@ ExecItemResultType = TypeVar("ExecItemResultType")
 SharedValueType = TypeVar("SharedValueType")
 
 
-class BaseNode(PocketFlowNode, ABC):
+class BaseNode(CoreNode, ABC):  # Inherit from CoreNode
     """Abstract Base Class for standard processing nodes in the SourceLens flow."""
 
     _logger: logging.Logger
@@ -61,7 +44,6 @@ class BaseNode(PocketFlowNode, ABC):
         """
         super().__init__(max_retries=max_retries, wait=wait)
         self._logger = logging.getLogger(self.__class__.__name__)
-        # No internal exec result storage; relying on PocketFlow
 
     @abstractmethod
     def prep(self, shared: SharedState) -> PrepResultType:
@@ -78,7 +60,7 @@ class BaseNode(PocketFlowNode, ABC):
             ValueError: If required data is missing from the shared state.
 
         """
-        raise NotImplementedError  # pragma: no cover
+        raise NotImplementedError
 
     @abstractmethod
     def exec(self, prep_res: PrepResultType) -> ExecResultType:
@@ -94,17 +76,24 @@ class BaseNode(PocketFlowNode, ABC):
             NotImplementedError: If the subclass does not implement this method.
 
         """
-        raise NotImplementedError  # pragma: no cover
+        raise NotImplementedError
 
     @abstractmethod
     def post(self, shared: SharedState, prep_res: PrepResultType, exec_res: ExecResultType) -> None:
         """Update the shared state with the execution results.
 
+        The `exec_res` is directly passed by the flow engine. This method in
+        SourceLens's BaseNode typically does not return an action string,
+        as flow control decisions are simpler or handled by the structure.
+        If a node needs to return an action, it should override `_run` or
+        ensure its `post` method in `flow_engine.Node` returns it.
+        For SourceLens, we assume `post` doesn't dictate flow control string.
+
         Args:
             shared: The shared state dictionary to update.
             prep_res: The result returned by the `prep` method.
             exec_res: The result returned by the `exec` method, passed by the
-                      flow runner (e.g., PocketFlow).
+                      flow runner (e.g., SourceLens flow engine).
 
         Returns:
             None.
@@ -113,12 +102,8 @@ class BaseNode(PocketFlowNode, ABC):
             NotImplementedError: If the subclass does not implement this method.
 
         """
-        raise NotImplementedError  # pragma: no cover
+        raise NotImplementedError
 
-    # --- _run override REMOVED ---
-    # Rely on PocketFlow's internal _run or _orch mechanisms.
-
-    # --- Helper Methods ---
     def _get_required_shared(self, shared: SharedState, key: str) -> SharedValueType:
         """Safely retrieve a required value from the shared state dictionary."""
         value: Optional[SharedValueType] = shared.get(key)
@@ -134,49 +119,58 @@ class BaseNode(PocketFlowNode, ABC):
         if self._supports_stacklevel:
             self._logger.info(message, *args, stacklevel=2)
         else:
-            self._logger.info(message, *args)
+            self._logger.info(message, *args)  # pragma: no cover
 
     def _log_warning(self, message: str, *args: object) -> None:
         """Log a warning message using the node's logger."""
         if self._supports_stacklevel:
             self._logger.warning(message, *args, stacklevel=2)
         else:
-            self._logger.warning(message, *args)
+            self._logger.warning(message, *args)  # pragma: no cover
 
     def _log_error(self, message: str, *args: object, exc_info: bool = False) -> None:
         """Log an error message, optionally including exception info."""
         if self._supports_stacklevel:
             self._logger.error(message, *args, exc_info=exc_info, stacklevel=2)
         else:
-            self._logger.error(message, *args, exc_info=exc_info)
+            self._logger.error(message, *args, exc_info=exc_info)  # pragma: no cover
 
 
-class BaseBatchNode(PocketFlowBatchNode, BaseNode, ABC):
+class BaseBatchNode(CoreBatchNode, BaseNode, ABC):
     """Abstract Base Class for batch processing nodes in the SourceLens flow."""
 
     def __init__(self, max_retries: int = 0, wait: int = 0) -> None:
         """Initialize the BaseBatchNode."""
         super().__init__(max_retries=max_retries, wait=wait)
+        self._logger = logging.getLogger(self.__class__.__name__)
 
     @abstractmethod
-    def prep(self, shared: SharedState) -> Iterable[PrepItemType]:
+    def prep(self, shared: SharedState) -> Iterable[PrepItemType]:  # Use Iterable directly
         """Prepare an iterable of items for batch processing."""
-        raise NotImplementedError  # pragma: no cover
+        raise NotImplementedError
 
     @abstractmethod
-    def exec(self, item: PrepItemType) -> ExecItemResultType:  # Receives a single item
+    def exec(self, item: PrepItemType) -> ExecItemResultType:
         """Execute the core logic for a single item in the batch."""
-        raise NotImplementedError  # pragma: no cover
+        raise NotImplementedError
 
     @abstractmethod
     def post(
         self,
         shared: SharedState,
-        prep_res: Iterable[PrepItemType],
-        exec_res_list: list[ExecItemResultType],  # Receives list of results
+        prep_res: Iterable[PrepItemType],  # Use Iterable directly
+        exec_res_list: list[ExecItemResultType],
     ) -> None:
-        """Update the shared state with the results from all batch items."""
-        raise NotImplementedError  # pragma: no cover
+        """Update the shared state with the results from all batch items.
+
+        Args:
+            shared: The shared state dictionary to update.
+            prep_res: The iterable of items returned by the `prep` method.
+            exec_res_list: A list containing the execution result for each item
+                           processed by the `exec` method, passed by the flow runner.
+
+        """
+        raise NotImplementedError
 
 
 # End of src/sourcelens/nodes/base_node.py

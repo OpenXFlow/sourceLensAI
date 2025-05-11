@@ -22,6 +22,10 @@
 
 *   **Configurable:** Operation is controlled via a `config.json` file, with support for environment variables for secrets.
 
+*   **Example of generated tutorials:** 
+
+    [View python Sample Tutorial](./output/python-sample-project/index.md)
+
 
 ## Installation
 

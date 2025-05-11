@@ -10,7 +10,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional, Type, TypeAlias
+from typing import TYPE_CHECKING, Any, Optional, TypeAlias  # Removed Type
 
 # Safe imports for optional dependencies
 try:
@@ -18,17 +18,15 @@ try:
 
     JSONSCHEMA_AVAILABLE = True
 except ImportError:
-    jsonschema = None
+    jsonschema = None  # type: ignore[assignment]
     JSONSCHEMA_AVAILABLE = False
 
 from sourcelens.config import ConfigError, load_config
 from sourcelens.flow import create_tutorial_flow
 
+# Import Flow from the integrated flow engine for type hinting
 if TYPE_CHECKING:
-    try:
-        from pocketflow import Flow  # type: ignore[import-untyped]
-    except ImportError:
-        Flow = Any  # type: ignore[misc,assignment]
+    from sourcelens.core.flow_engine import Flow as SourceLensFlow
 
 
 SharedStateDict: TypeAlias = dict[str, Any]
@@ -124,32 +122,30 @@ def _prepare_initial_state(args: argparse.Namespace, config: ConfigDict) -> Shar
     llm_cfg = config.get("llm", {})
     cache_cfg = config.get("cache", {})
     project_name: Optional[str] = args.name or project_cfg.get("default_name")
-    include_patterns: set[str] = set(args.include or source_cfg.get("default_include_patterns", []))
-    exclude_patterns: set[str] = set(args.exclude or source_cfg.get("default_exclude_patterns", []))
-    max_size_arg = args.max_size if args.max_size is not None else source_cfg.get("max_file_size_bytes")
-    output_dir: str = args.output or output_cfg.get("base_dir")
-    language: str = args.language or output_cfg.get("language")
 
-    # Determine local_dir_display_root for source index path formatting
+    include_patterns_raw = args.include or source_cfg.get("default_include_patterns", [])
+    include_patterns: set[str] = {str(p) for p in include_patterns_raw} if include_patterns_raw else set()
+
+    exclude_patterns_raw = args.exclude or source_cfg.get("default_exclude_patterns", [])
+    exclude_patterns: set[str] = {str(p) for p in exclude_patterns_raw} if exclude_patterns_raw else set()
+
+    max_size_arg = args.max_size if args.max_size is not None else source_cfg.get("max_file_size_bytes")
+    output_dir: str = str(args.output or output_cfg.get("base_dir", "output"))
+    language: str = str(args.language or output_cfg.get("language", "english"))
+
     local_dir_display_root = ""
     if args.dir:
-        # Use the path provided by --dir, normalized.
-        # This ensures paths in index are relative to what user sees as project root.
-        local_dir_path = Path(args.dir)
-        # We want just the name of the directory itself, or the full path if it's complex
-        # For "tests/sample_project2", this should be "tests/sample_project2"
-        # For "/abs/path/to/project", this could be "project" or "/abs/path/to/project"
-        # Let's use the string as provided by user, cleaned.
-        local_dir_display_root = str(local_dir_path.as_posix())  # Use as_posix for consistent /
+        local_dir_path = Path(str(args.dir))
+        local_dir_display_root = str(local_dir_path.as_posix())
         if local_dir_display_root == ".":
-            local_dir_display_root = "./"  # Explicitly show current directory
+            local_dir_display_root = "./"
         elif not local_dir_display_root.endswith("/"):
             local_dir_display_root += "/"
 
     initial_state: SharedStateDict = {
         "repo_url": args.repo,
-        "local_dir": args.dir,  # This is used by FetchCode for crawling
-        "local_dir_display_root": local_dir_display_root,  # For display in SourceIndex
+        "local_dir": args.dir,
+        "local_dir_display_root": local_dir_display_root,
         "project_name": project_name,
         "config": config,
         "llm_config": llm_cfg,
@@ -181,25 +177,25 @@ def _prepare_initial_state(args: argparse.Namespace, config: ConfigDict) -> Shar
 
 def _initialize_app(args: argparse.Namespace) -> ConfigDict:
     """Load configuration and set up logging."""
-    logger = logging.getLogger(__name__)
-    config: ConfigDict = {}
-    validation_exceptions: tuple[Type[Exception], ...] = (ConfigError,)
-    if JSONSCHEMA_AVAILABLE and jsonschema:
-        validation_exceptions += (jsonschema.exceptions.ValidationError,)
+    logger_init = logging.getLogger(__name__)
+    config_data: ConfigDict = {}
+    validation_exceptions: tuple[type[Exception], ...] = (ConfigError,)  # Use built-in type
+    if JSONSCHEMA_AVAILABLE and jsonschema and hasattr(jsonschema, "exceptions"):
+        validation_exceptions += (jsonschema.exceptions.ValidationError,)  # type: ignore[attr-defined]
     try:
-        config_path_str = args.config
-        config = load_config(config_path_str)
-        setup_logging(config.get("logging", {}))
-        logger.info("Config loaded successfully from %s", config_path_str)
-        logger.debug("Effective LLM Config: %s", config.get("llm"))
-        logger.debug("Effective Source Config: %s", config.get("source"))
-        logger.debug("Effective Output Config: %s", config.get("output"))
-        return config
+        config_path_str = str(args.config)
+        config_data = load_config(config_path_str)
+        setup_logging(config_data.get("logging", {}))
+        logger_init.info("Config loaded successfully from %s", config_path_str)
+        logger_init.debug("Effective LLM Config: %s", config_data.get("llm"))
+        logger_init.debug("Effective Source Config: %s", config_data.get("source"))
+        logger_init.debug("Effective Output Config: %s", config_data.get("output"))
+        return config_data
     except FileNotFoundError as e:
         logging.critical("Configuration file not found: %s", e)
         print(f"\n❌ ERROR: Configuration file not found: {e}", file=sys.stderr)
         sys.exit(1)
-    except validation_exceptions as e:
+    except validation_exceptions as e:  # type: ignore[misc]
         logging.critical("Configuration loading/validation failed: %s", e, exc_info=True)
         print(f"\n❌ ERROR: Configuration loading/validation failed: {e}", file=sys.stderr)
         sys.exit(1)
@@ -215,7 +211,7 @@ def _initialize_app(args: argparse.Namespace) -> ConfigDict:
         logging.critical("Unexpected error during setup: %s", e, exc_info=True)
         print(f"\n❌ ERROR: Unexpected error during setup: {e}", file=sys.stderr)
         sys.exit(1)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logging.critical("An unknown critical error occurred during setup: %s", e, exc_info=True)
         print(f"\n❌ CRITICAL ERROR during setup: {e}", file=sys.stderr)
         sys.exit(1)
@@ -223,39 +219,45 @@ def _initialize_app(args: argparse.Namespace) -> ConfigDict:
 
 def _run_flow(initial_state: SharedStateDict) -> None:
     """Create and run the tutorial generation flow."""
-    logger = logging.getLogger(__name__)
-    source_desc = initial_state["repo_url"] or initial_state["local_dir"]
-    logger.info("Starting tutorial generation for: %s", source_desc)
-    logger.info("Output Language: %s", initial_state["language"])
-    logger.info("Output Directory Base: %s", initial_state["output_dir"])
-    logger.info("Active Source Profile: %s", initial_state.get("source_config", {}).get("language"))
-    logger.info(
+    logger_run_flow = logging.getLogger(__name__)
+    source_desc = initial_state.get("repo_url") or initial_state.get("local_dir")
+    logger_run_flow.info("Starting tutorial generation for: %s", source_desc)
+    logger_run_flow.info("Output Language: %s", initial_state.get("language"))
+    logger_run_flow.info("Output Directory Base: %s", initial_state.get("output_dir"))
+    logger_run_flow.info("Active Source Profile: %s", initial_state.get("source_config", {}).get("language"))
+    llm_cfg_for_log = initial_state.get("llm_config", {})
+    logger_run_flow.info(
         "Active LLM Provider: %s (%s)",
-        initial_state.get("llm_config", {}).get("provider"),
-        "local" if initial_state.get("llm_config", {}).get("is_local_llm") else "cloud",
+        llm_cfg_for_log.get("provider"),
+        "local" if llm_cfg_for_log.get("is_local_llm") else "cloud",
     )
-    logger.info("Active LLM Model: %s", initial_state.get("llm_config", {}).get("model"))
+    logger_run_flow.info("Active LLM Model: %s", llm_cfg_for_log.get("model"))
 
     try:
-        tutorial_flow: Flow = create_tutorial_flow(initial_state["llm_config"], initial_state["cache_config"])
+        llm_config_param = initial_state.get("llm_config", {})
+        cache_config_param = initial_state.get("cache_config", {})
+        if not isinstance(llm_config_param, dict) or not isinstance(cache_config_param, dict):
+            raise TypeError("llm_config or cache_config is not a dictionary.")
+
+        tutorial_flow: SourceLensFlow = create_tutorial_flow(llm_config_param, cache_config_param)
         tutorial_flow.run(initial_state)
 
         final_dir = initial_state.get("final_output_dir")
         if final_dir and isinstance(final_dir, str):
-            logger.info("Tutorial generation completed successfully.")
+            logger_run_flow.info("Tutorial generation completed successfully.")
             print(f"\n✅ Tutorial generation complete! Files are in: {final_dir}")
         else:
             log_msg = "Flow finished, but 'final_output_dir' not set correctly in shared state."
-            logger.error(log_msg)
+            logger_run_flow.error(log_msg)
             print_msg = "\n⚠️ ERROR: Flow finished, but final output directory was not set."
             print(print_msg, file=sys.stderr)
             sys.exit(1)
 
     except ImportError as e:
-        logging.critical("Failed to import or use core library (PocketFlow?): %s", e)
-        print(f"\n❌ ERROR: Core dependency missing or failed: {e}", file=sys.stderr)
+        logging.critical("Failed to import a required module during flow execution: %s", e)
+        print(f"\n❌ ERROR: Module import missing or failed during flow: {e}", file=sys.stderr)
         sys.exit(1)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logging.exception("ERROR: Tutorial generation failed during flow execution.")
         print(f"\n❌ ERROR: Tutorial generation failed: {e}", file=sys.stderr)
         sys.exit(1)
@@ -268,8 +270,8 @@ def main() -> None:
     prepares the initial state, and runs the processing flow.
     """
     args = parse_arguments()
-    config_data = _initialize_app(args)
-    shared_initial_state = _prepare_initial_state(args, config_data)
+    config_data_main = _initialize_app(args)
+    shared_initial_state = _prepare_initial_state(args, config_data_main)
     _run_flow(shared_initial_state)
 
 

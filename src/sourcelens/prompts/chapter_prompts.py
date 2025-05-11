@@ -24,7 +24,6 @@ class ChapterPrompts:
             A dictionary containing language-specific instruction snippets.
 
         """
-        # --- Bez zmeny ---
         hints: dict[str, str] = {
             "lang_instr": "",
             "concept_note": "",
@@ -68,30 +67,29 @@ class ChapterPrompts:
             A tuple containing the introductory and concluding transition strings.
 
         """
-        # --- Bez zmeny ---
         lang = data.language.lower()
         default_intro = "Let's begin exploring this concept."
         default_conclusion = "This concludes our look at this topic."
-        default_prev_link_text = "Previously, we looked at"
+        # Removed default_prev_link_text as it's not used here for LLM prompt anymore
+
         translations: dict[str, dict[str, str]] = {
             "slovak": {
                 "intro": "Začnime skúmať tento koncept.",
                 "conclusion": "Týmto končíme náš pohľad na túto tému.",
-                "prev_link": "Predtým sme sa pozreli na",
+                # "prev_link": "Predtým sme sa pozreli na", # Not needed for LLM here
             }
         }
         lang_trans = translations.get(lang, {})
         intro = lang_trans.get("intro", default_intro)
         conclusion = lang_trans.get("conclusion", default_conclusion)
-        prev_link_text = lang_trans.get("prev_link", default_prev_link_text)
 
+        # MODIFIED: transition_from_prev will now only contain the generic intro.
+        # The actual "Previously, we looked at..." link is handled by CombineTutorial.
         transition_from_prev = intro
-        if data.prev_chapter_meta:
-            prev_name = str(data.prev_chapter_meta.get("name", "the previous concept"))
-            prev_file = str(data.prev_chapter_meta.get("filename", "#"))
-            transition_from_prev = f"{prev_link_text} [{prev_name}]({prev_file}). {intro}"
 
-        transition_to_next = conclusion  # Conclusion only, NO next link
+        # The 'transition_to_next' will only contain the generic concluding phrase.
+        # The "Next, we will examine..." link is also handled by CombineTutorial.
+        transition_to_next = conclusion
 
         return transition_from_prev, transition_to_next
 
@@ -130,7 +128,6 @@ class ChapterPrompts:
             f"6.  **Code Examples (Short & Essential){hints['code_note']}:** Use ```<lang> blocks "
             f"ONLY if vital (< {CODE_BLOCK_MAX_LINES} lines). Translate comments."
         )
-        # Updated/Combined Instruction #7 for Inline Diagrams
         instr_part_7 = (
             f"7.  **Inline Diagrams (Optional){hints['mermaid_note']}:** If helpful for explaining a core concept, "
             f"method call flow, or process logic, consider embedding a SIMPLE `mermaid` diagram "
@@ -142,34 +139,29 @@ class ChapterPrompts:
             f"            - Message labels MUST use format `Arrow: Label Text` (e.g., `A->>B: Request data`). "
             f"**EVERY arrow (`->>`, `->`, `-->>`, `-->`) MUST be followed by a colon `:` "
             f"and then the message text.** Even if the message is just confirmation, use text like `: ok` or `: done`.\n"
-            # E501 fix: Wrapped line
             f"            - The line IMMEDIATELY following `alt`, `else`, `opt` MUST be a valid command "
             f"(e.g., a message).\n"
             f"            - Ensure `activate`/`deactivate` and `alt/else/opt/loop/par`/`end` blocks are balanced.\n"
             f"        - **Activity Diagrams:**\n"
             f"            - Use `(*)` for start/end states if appropriate.\n"
             f"            - Use `-->` for transitions. Use `:` for labels on transitions (e.g., `--> Condition Met`).\n"
-            # E501 fix: Wrapped line
             f"            - Conditional logic uses `if (Condition?) then (yes)` and `else (no) ... endif` "
             f"or diamond shapes.\n"
-            # E501 fix: Wrapped line
             f"            - Ensure all paths logically flow and terminate correctly "
             f"(e.g., converge before end state).\n"
             f"        - **General:** Avoid overly complex styling or labels inside chapters. Keep diagrams focused."
         )
-        instr_part_9 = (  # Renumbered
+        instr_part_9 = (
             f"8.  **Relationships & Cross-Linking{hints['link_note']}:** Mention & link to related "
             f"chapters using Markdown `[Title](filename.md)` based on 'Overall Tutorial Structure'."
         )
-        instr_part_10 = (  # Renumbered
-            f"9.  **Tone & Style{hints['tone_note']}:** Beginner-friendly, encouraging. Explain jargon."
-        )
-        instr_part_11 = (  # Renumbered
+        instr_part_10 = f"9.  **Tone & Style{hints['tone_note']}:** Beginner-friendly, encouraging. Explain jargon."
+        instr_part_11 = (
             f"10. **Conclusion:** Summarize the key takeaway. End the main content *EXACTLY* with: "
             f'"{transition_to_next}". **CRITICAL: Do NOT add any "Next, we will examine..." link or '
             f"similar transition phrase after this concluding sentence.** The linking will be handled later."
         )
-        instr_part_12 = (  # Renumbered
+        instr_part_12 = (
             "11. **Output Format:** Generate ONLY raw Markdown. Start with H1. NO outer ```markdown wrapper. NO footer."
         )
 
@@ -210,7 +202,6 @@ class ChapterPrompts:
             A formatted string prompting for a YAML list representing chapter order.
 
         """
-        # --- Bez zmeny ---
         if num_abstractions == 0:
             return "No abstractions provided."
         max_index = max(0, num_abstractions - 1)
