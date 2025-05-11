@@ -109,6 +109,15 @@
       },
       {
         "is_active": false,
+        "language": "rust",
+        "source_index_parser": "llm",
+        "default_include_patterns": [
+          "*.rs","Cargo.toml","Cargo.lock","build.rs","README.md",
+          "Dockerfile","*.yaml", "*.yml","*.json","*.sh","Makefile"
+        ]
+      },
+      {
+        "is_active": false,
         "language": "php",
         "source_index_parser": "llm",
         "default_include_patterns": [
