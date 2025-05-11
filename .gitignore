@@ -117,7 +117,7 @@ llm_cache.json # Or specify path if different, e.g., .cache/llm_cache.json
 config.json # IMPORTANT: Ignore the actual config file with secrets
 
 # Project Specific Output
-output/
+# output/
 
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints
