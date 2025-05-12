@@ -9,7 +9,7 @@ source code and leveraging Large Language Models.
 # from .flow import create_tutorial_flow
 
 # Define package version
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 # (Removed the incorrect import: from .github import ...)
 # Imports should generally happen within the modules that use them,
