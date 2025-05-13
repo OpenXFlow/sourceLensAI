@@ -1,16 +1,49 @@
 # src/sourcelens/core/__init__.py
 
-"""Core Package for SourceLens.
+"""Core Package for SourceLens flow execution engine.
 
-This package contains fundamental components of the SourceLens application,
-such as the flow execution engine.
+This package contains the fundamental components for defining and running
+workflows (Flows) composed of individual processing steps (Nodes).
+It provides both synchronous and asynchronous versions of these components.
+The engine is based on a PocketFlow-like architecture.
 """
 
-# It's good practice to define __all__ if you intend to export specific names,
-# but for now, we can leave it empty or define it later if specific exports
-# from this __init__ file itself are needed.
-# For now, users will import directly from flow_engine.
+# Import synchronous components to be part of the public API of 'sourcelens.core'
+# Import asynchronous components to be part of the public API of 'sourcelens.core'
+from .flow_engine_async import (
+    AsyncBatchFlow,
+    AsyncBatchNode,
+    AsyncFlow,
+    AsyncNode,
+    AsyncParallelBatchFlow,
+    AsyncParallelBatchNode,
+)
+from .flow_engine_sync import (
+    BaseNode,
+    BatchFlow,
+    BatchNode,
+    Flow,
+    Node,
+    # _ConditionalTransition, # Typically not for public API
+)
 
-__all__: list[str] = [] # No direct exports from this __init__.py for now
+__all__ = [
+    # Synchronous components
+    "BaseNode",
+    "Node",
+    "BatchNode",
+    "Flow",
+    "BatchFlow",
+    # Asynchronous components
+    "AsyncNode",
+    "AsyncBatchNode",
+    "AsyncParallelBatchNode",
+    "AsyncFlow",
+    "AsyncBatchFlow",
+    "AsyncParallelBatchFlow",
+]
+# Note on _ConditionalTransition: It's an internal mechanism for the '-' operator
+# on BaseNode and is not typically instantiated directly by users.
+# Thus, it's intentionally omitted from __all__.
 
 # End of src/sourcelens/core/__init__.py
