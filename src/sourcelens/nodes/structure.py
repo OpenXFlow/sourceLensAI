@@ -2,57 +2,69 @@
 
 """Node responsible for determining the logical order of tutorial chapters.
 
-Based on identified code abstractions and their relationships using an LLM.
+This node uses an LLM to analyze identified code abstractions and their
+relationships to suggest a pedagogical sequence for the tutorial chapters.
 """
 
 import contextlib
 import logging
-from typing import Any, TypeAlias, Union
+from typing import Any, Final, Union
 
-# BaseNode now relies on exec_res parameter in post
-from sourcelens.nodes.base_node import BaseNode, SharedState
+from typing_extensions import TypeAlias  # Using typing_extensions for TypeAlias
+
 from sourcelens.prompts import ChapterPrompts
 from sourcelens.utils.llm_api import LlmApiError, call_llm
 from sourcelens.utils.validation import ValidationFailure, validate_yaml_list
 
-# --- Type Aliases ---
+# Import BaseNode
+from .base_node import BaseNode, SharedState
+
+# --- Type Aliases specific to this Node ---
+StructurePrepResult: TypeAlias = dict[str, Any]
+"""Result of the prep phase: context for LLM, including number of abstractions."""
+ChapterOrderList: TypeAlias = list[int]
+"""Type alias for a list of integer indices representing chapter order."""
+StructureExecResult: TypeAlias = ChapterOrderList
+"""Result of the exec phase: the ordered list of chapter indices."""
+
+# --- Other Type Aliases used within this module ---
 AbstractionsList: TypeAlias = list[dict[str, Any]]
 RelationshipsDict: TypeAlias = dict[str, Any]
-ChapterOrderList: TypeAlias = list[int]
-RawIndexEntry: TypeAlias = Union[str, int, float, None]
+RawIndexEntry: TypeAlias = Union[str, int, float, None]  # From LLM response
 
-# Module-level logger for utility functions if not part of a class instance
-module_logger = logging.getLogger(__name__)
+# Module-level logger
+module_logger: logging.Logger = logging.getLogger(__name__)
 
-# Specific types for this node's prep/exec results
-StructurePrepResult: TypeAlias = dict[str, Any]
-StructureExecResult: TypeAlias = ChapterOrderList
+# Constants
+MAX_RAW_OUTPUT_SNIPPET_LEN: Final[int] = 500
 
 
-class OrderChapters(BaseNode):
+class OrderChapters(BaseNode[StructurePrepResult, StructureExecResult]):
     """Determine the optimal chapter order for the tutorial using an LLM.
 
     This node takes the list of identified code abstractions and their analyzed
-    relationships as input. It then constructs a prompt for an LLM, asking it
-    to suggest a logical and pedagogical sequence for these abstractions, which
-    will form the basis of the tutorial's chapter order. The LLM's response,
-    expected as a YAML list of abstraction indices, is validated for correctness
-    (e.g., all indices present, no duplicates, within bounds). The successfully
-    ordered list of indices is stored in the shared state.
+    relationships as input. It constructs a prompt for an LLM, asking it
+    to suggest a logical sequence for these abstractions, which forms the
+    basis of the tutorial's chapter order. The LLM's YAML response (a list
+    of abstraction indices) is validated for correctness.
     """
 
-    def _parse_single_index_entry(self, entry: RawIndexEntry, position: int) -> int:
-        """Parse a single entry from the LLM's ordered list.
+    def _parse_single_index_entry(self: "OrderChapters", entry: RawIndexEntry, position: int) -> int:
+        """Parse a single entry from the LLM's ordered list of indices.
+
+        Attempts to convert various raw entry types (int, str, float) into
+        a valid integer index. Handles simple comments like "index # comment".
 
         Args:
-            entry: The raw entry from YAML list (expected int, str, float).
-            position: The index position for error reporting.
+            entry: The raw entry from the YAML list (e.g., 1, "2", "3 # Abc").
+            position: The zero-based position of the entry in the list, for error reporting.
 
         Returns:
             The parsed integer index.
 
         Raises:
-            ValidationFailure: If the entry cannot be parsed as a valid integer index.
+            ValidationFailure: If the entry cannot be parsed as a valid integer index
+                               or if it's an unexpected type.
 
         """
         try:
@@ -60,35 +72,53 @@ class OrderChapters(BaseNode):
                 return entry
             if isinstance(entry, str):
                 stripped_entry = entry.strip()
+                # Handle "index # comment" format
                 if "#" in stripped_entry:
-                    with contextlib.suppress(ValueError, IndexError):
+                    with contextlib.suppress(ValueError, IndexError):  # Ignore errors if split fails
                         return int(stripped_entry.split("#", 1)[0].strip())
+                # Try direct conversion if no comment or if comment parsing failed
                 with contextlib.suppress(ValueError):
                     return int(stripped_entry)
-                raise ValidationFailure(f"String entry '{entry}' at pos {position} is not a valid int index.")
+                # If it reaches here, string is not a simple int nor "int # comment"
+                raise ValidationFailure(
+                    f"String entry '{entry}' at position {position} is not a valid integer index representation."
+                )
             if isinstance(entry, float):
                 if entry.is_integer():
                     return int(entry)
-                raise ValidationFailure(f"Float entry '{entry}' at pos {position} is not whole number.")
-            raise ValidationFailure(f"Unexpected entry type '{type(entry).__name__}' at pos {position}: '{entry}'.")
-        except (ValueError, TypeError) as e:
-            raise ValidationFailure(f"Could not parse index at pos {position}: '{entry}'. Error: {e}") from e
+                raise ValidationFailure(f"Float entry '{entry}' at position {position} is not a whole number.")
+            # If none of the above types matched
+            raise ValidationFailure(
+                f"Unexpected entry type '{type(entry).__name__}' at position {position}: '{entry}'. "
+                "Expected int, str, or float."
+            )
+        except ValueError as e:  # Catch int() conversion errors not caught by suppress
+            raise ValidationFailure(
+                f"Could not parse index at position {position}: '{entry}'. Original error: {e}"
+            ) from e
+        except Exception as e:  # Catch any other unexpected error during parsing
+            raise ValidationFailure(
+                f"Unexpected error parsing index at position {position}: '{entry}'. Error: {e}"
+            ) from e
 
-    def _parse_and_validate_order(self, ordered_indices_raw: list[Any], num_abstractions: int) -> ChapterOrderList:
+    def _parse_and_validate_order(
+        self: "OrderChapters", ordered_indices_raw: list[Any], num_abstractions: int
+    ) -> ChapterOrderList:
         """Parse and validate the chapter order list from LLM response.
 
         Ensures the list contains the correct number of unique indices,
         all within the valid range [0, num_abstractions - 1].
 
         Args:
-            ordered_indices_raw: The raw list parsed from YAML.
+            ordered_indices_raw: The raw list parsed from YAML (expected list of int/str/float).
             num_abstractions: The expected number of chapters/abstractions.
 
         Returns:
             A validated list of integer indices representing the chapter order.
 
         Raises:
-            ValidationFailure: If list structure, parsing, indices, or uniqueness fail.
+            ValidationFailure: If list structure, parsing of individual indices,
+                               index range, or uniqueness checks fail.
 
         """
         if not isinstance(ordered_indices_raw, list):
@@ -101,19 +131,20 @@ class OrderChapters(BaseNode):
         ordered_indices: ChapterOrderList = []
         seen_indices: set[int] = set()
         for i, entry in enumerate(ordered_indices_raw):
-            idx = self._parse_single_index_entry(entry, i)
-            if not (0 <= idx < num_abstractions):
+            parsed_idx = self._parse_single_index_entry(entry, i)  # Raises ValidationFailure on error
+            if not (0 <= parsed_idx < num_abstractions):
                 raise ValidationFailure(
-                    f"Invalid index {idx} at pos {i} for chapter order. Must be between 0 and {num_abstractions - 1}."
+                    f"Invalid index {parsed_idx} at position {i} for chapter order. "
+                    f"Must be between 0 and {num_abstractions - 1}."
                 )
-            if idx in seen_indices:
-                raise ValidationFailure(f"Duplicate index {idx} found at position {i} in chapter order.")
-            ordered_indices.append(idx)
-            seen_indices.add(idx)
+            if parsed_idx in seen_indices:
+                raise ValidationFailure(f"Duplicate index {parsed_idx} found at position {i} in chapter order.")
+            ordered_indices.append(parsed_idx)
+            seen_indices.add(parsed_idx)
         return ordered_indices
 
     def _build_order_chapters_context(
-        self, abstractions: AbstractionsList, relationships: RelationshipsDict, language: str
+        self: "OrderChapters", abstractions: AbstractionsList, relationships: RelationshipsDict, language: str
     ) -> tuple[str, str, str]:
         """Build context string, abstraction listing, and language note for prompt.
 
@@ -124,155 +155,175 @@ class OrderChapters(BaseNode):
 
         Returns:
             A tuple containing:
-                - abstraction_listing (str): Formatted list of "Index # Name".
-                - context_string (str): Formatted project summary and relationships.
-                - list_lang_note (str): Language hint for the abstraction list.
+                - abstraction_listing_str (str): Formatted list of "Index # Name".
+                - context_str (str): Formatted project summary and relationships.
+                - list_lang_note_str (str): Language hint for the abstraction list.
 
         """
-        abstraction_info: list[str] = [
-            f"- {i} # {str(a.get('name', f'Unnamed Abstraction {i}'))}" for i, a in enumerate(abstractions)
-        ]
-        abstraction_listing = "\n".join(abstraction_info)
+        abstraction_info_parts: list[str] = []
+        for i, abstr_item in enumerate(abstractions):
+            name_val: Any = abstr_item.get("name", f"Unnamed Abstraction {i}")
+            abstraction_info_parts.append(f"- {i} # {str(name_val)}")
+        abstraction_listing_str: str = "\n".join(abstraction_info_parts)
 
-        list_lang_note = f" (Names in {language.capitalize()})" if language.lower() != "english" else ""
-        summary_note = f" (Summary/labels in {language.capitalize()})" if language.lower() != "english" else ""
+        list_lang_note_str = f" (Names in {language.capitalize()})" if language.lower() != "english" else ""
+        summary_lang_note = f" (Summary/labels in {language.capitalize()})" if language.lower() != "english" else ""
 
-        summary_raw = relationships.get("summary", "N/A")
-        summary = str(summary_raw if summary_raw is not None else "N/A")
+        summary_raw: Any = relationships.get("summary", "N/A")
+        summary: str = str(summary_raw if summary_raw is not None else "N/A")
 
         context_parts: list[str] = [
-            f"Project Summary{summary_note}:\n{summary}\n",
+            f"Project Summary{summary_lang_note}:\n{summary}\n",
             "Relationships (Indices refer to abstractions above):",
         ]
 
-        rel_details = relationships.get("details", [])
-        if isinstance(rel_details, list):
-            num_abstractions = len(abstractions)
-            for rel in rel_details:
-                if not isinstance(rel, dict):
-                    continue
-                from_idx = rel.get("from")
-                to_idx = rel.get("to")
-                label_raw = rel.get("label", "interacts")
-                label = str(label_raw or "interacts")
-                if (
-                    isinstance(from_idx, int)
-                    and 0 <= from_idx < num_abstractions
-                    and isinstance(to_idx, int)
-                    and 0 <= to_idx < num_abstractions
-                ):
-                    from_name = str(abstractions[from_idx].get("name", f"Idx {from_idx}"))
-                    to_name = str(abstractions[to_idx].get("name", f"Idx {to_idx}"))
-                    context_parts.append(f"- From {from_idx} ({from_name}) to {to_idx} ({to_name}): {label}")
-                else:
-                    module_logger.warning("Skipping invalid relationship details: %s", rel)
-        else:
-            module_logger.warning("Relationship 'details' is not a list, skipping relationship processing.")
+        rel_details_raw: Any = relationships.get("details", [])
+        rel_details_list = rel_details_raw if isinstance(rel_details_raw, list) else []
+        num_abstractions = len(abstractions)
 
-        return abstraction_listing, "\n".join(context_parts), list_lang_note
+        for rel in rel_details_list:
+            if not isinstance(rel, dict):
+                module_logger.warning("Skipping non-dictionary item in relationship details: %s", rel)
+                continue
+            from_idx_val: Any = rel.get("from")
+            to_idx_val: Any = rel.get("to")
+            label_raw: Any = rel.get("label", "interacts")
+            label: str = str(label_raw or "interacts")
+
+            if (
+                isinstance(from_idx_val, int)
+                and 0 <= from_idx_val < num_abstractions
+                and isinstance(to_idx_val, int)
+                and 0 <= to_idx_val < num_abstractions
+            ):
+                from_name_val: Any = abstractions[from_idx_val].get("name", f"Idx {from_idx_val}")
+                to_name_val: Any = abstractions[to_idx_val].get("name", f"Idx {to_idx_val}")
+                from_name: str = str(from_name_val)
+                to_name: str = str(to_name_val)
+                context_parts.append(f"- From {from_idx_val} ({from_name}) to {to_idx_val} ({to_name}): {label}")
+            else:
+                module_logger.warning("Skipping relationship with invalid/missing indices: %s", rel)
+        context_str: str = "\n".join(context_parts)
+        return abstraction_listing_str, context_str, list_lang_note_str
 
     def prep(self, shared: SharedState) -> StructurePrepResult:
-        """Prepare context for the LLM chapter ordering prompt."""
-        self._logger.info("Preparing context for chapter ordering...")
+        """Prepare context for the LLM chapter ordering prompt.
+
+        Args:
+            shared: The shared state dictionary. Expected to contain 'abstractions',
+                    'relationships', 'project_name', 'llm_config', 'cache_config'.
+                    'language' is optional.
+
+        Returns:
+            A `StructurePrepResult` dictionary containing context for the `exec`
+            method. If no abstractions are found, 'num_abstractions' will be 0.
+
+        """
+        self._log_info("Preparing context for chapter ordering...")
         abstractions: AbstractionsList = self._get_required_shared(shared, "abstractions")
         llm_config: dict[str, Any] = self._get_required_shared(shared, "llm_config")
         cache_config: dict[str, Any] = self._get_required_shared(shared, "cache_config")
+        project_name: str = self._get_required_shared(shared, "project_name")
+        language: str = str(shared.get("language", "english"))
 
-        if not abstractions:
-            self._logger.warning("No abstractions found. Chapter order cannot be determined.")
-            return {
-                "num_abstractions": 0,
-                "llm_config": llm_config,
-                "cache_config": cache_config,
-                "project_name": shared.get("project_name", "N/A"),
-                "language": shared.get("language", "english"),
-                "abstraction_listing": "",
-                "context": "",
-                "list_lang_note": "",
-            }
+        num_abstractions = len(abstractions)
+        prep_data: StructurePrepResult = {
+            "num_abstractions": num_abstractions,
+            "project_name": project_name,
+            "language": language,  # Will be used by prompt formatting
+            "llm_config": llm_config,
+            "cache_config": cache_config,
+            "abstraction_listing_str": "",  # Default empty
+            "context_str": "",  # Default empty
+            "list_lang_note_str": "",  # Default empty
+        }
+
+        if not abstractions:  # num_abstractions will be 0
+            self._log_warning("No abstractions found. Chapter order cannot be determined by LLM.")
+            return prep_data  # Return with num_abstractions = 0
 
         relationships: RelationshipsDict = self._get_required_shared(shared, "relationships")
-        project_name: str = self._get_required_shared(shared, "project_name")
-        language: str = shared.get("language", "english")
-
         abstraction_listing, context_str, list_lang_note = self._build_order_chapters_context(
             abstractions, relationships, language
         )
-
-        return {
-            "abstraction_listing": abstraction_listing,
-            "context": context_str,
-            "num_abstractions": len(abstractions),
-            "project_name": project_name,
-            "list_lang_note": list_lang_note,
-            "llm_config": llm_config,
-            "cache_config": cache_config,
-        }
+        prep_data["abstraction_listing_str"] = abstraction_listing
+        prep_data["context_str"] = context_str
+        prep_data["list_lang_note_str"] = list_lang_note
+        return prep_data
 
     def exec(self, prep_res: StructurePrepResult) -> StructureExecResult:
-        """Call LLM to determine chapter order and validate the response."""
+        """Call LLM to determine chapter order and validate the response.
+
+        Args:
+            prep_res: The dictionary returned by the `prep` method.
+
+        Returns:
+            A `ChapterOrderList` (list of integer indices). Returns an empty list
+            if no abstractions were provided, or if LLM call or validation fails.
+
+        """
         num_abstractions: int = prep_res.get("num_abstractions", 0)
         if num_abstractions == 0:
-            self._logger.warning("Skipping chapter ordering: No abstractions provided.")
+            self._log_warning("Skipping chapter ordering execution: No abstractions were provided.")
             return []
 
-        project_name: str = prep_res["project_name"]
+        project_name: str = prep_res["project_name"]  # Expected to be present if num_abstractions > 0
         llm_config: dict[str, Any] = prep_res["llm_config"]
         cache_config: dict[str, Any] = prep_res["cache_config"]
 
-        self._logger.info(f"Determining chapter order for '{project_name}' using LLM...")
+        self._log_info("Determining chapter order for '%s' using LLM...", project_name)
         prompt = ChapterPrompts.format_order_chapters_prompt(
             project_name=project_name,
-            abstraction_listing=prep_res["abstraction_listing"],
-            context=prep_res["context"],
+            abstraction_listing=prep_res["abstraction_listing_str"],
+            context=prep_res["context_str"],
             num_abstractions=num_abstractions,
-            list_lang_note=prep_res["list_lang_note"],
+            list_lang_note=prep_res["list_lang_note_str"],
         )
         try:
-            response = call_llm(prompt, llm_config, cache_config)
+            response_text: str = call_llm(prompt, llm_config, cache_config)
         except LlmApiError as e:
-            self._logger.error("LLM call failed during chapter ordering: %s", e, exc_info=True)
+            self._log_error("LLM call failed during chapter ordering: %s", e, exc_info=True)
             return []
 
         try:
-            list_schema = {
+            list_item_schema = {"type": ["integer", "string"]}  # Items can be int or string (e.g. "1 # Comment")
+            list_schema_validation = {  # Schema for the list itself
                 "type": "array",
-                "items": {"type": ["integer", "string"]},
+                "items": list_item_schema,
                 "minItems": num_abstractions,
                 "maxItems": num_abstractions,
             }
-            ordered_indices_raw = validate_yaml_list(response, list_schema=list_schema)
+            ordered_indices_raw: list[Any] = validate_yaml_list(response_text, list_schema=list_schema_validation)
+            # Further validation (parsing strings to int, checking range and uniqueness)
             ordered_indices = self._parse_and_validate_order(ordered_indices_raw, num_abstractions)
-            self._logger.info(f"Determined valid chapter order (indices): {ordered_indices}")
+            self._log_info("Determined valid chapter order (indices): %s", ordered_indices)
             return ordered_indices
         except ValidationFailure as e_val:
-            self._logger.error("Validation failed processing chapter order: %s", e_val)
+            self._log_error("Validation failed processing chapter order from LLM response: %s", e_val)
             if e_val.raw_output:
-                module_logger.warning("Problematic YAML for chapter order:\n%s", e_val.raw_output[:500])
+                snippet = e_val.raw_output[:MAX_RAW_OUTPUT_SNIPPET_LEN]
+                if len(e_val.raw_output) > MAX_RAW_OUTPUT_SNIPPET_LEN:
+                    snippet += "..."
+                module_logger.warning("Problematic YAML for chapter order:\n%s", snippet)
             return []
-        except (TypeError, ValueError) as e_proc:
-            self._logger.error("Unexpected error processing chapter order: %s", e_proc, exc_info=True)
+        except (TypeError, ValueError) as e_proc:  # Catch unexpected errors during parsing/validation
+            self._log_error("Unexpected error processing chapter order: %s", e_proc, exc_info=True)
             return []
 
-    # --- UPDATED post method ---
     def post(self, shared: SharedState, prep_res: StructurePrepResult, exec_res: StructureExecResult) -> None:
         """Update the shared state with the determined chapter order.
 
         Args:
             shared: The shared state dictionary to update.
-            prep_res: The result from the `prep` method (unused in this specific `post`).
-            exec_res: The list of ordered chapter indices from `exec`, passed by
-                      the flow runner.
+            prep_res: Result from the `prep` phase (unused in this method).
+            exec_res: List of ordered chapter indices from the `exec` phase.
+                      This will be an empty list if preceding steps failed or
+                      if no abstractions were available.
 
         """
-        if isinstance(exec_res, list):
-            shared["chapter_order"] = exec_res
-            self._logger.info("Stored chapter order in shared state.")
-        else:
-            self._logger.error(
-                "Invalid exec_res type for chapter order: %s. Storing empty list.", type(exec_res).__name__
-            )
-            shared["chapter_order"] = []
+        del prep_res  # Mark as unused
+        shared["chapter_order"] = exec_res  # exec_res is ChapterOrderList (or [])
+        self._log_info("Stored chapter order in shared state: %s", exec_res)
 
 
 # End of src/sourcelens/nodes/structure.py
