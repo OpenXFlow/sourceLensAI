@@ -250,7 +250,7 @@ class BaseBatchNode(
         raise NotImplementedError(f"{self.__class__.__name__} must implement 'prep'")
 
     @abstractmethod
-    def exec(self, item: SLItemType) -> SLBatchItemExecResType:  # type: ignore[override]
+    def exec(self, item: SLItemType) -> SLBatchItemExecResType:
         """Execute the core logic for a single item in the batch.
 
         This method is called by the underlying `CoreBatchNode`'s execution

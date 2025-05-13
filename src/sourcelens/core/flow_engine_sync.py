@@ -91,8 +91,6 @@ class BaseNode(Generic[SharedStateType, PrepResType, ExecResType]):
             NotImplementedError: If the subclass does not implement this method.
 
         """
-        # Subclasses must override this method.
-        # Raising NotImplementedError is more appropriate than returning None with type ignore.
         raise NotImplementedError(f"{self.__class__.__name__} must implement the 'prep' method.")
 
     def exec(self: "BaseNode[SharedStateType, PrepResType, ExecResType]", prep_res: PrepResType) -> ExecResType:
@@ -252,14 +250,13 @@ class Node(BaseNode[SharedStateType, PrepResType, ExecResType]):
             Exception: Re-raises the input exception `exc` by default.
 
         """
-        raise exc  # This is the default, subclasses might return ExecResType
+        raise exc
 
-    def _exec(self: "Node[SharedStateType, PrepResType, ExecResType]", prep_res: PrepResType) -> ExecResType:  # type: ignore[override]
+    def _exec(self: "Node[SharedStateType, PrepResType, ExecResType]", prep_res: PrepResType) -> ExecResType:
         """Wrap internal execution with retry logic."""
         last_exception: Optional[Exception] = None
         for current_retry_attempt in range(self.max_retries):
             try:
-                # Calls exec of the concrete subclass which should return ExecResType
                 return self.exec(prep_res)
             except Exception as e:  # noqa: BLE001
                 last_exception = e
@@ -274,7 +271,6 @@ class Node(BaseNode[SharedStateType, PrepResType, ExecResType]):
                     warnings.warn(warning_message, stacklevel=2)
                     time.sleep(self.wait)
         fallback_exc = last_exception if last_exception else RuntimeError("Unknown execution error after retries")
-        # exec_fallback should return ExecResType or raise
         return self.exec_fallback(prep_res, fallback_exc)
 
 
@@ -286,18 +282,7 @@ class BatchNode(Node[SharedStateType, TypingIterable[ItemType], list[BatchExecRe
     `post` will receive the original iterable and a list of `BatchExecResType`.
     """
 
-    # Concrete BatchNode subclass must implement:
-    # def prep(self, shared: SharedStateType) -> TypingIterable[ItemType]: ...
-    # def exec(self, item: ItemType) -> BatchExecResType: ...
-    # def post(
-    #     self,
-    #     shared: SharedStateType,
-    #     prep_res: TypingIterable[ItemType],
-    #     exec_res_list: list[BatchExecResType]
-    # ) -> Optional[str]: ...
-    # Note: The line length for the post signature above was an issue (E501)
-
-    def _exec(self, items: Optional[TypingIterable[ItemType]]) -> list[BatchExecResType]:  # type: ignore[override]
+    def _exec(self, items: TypingIterable[ItemType]) -> list[BatchExecResType]:
         """Wrap internal execution for batch processing.
 
         Args:
@@ -307,25 +292,19 @@ class BatchNode(Node[SharedStateType, TypingIterable[ItemType], list[BatchExecRe
             A list of execution results, one for each item.
 
         """
-        if items is None:
-            return []
         results: list[BatchExecResType] = []
         for item in items:
-            # super() correctly calls Node._exec(item)
-            # Node._exec calls self.exec(item), where self.exec is the one
-            # implemented by the concrete BatchNode subclass taking ItemType.
-            results.append(super()._exec(item))  # type: ignore[arg-type] # item is ItemType, Node._exec expects PrepResType
-            # This works because BatchNode's PrepResType is Iterable[ItemType]
-            # and Node._exec is called with a single ItemType, which is correct
-            # for the user-defined exec(item: ItemType)
+            results.append(super()._exec(item))  # type: ignore[arg-type]
         return results
 
 
-class Flow(BaseNode[SharedStateType, PrepResType, ExecResType]):
+# Flow's ExecResType is specialized to Optional[str]
+class Flow(BaseNode[SharedStateType, PrepResType, Optional[str]]):
     """Orchestrates the synchronous execution of a sequence of connected nodes."""
 
     def __init__(
-        self: "Flow[SharedStateType, PrepResType, ExecResType]", start: Optional[BaseNode[Any, Any, Any]] = None
+        self: "Flow[SharedStateType, PrepResType]",
+        start: Optional[BaseNode[Any, Any, Any]] = None,  # Corrected self type
     ) -> None:
         """Initialize a Flow.
 
@@ -337,7 +316,8 @@ class Flow(BaseNode[SharedStateType, PrepResType, ExecResType]):
         self.start_node: Optional[BaseNode[Any, Any, Any]] = start
 
     def start(
-        self: "Flow[SharedStateType, PrepResType, ExecResType]", start_node: BaseNode[Any, Any, Any]
+        self: "Flow[SharedStateType, PrepResType]",
+        start_node: BaseNode[Any, Any, Any],  # Corrected self type
     ) -> BaseNode[Any, Any, Any]:
         """Set the starting node of the flow.
 
@@ -352,7 +332,7 @@ class Flow(BaseNode[SharedStateType, PrepResType, ExecResType]):
         return start_node
 
     def get_next_node(
-        self: "Flow[SharedStateType, PrepResType, ExecResType]",
+        self: "Flow[SharedStateType, PrepResType]",  # Corrected self type
         current_node: BaseNode[Any, Any, Any],
         action: Optional[str],
     ) -> Optional[BaseNode[Any, Any, Any]]:
@@ -381,7 +361,7 @@ class Flow(BaseNode[SharedStateType, PrepResType, ExecResType]):
         return next_node
 
     def _orch(
-        self: "Flow[SharedStateType, PrepResType, ExecResType]",
+        self: "Flow[SharedStateType, PrepResType]",  # Corrected self type
         shared: SharedStateType,
         params: Optional[dict[str, Any]] = None,
     ) -> Optional[str]:
@@ -405,29 +385,24 @@ class Flow(BaseNode[SharedStateType, PrepResType, ExecResType]):
 
         while current_node:
             current_node.set_params(flow_params)
-            # Assuming current_node._run can handle the SharedStateType of this Flow.
-            # If current_node has a more specific SharedStateType, it might be an issue,
-            # but for now, we assume compatibility or that shared state is additive.
             last_action = current_node._run(shared)  # type: ignore[arg-type] # noqa: SLF001
             current_node = copy.copy(self.get_next_node(current_node, last_action))
 
         return last_action
 
-    def _run(  # type: ignore[override]
-        self: "Flow[SharedStateType, PrepResType, ExecResType]", shared: SharedStateType
-    ) -> Optional[str]:
+    def _run(
+        self: "Flow[SharedStateType, PrepResType]", shared: SharedStateType
+    ) -> Optional[str]:  # Corrected self type
         """Run internal method for the synchronous flow."""
         prep_result: PrepResType = self.prep(shared)
         orch_result: Optional[str] = self._orch(shared)
-        # Flow.post expects ExecResType as its exec_res, but _orch returns Optional[str].
-        # If ExecResType for Flow is intended to be Optional[str], this is fine.
-        return self.post(shared, prep_result, orch_result)  # type: ignore[arg-type]
+        return self.post(shared, prep_result, orch_result)
 
-    def post(  # type: ignore[override]
-        self: "Flow[SharedStateType, PrepResType, ExecResType]",
+    def post(
+        self: "Flow[SharedStateType, PrepResType]",  # Corrected self type
         shared: SharedStateType,
         prep_res: PrepResType,
-        exec_res: Optional[str],  # This is the last_action from _orch
+        exec_res: Optional[str],
     ) -> Optional[str]:
         """Post-process the entire synchronous flow.
 
@@ -443,7 +418,7 @@ class Flow(BaseNode[SharedStateType, PrepResType, ExecResType]):
         return exec_res
 
 
-class BatchFlow(Flow[SharedStateType, TypingIterable[dict[str, Any]], None]):
+class BatchFlow(Flow[SharedStateType, TypingIterable[dict[str, Any]]]):
     """A synchronous flow that processes a batch of items.
 
     The `prep` method of this flow should return an iterable of dictionaries,
@@ -451,30 +426,14 @@ class BatchFlow(Flow[SharedStateType, TypingIterable[dict[str, Any]], None]):
     The `post` method's `exec_res` will be `None` by default as results are per-item.
     """
 
-    # User of BatchFlow typically implements:
-    # def prep(self, shared: SharedStateType) -> TypingIterable[dict[str, Any]]: ...
-    # def post(
-    #     self,
-    #     shared: SharedStateType,
-    #     prep_res: TypingIterable[dict[str, Any]], # prep_res is iterable
-    #     exec_res: None # exec_res for BatchFlow's post is None
-    # ) -> Optional[str]: ...
-    # Note: Above comment was E501
-
-    def _run(self: "BatchFlow[SharedStateType]", shared: SharedStateType) -> None:  # type: ignore[override]
+    def _run(self: "BatchFlow[SharedStateType]", shared: SharedStateType) -> None:  # Corrected self type
         """Run internal method for synchronous batch flow execution."""
-        # prep_res_iterable: TypingIterable[dict[str, Any]]
-        prep_res_iterable = self.prep(shared)  # prep returns TypingIterable[dict[str, Any]]
-
-        if prep_res_iterable is None:  # Should not happen if prep is implemented correctly
-            prep_res_iterable = []
+        prep_res_iterable: TypingIterable[dict[str, Any]] = self.prep(shared)
 
         for batch_item_params in prep_res_iterable:
             current_run_params: dict[str, Any] = {**self.params, **batch_item_params}
-            self._orch(shared, current_run_params)  # _orch result (last_action) is not aggregated here
+            self._orch(shared, current_run_params)
 
-        # Pass the original iterable from prep and None as exec_res
-        # BatchFlow's ExecResType is None, so post expects None.
         self.post(shared, prep_res_iterable, None)
 
 

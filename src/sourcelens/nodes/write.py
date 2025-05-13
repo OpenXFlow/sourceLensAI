@@ -238,7 +238,7 @@ class WriteChapters(BaseBatchNode[WriteChapterPrepItem, WriteChapterExecResult])
         self._log_info("Prepared %d chapter items for execution.", num_items_prepared)
         # Implicit return of generator is an Iterable
 
-    def exec(self, item: WriteChapterPrepItem) -> WriteChapterExecResult:  # type: ignore[override]
+    def exec(self, item: WriteChapterPrepItem) -> WriteChapterExecResult:
         """Generate the Markdown content for a single chapter using the LLM.
 
         Args:
