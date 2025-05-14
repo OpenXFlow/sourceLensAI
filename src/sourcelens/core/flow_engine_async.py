@@ -1,4 +1,17 @@
-# src/sourcelens/core/flow_engine_async.py
+# Copyright (C) 2025 Jozef Darida (Find me on LinkedIn/Xing)
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 """Asynchronous core of the PocketFlow-like workflow engine for SourceLens.
 
@@ -29,7 +42,7 @@ from .flow_engine_sync import (
     ExecResType,
     Flow,
     ItemType,
-    Node,  # Synchronous Node, from which AsyncNode derives retry/param logic
+    Node,
     PrepResType,
     SharedStateType,
 )
@@ -116,22 +129,22 @@ class AsyncNode(Node[SharedStateType, PrepResType, ExecResType]):
         """
         return super().post(shared, prep_res, exec_res)
 
-    # This internal method _exec_async_with_retry handles retry for the node's main exec_async
     async def _exec_async_with_retry(self, prep_res: PrepResType) -> ExecResType:
         """Wrap internal asynchronous execution with retry logic."""
         last_exception: Optional[Exception] = None
         for current_retry_attempt in range(self.max_retries):
             try:
-                # Calls the user-implemented/abstract exec_async
                 return await self.exec_async(prep_res)
             except Exception as e:  # noqa: BLE001
                 last_exception = e
                 if current_retry_attempt == self.max_retries - 1:
                     break
                 if self.wait > 0:
+                    # Shorter warning message construction
                     warning_message = (
-                        f"AsyncNode {self.__class__.__name__} (prep_res type: {type(prep_res).__name__}) "
-                        f"failed on attempt {current_retry_attempt + 1}/{self.max_retries}. "
+                        f"AsyncNode {self.__class__.__name__} "
+                        f"(prep: {type(prep_res).__name__}) "
+                        f"failed attempt {current_retry_attempt + 1}/{self.max_retries}. "
                         f"Retrying after {self.wait}s. Error: {e}"
                     )
                     warnings.warn(warning_message, stacklevel=2)
@@ -142,7 +155,6 @@ class AsyncNode(Node[SharedStateType, PrepResType, ExecResType]):
     async def _run_async(self, shared: SharedStateType) -> Optional[str]:
         """Run internal asynchronous method: prep_async, _exec_async_with_retry, post_async."""
         prep_result: PrepResType = await self.prep_async(shared)
-        # _exec_async_with_retry is called with the result of prep_async
         exec_result: ExecResType = await self._exec_async_with_retry(prep_result)
         return await self.post_async(shared, prep_result, exec_result)
 
@@ -172,9 +184,6 @@ class AsyncNode(Node[SharedStateType, PrepResType, ExecResType]):
         raise RuntimeError(f"AsyncNode {self.__class__.__name__} must be run with run_async().")
 
 
-# --- Batch Nodes ---
-# Helper method for retry logic on a single item's async execution.
-# This is used internally by AsyncBatchNode and AsyncParallelBatchNode.
 async def _exec_one_item_async_with_retry_logic(
     node_instance: "AsyncBatchNode[Any, ItemType, BatchExecResType] | AsyncParallelBatchNode[Any, ItemType, BatchExecResType]",  # noqa: E501
     item: ItemType,
@@ -183,34 +192,29 @@ async def _exec_one_item_async_with_retry_logic(
 
     Args:
         node_instance: The instance of AsyncBatchNode or AsyncParallelBatchNode.
-                       It must have `exec_async(item: ItemType)` and
-                       `exec_fallback_async(item: ItemType, exc: Exception)`.
         item: The item to process.
 
     Returns:
         The result of processing the item.
-
     """
     last_exception: Optional[Exception] = None
-    # Use max_retries and wait from the node_instance
     for attempt in range(node_instance.max_retries):
         try:
-            # Call the user-implemented exec_async for a single item
             return await node_instance.exec_async(item)
         except Exception as e:  # noqa: BLE001
             last_exception = e
             if attempt == node_instance.max_retries - 1:
                 break
             if node_instance.wait > 0:
-                warnings.warn(
-                    f"AsyncBatch item processing in {node_instance.__class__.__name__} failed for item "
-                    f"(type: {type(item).__name__}) on attempt "
-                    f"{attempt + 1}/{node_instance.max_retries}. Retrying after {node_instance.wait}s. Error: {e}",
-                    stacklevel=3,
+                # Shorter warning message construction
+                warning_message = (
+                    f"AsyncBatch item in {node_instance.__class__.__name__} "
+                    f"(type: {type(item).__name__}) attempt {attempt + 1} failed. "
+                    f"Retrying after {node_instance.wait}s. Error: {e}"
                 )
+                warnings.warn(warning_message, stacklevel=3)
                 await asyncio.sleep(node_instance.wait)
     fallback_exc = last_exception if last_exception else RuntimeError("Unknown item processing error after retries")
-    # Call fallback for a single item
     return await node_instance.exec_fallback_async(item, fallback_exc)  # type: ignore[arg-type]
 
 
@@ -232,20 +236,14 @@ class AsyncBatchNode(
     async def exec_async(self, item: ItemType) -> BatchExecResType:  # type: ignore[override]
         """Execute asynchronous core logic for a single batch item.
 
-        This method is called by the batch processing logic for each item.
-        The `type: ignore[override]` is because this signature (for a single item)
-        differs from `AsyncNode.exec_async` which expects `prep_res: TypingIterable[ItemType]`.
-
         Args:
             item: The single item to process, of type `ItemType`.
 
         Returns:
             The result of processing the single item, of type `BatchExecResType`.
-
         """
         raise NotImplementedError(f"{self.__class__.__name__} must implement exec_async to process a single item.")
 
-    # Fallback for a single item, corresponding to the single-item exec_async
     async def exec_fallback_async(self, item: ItemType, exc: Exception) -> BatchExecResType:  # type: ignore[override]
         """Handle fallback for a single failed batch item.
 
@@ -258,26 +256,19 @@ class AsyncBatchNode(
 
         Raises:
             Exception: Re-raises `exc` by default.
-
         """
-        raise exc  # Default: re-raise exception for the item
+        raise exc
 
-    # This method overrides AsyncNode._exec_async_with_retry to handle a batch
     async def _exec_async_with_retry(  # type: ignore[override]
         self, items_iterable: TypingIterable[ItemType]
     ) -> list[BatchExecResType]:
         """Asynchronously execute each item in the batch, applying retry logic individually.
-
-        This overrides the `_exec_async_with_retry` from `AsyncNode` because
-        the `PrepResType` for this batch node (items_iterable) is different from
-        what its user-defined `exec_async` (for a single item) expects.
 
         Args:
             items_iterable: An iterable of `ItemType` items from `prep_async`.
 
         Returns:
             A list of `BatchExecResType` results, one for each processed item.
-
         """
         results: list[BatchExecResType] = []
         for item in items_iterable:
@@ -309,7 +300,6 @@ class AsyncParallelBatchNode(
 
         Returns:
             The result of processing the single item, of type `BatchExecResType`.
-
         """
         raise NotImplementedError(f"{self.__class__.__name__} must implement exec_async to process a single item.")
 
@@ -325,7 +315,6 @@ class AsyncParallelBatchNode(
 
         Raises:
             Exception: Re-raises `exc` by default.
-
         """
         raise exc
 
@@ -339,7 +328,6 @@ class AsyncParallelBatchNode(
 
         Returns:
             A list of `BatchExecResType` results when all are complete.
-
         """
         tasks = [_exec_one_item_async_with_retry_logic(self, item) for item in items_iterable]
         gathered_results: list[BatchExecResType] = await asyncio.gather(*tasks)
@@ -366,9 +354,9 @@ class AsyncFlow(
         while current_node:
             current_node.set_params(flow_params)
             if isinstance(current_node, AsyncNode):
-                last_action = await current_node._run_async(shared)  # noqa: SLF001
+                last_action = await current_node._run_async(shared)
             elif isinstance(current_node, Node):
-                last_action = current_node._run(shared)  # noqa: SLF001
+                last_action = current_node._run(shared)
             else:
                 error_msg = (
                     f"Node {current_node.__class__.__name__} is not a recognized Node or AsyncNode type for AsyncFlow."

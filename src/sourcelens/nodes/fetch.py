@@ -1,11 +1,24 @@
-# src/sourcelens/nodes/fetch.py
+# Copyright (C) 2025 Jozef Darida (Find me on LinkedIn/Xing)
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 """Node responsible for fetching source code from GitHub or local directories."""
 
 from pathlib import Path
 from typing import Any, Optional, TypedDict
 
-from typing_extensions import TypeAlias  # Použijeme TypeAlias z typing_extensions
+from typing_extensions import TypeAlias
 
 # Import BaseNode and SLSharedState from base_node module
 from .base_node import BaseNode, SLSharedState
@@ -13,14 +26,13 @@ from .base_node import BaseNode, SLSharedState
 # Local type aliases for this node's prep/exec results
 FetchPrepResult: TypeAlias = bool
 """Type alias for the result of the preparation phase of FetchCode (fetch success status)."""
-FetchExecResult: TypeAlias = None  # Pre None nepotrebujeme TypeAlias, ale pre konzistenciu môže byť
+FetchExecResult: TypeAlias = None
 """Type alias for the result of the execution phase of FetchCode (always None)."""
 
 FileDataListInternal: TypeAlias = list[tuple[str, str]]
 """Type alias for a list of (filepath, content) tuples used internally."""
 
 
-# TypedDict for better internal context management in prep sub-methods
 class _PrepContext(TypedDict):
     """Internal context for prep method sub-functions."""
 
@@ -34,7 +46,7 @@ class _PrepContext(TypedDict):
     github_token: Optional[str]
 
 
-class FetchCode(BaseNode[FetchPrepResult, FetchExecResult]):  # Použité aliasy
+class FetchCode(BaseNode[FetchPrepResult, FetchExecResult]):
     """Fetch source code files from GitHub or a local directory.
 
     This node is responsible for the initial step of acquiring the codebase
@@ -54,7 +66,6 @@ class FetchCode(BaseNode[FetchPrepResult, FetchExecResult]):  # Použité aliasy
 
         Raises:
             ValueError: If project name derivation fails.
-
         """
         project_name_shared_any: Any = shared.get("project_name")
         project_name_shared: Optional[str] = (
@@ -112,7 +123,6 @@ class FetchCode(BaseNode[FetchPrepResult, FetchExecResult]):  # Použité aliasy
 
         Raises:
             TypeError: If max_file_size is not an integer.
-
         """
         repo_url_any: Any = shared.get("repo_url")
         local_dir_str_any: Any = shared.get("local_dir")
@@ -123,6 +133,8 @@ class FetchCode(BaseNode[FetchPrepResult, FetchExecResult]):  # Použité aliasy
         github_token_any: Any = shared.get("github_token")
 
         if not isinstance(max_file_size_any, int):
+            # This error should ideally be caught by config validation.
+            # Raising TypeError if it's not an int, as downstream code expects int.
             raise TypeError(f"max_file_size must be an int, got {type(max_file_size_any)}")
 
         context: _PrepContext = {
@@ -131,7 +143,7 @@ class FetchCode(BaseNode[FetchPrepResult, FetchExecResult]):  # Použité aliasy
             "local_dir_str": str(local_dir_str_any) if isinstance(local_dir_str_any, str) else None,
             "include_patterns": include_patterns_any if isinstance(include_patterns_any, set) else set(),
             "exclude_patterns": exclude_patterns_any if isinstance(exclude_patterns_any, set) else set(),
-            "max_file_size": max_file_size_any,
+            "max_file_size": max_file_size_any,  # Already asserted to be int
             "use_relative_paths": bool(use_relative_paths_any),
             "github_token": str(github_token_any) if isinstance(github_token_any, str) else None,
         }
@@ -145,8 +157,8 @@ class FetchCode(BaseNode[FetchPrepResult, FetchExecResult]):  # Použité aliasy
 
         Returns:
             A tuple: (dictionary of fetched files, boolean success status).
-
         """
+        # Lazy import to avoid circular dependencies or issues if utils are not fully ready
         from sourcelens.utils.github import crawl_github_repo
         from sourcelens.utils.local import crawl_local_directory
 
@@ -155,28 +167,30 @@ class FetchCode(BaseNode[FetchPrepResult, FetchExecResult]):  # Použité aliasy
 
         if context["repo_url"]:
             self._log_info("Crawling GitHub repository: %s", context["repo_url"])
+            # Note: FBT001 for use_relative_paths originates from crawl_github_repo definition
             files_dict = crawl_github_repo(
                 repo_url=context["repo_url"],
                 token=context["github_token"],
                 include_patterns=context["include_patterns"],
                 exclude_patterns=context["exclude_patterns"],
                 max_file_size=context["max_file_size"],
-                use_relative_paths=context["use_relative_paths"],
+                use_relative_paths=context["use_relative_paths"],  # FBT001 source
             )
             fetch_successful = True
         elif context["local_dir_str"]:
             self._log_info("Crawling local directory: %s", context["local_dir_str"])
+            # Note: FBT001 for use_relative_paths originates from crawl_local_directory definition
             files_dict = crawl_local_directory(
                 directory=context["local_dir_str"],
                 include_patterns=context["include_patterns"],
                 exclude_patterns=context["exclude_patterns"],
                 max_file_size=context["max_file_size"],
-                use_relative_paths=context["use_relative_paths"],
+                use_relative_paths=context["use_relative_paths"],  # FBT001 source
             )
             fetch_successful = True
         else:
             self._log_error("Neither repository URL nor local directory specified for fetching.")
-            fetch_successful = False
+            # fetch_successful remains False
         return files_dict, fetch_successful
 
     def prep(self, shared: SLSharedState) -> FetchPrepResult:
@@ -187,13 +201,13 @@ class FetchCode(BaseNode[FetchPrepResult, FetchExecResult]):  # Použité aliasy
 
         Returns:
             A boolean indicating fetch attempt success.
-
         """
         self._log_info("Preparing and fetching code...")
         files_list: FileDataListInternal = []
         fetch_attempt_made_successfully = False
         project_name_for_log: str = str(shared.get("project_name", "unknown_project_initial"))
 
+        # Import moved from _fetch_files_from_source to reduce its statement count slightly.
         from sourcelens.utils.github import GithubApiError
 
         try:
@@ -234,12 +248,11 @@ class FetchCode(BaseNode[FetchPrepResult, FetchExecResult]):  # Použité aliasy
 
         Args:
             prep_res: The boolean result from the `prep` method.
-
         """
         self._log_info("Exec step skipped (prep result: %s).", prep_res)
         if not prep_res:
             self._log_warning("Prep step for FetchCode indicated a failure. No files may have been fetched.")
-        # No return value for None type
+        # No return value for None type, so no explicit return
 
     def post(self, shared: SLSharedState, prep_res: FetchPrepResult, exec_res: FetchExecResult) -> None:
         """Finalize the FetchCode node's operation.
@@ -248,7 +261,6 @@ class FetchCode(BaseNode[FetchPrepResult, FetchExecResult]):  # Použité aliasy
             shared: The shared state dictionary.
             prep_res: The boolean result from the `prep` method.
             exec_res: The result from the `exec` method (None).
-
         """
         del exec_res
 

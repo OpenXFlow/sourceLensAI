@@ -1,4 +1,17 @@
-# src/sourcelens/nodes/identify_scenarios.py
+# Copyright (C) 2025 Jozef Darida (Find me on LinkedIn/Xing)
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 """Node responsible for identifying relevant interaction scenarios for diagrams.
 
@@ -8,7 +21,7 @@ scenarios can then be used to generate sequence diagrams or other visualizations
 """
 
 import logging
-from typing import Any, Final, Union  # Pridaný Union
+from typing import Any, Final, Union  # Using TypingList for TypeAlias clarity if needed
 
 from typing_extensions import TypeAlias
 
@@ -16,26 +29,20 @@ from sourcelens.prompts import ScenarioPrompts
 from sourcelens.utils.llm_api import LlmApiError, call_llm
 from sourcelens.utils.validation import ValidationFailure, validate_yaml_list
 
-# Import BaseNode and SLSharedState from base_node module
 from .base_node import BaseNode, SLSharedState
 
-# --- Type Aliases specific to this Node ---
 IdentifyScenariosPrepResult: TypeAlias = dict[str, Any]
-"""Result of the prep phase: context for LLM or a skip flag.
-   Contains keys like 'skip', 'reason', 'project_name', 'abstraction_listing',
-   'context_summary', 'num_abstractions', 'max_scenarios', 'llm_config', 'cache_config'.
-"""
-ScenarioList: TypeAlias = list[str]  # Použitie moderného list
+"""Result of the prep phase: context for LLM or a skip flag."""
+ScenarioList: TypeAlias = list[str]  # Modern list for runtime type hints
 """Type alias for a list of scenario description strings."""
 IdentifyScenariosExecResult: TypeAlias = ScenarioList
 """Result of the exec phase: a list of identified scenarios."""
 
-# --- Other Type Aliases used within this module ---
 AbstractionItem: TypeAlias = dict[str, Any]
-AbstractionsList: TypeAlias = list[AbstractionItem]  # Použitie moderného list
+AbstractionsList: TypeAlias = list[AbstractionItem]
 
 RelationshipDetail: TypeAlias = dict[str, Any]
-RelationshipsDict: TypeAlias = dict[str, Union[str, list[RelationshipDetail]]]  # Použitie moderného list
+RelationshipsDict: TypeAlias = dict[str, Union[str, list[RelationshipDetail]]]
 
 ConfigDictTyped: TypeAlias = dict[str, Any]
 OutputConfigDictTyped: TypeAlias = dict[str, Any]
@@ -45,11 +52,9 @@ LlmConfigDictTyped: TypeAlias = dict[str, Any]
 CacheConfigDictTyped: TypeAlias = dict[str, Any]
 
 
-# Module-level logger
 module_logger: logging.Logger = logging.getLogger(__name__)
 
 
-# --- Constants ---
 DEFAULT_MAX_SCENARIOS_TO_IDENTIFY: Final[int] = 5
 """Default maximum number of scenarios to identify if not specified in config."""
 MAX_RAW_OUTPUT_SNIPPET_LEN_SCENARIOS: Final[int] = 500
@@ -69,25 +74,14 @@ class IdentifyScenariosNode(BaseNode[IdentifyScenariosPrepResult, IdentifyScenar
     def prep(self, shared: SLSharedState) -> IdentifyScenariosPrepResult:
         """Prepare context for the scenario identification LLM prompt.
 
-        Gathers abstractions, relationships, project name, LLM configuration,
-        and sequence diagram settings from the shared state. Determines if
-        scenario identification should be skipped based on configuration or
-        availability of abstractions.
-
         Args:
-            shared: The shared state dictionary, expected to contain 'config',
-                    'llm_config', 'cache_config', 'abstractions',
-                    'relationships', and 'project_name'.
+            shared: The shared state dictionary.
 
         Returns:
-            A dictionary (`IdentifyScenariosPrepResult`) containing context data
-            for the `exec` step, or a dictionary with `skip: True` if conditions
-            for scenario identification are not met.
+            A dictionary (`IdentifyScenariosPrepResult`) for the `exec` step or skip flag.
 
         Raises:
-            ValueError: If essential keys are missing from `shared_state` when
-                        scenario identification is active and required data is absent.
-
+            ValueError: If essential keys are missing from `shared_state`.
         """
         self._log_info("Preparing context for identifying interaction scenarios...")
         try:
@@ -160,19 +154,12 @@ class IdentifyScenariosNode(BaseNode[IdentifyScenariosPrepResult, IdentifyScenar
     def exec(self, prep_res: IdentifyScenariosPrepResult) -> IdentifyScenariosExecResult:
         """Call the LLM to identify relevant scenarios and validate the response.
 
-        Constructs a prompt using `ScenarioPrompts`, sends it to the LLM,
-        and then parses and validates the YAML response. The number of returned
-        scenarios is limited by `max_scenarios` from the configuration.
-
         Args:
-            prep_res: The dictionary returned by the `prep` method, containing
-                      context for the LLM and configuration settings.
+            prep_res: The dictionary returned by the `prep` method.
 
         Returns:
             A list of identified scenario description strings (`ScenarioList`).
-            Returns an empty list if skipping, if the LLM call fails, or if
-            validation/parsing of the LLM response fails.
-
+            Returns an empty list if skipping or on failure.
         """
         if prep_res.get("skip", True):
             reason_any: Any = prep_res.get("reason", "N/A")
@@ -243,7 +230,6 @@ class IdentifyScenariosNode(BaseNode[IdentifyScenariosPrepResult, IdentifyScenar
             shared: The shared state dictionary to update.
             prep_res: The dictionary returned by the `prep` method.
             exec_res: The list of scenario description strings from `exec`.
-
         """
         shared.setdefault("identified_scenarios", [])
 

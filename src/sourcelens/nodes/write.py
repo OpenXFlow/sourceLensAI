@@ -1,4 +1,17 @@
-# src/sourcelens/nodes/write.py
+# Copyright (C) 2025 Jozef Darida (Find me on LinkedIn/Xing)
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 """Node responsible for generating Markdown content for individual tutorial chapters.
 
@@ -14,27 +27,19 @@ from typing import Any, Final, Optional
 from typing_extensions import TypeAlias
 
 from sourcelens.prompts import ChapterPrompts, WriteChapterContext
-
-# Import chýbajúcej funkcie
 from sourcelens.utils.helpers import get_content_for_indices, sanitize_filename
 from sourcelens.utils.llm_api import LlmApiError, call_llm
 
-# Import BaseBatchNode and SLSharedState from base_node module
 from .base_node import BaseBatchNode, SLSharedState
 
-# --- Type Aliases specific to this Node (Batch Processing) ---
 WriteChapterPrepItem: TypeAlias = dict[str, Any]
-"""Type alias for the data item prepared for a single chapter's generation.
-   Contains 'prompt_context' (WriteChapterContext), 'llm_config', 'cache_config'.
-"""
+"""Type alias for the data item prepared for a single chapter's generation."""
 _SingleChapterExecResult: TypeAlias = str
 """Internal type alias for the execution result of processing one chapter item."""
 
 WriteChaptersExecResult: TypeAlias = list[_SingleChapterExecResult]
-"""Type alias for the execution result of the entire batch (list of chapter contents/errors)."""
+"""Type alias for the execution result of the entire batch."""
 
-
-# --- Other Type Aliases used within this module ---
 FileData: TypeAlias = tuple[str, Optional[str]]
 FileDataList: TypeAlias = list[FileData]
 
@@ -48,7 +53,6 @@ LlmConfigDictTyped: TypeAlias = dict[str, Any]
 CacheConfigDictTyped: TypeAlias = dict[str, Any]
 
 
-# --- Constants ---
 ERROR_MESSAGE_PREFIX: Final[str] = "Error generating chapter content:"
 DEFAULT_LANGUAGE_CODE: Final[str] = "english"
 DEFAULT_PROJECT_NAME: Final[str] = "Unknown Project"
@@ -107,7 +111,7 @@ class WriteChapters(BaseBatchNode[WriteChapterPrepItem, _SingleChapterExecResult
             all_chapters_listing_md.append(f"{chapter_num}. [{chapter_name}]({filename})")
         return chapter_metadata_map, all_chapters_listing_md
 
-    def _prepare_single_chapter_item(  # noqa: PLR0913
+    def _prepare_single_chapter_item(
         self,
         chapter_index_in_order: int,
         abstraction_index: int,
@@ -203,7 +207,6 @@ class WriteChapters(BaseBatchNode[WriteChapterPrepItem, _SingleChapterExecResult
 
         Returns:
             An iterable of `WriteChapterPrepItem` dictionaries. Yields items.
-
         """
         self._log_info("Preparing data for writing chapters individually...")
         try:
@@ -281,7 +284,6 @@ class WriteChapters(BaseBatchNode[WriteChapterPrepItem, _SingleChapterExecResult
         Raises:
             KeyError: If essential keys are missing.
             TypeError: If `prompt_context` is not of type `WriteChapterContext`.
-
         """
         prompt_context_any: Any = item["prompt_context"]
         if not isinstance(prompt_context_any, WriteChapterContext):
@@ -318,7 +320,6 @@ class WriteChapters(BaseBatchNode[WriteChapterPrepItem, _SingleChapterExecResult
 
         Raises:
             LlmApiError: If the LLM call fails.
-
         """
         prompt_str = ChapterPrompts.format_write_chapter_prompt(prompt_context)
         return call_llm(prompt_str, llm_config, cache_config)
@@ -332,7 +333,6 @@ class WriteChapters(BaseBatchNode[WriteChapterPrepItem, _SingleChapterExecResult
 
         Returns:
             Formatted chapter content string or an error message string.
-
         """
         chapter_content = str(raw_content or "").strip()
         expected_heading = f"# Chapter {prompt_context.chapter_num}: {prompt_context.abstraction_name}"
@@ -345,7 +345,6 @@ class WriteChapters(BaseBatchNode[WriteChapterPrepItem, _SingleChapterExecResult
             )
             return f"{ERROR_MESSAGE_PREFIX} Empty content for Chapter {prompt_context.chapter_num}."
 
-        # Check and fix H1 heading
         if not chapter_content.startswith(f"# Chapter {prompt_context.chapter_num}"):
             self._log_warning(
                 "Chapter %d ('%s') response missing/incorrect H1. Attempting to prepend.",
@@ -380,7 +379,6 @@ class WriteChapters(BaseBatchNode[WriteChapterPrepItem, _SingleChapterExecResult
 
         Raises:
             LlmApiError: Propagated from `call_llm` to allow retries.
-
         """
         try:
             prompt_context, llm_config, cache_config = self._extract_and_validate_item_params(item)
@@ -396,14 +394,14 @@ class WriteChapters(BaseBatchNode[WriteChapterPrepItem, _SingleChapterExecResult
             formatted_content = self._format_llm_response(raw_llm_content, prompt_context)
             self._log_info("Successfully generated content for Chapter %d.", prompt_context.chapter_num)
             return formatted_content
-        except LlmApiError:  # Propagate for retry by the flow engine
+        except LlmApiError:
             self._log_error(
                 "LLM call failed for Chapter %d ('%s'). Awaiting retry or fallback by flow engine.",
                 prompt_context.chapter_num,
                 prompt_context.abstraction_name,
-                exc_info=True,  # Log stack trace for LlmApiError as well
+                exc_info=True,
             )
-            raise  # Re-raise to be handled by flow engine's retry mechanism
+            raise
         except Exception as e_unexpected:  # noqa: BLE001
             self._log_error(
                 "Unexpected error during Chapter %d ('%s') exec_item: %s",

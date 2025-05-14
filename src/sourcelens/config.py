@@ -1,3 +1,17 @@
+# Copyright (C) 2025 Jozef Darida (Find me on LinkedIn/Xing)
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
 # src/sourcelens/config.py
 
 """Load, validate, and process configuration for the SourceLens application.
@@ -14,7 +28,9 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, Optional, TypeAlias
+from typing import TYPE_CHECKING, Any, Final, Optional
+
+from typing_extensions import TypeAlias
 
 # Safe imports for optional dependencies
 try:
@@ -28,7 +44,7 @@ except ImportError:
     JSONSCHEMA_AVAILABLE = False
 
 if TYPE_CHECKING:
-    from jsonschema.exceptions import ValidationError
+    from jsonschema.exceptions import ValidationError  # type: ignore[attr-defined]
 
 
 # --- Type Aliases ---
@@ -44,8 +60,8 @@ DEFAULT_LANGUAGE: Final[str] = "english"
 DEFAULT_MAX_FILE_SIZE: Final[int] = 150000
 DEFAULT_LLM_RETRIES: Final[int] = 3
 DEFAULT_LLM_WAIT: Final[int] = 10
-DEFAULT_SOURCE_INDEX_PARSER: Final[str] = "none"  # Default for language profiles
-# Environment variable names
+DEFAULT_SOURCE_INDEX_PARSER: Final[str] = "none"
+
 ENV_VAR_GOOGLE_PROJECT: Final[str] = "GOOGLE_CLOUD_PROJECT"
 ENV_VAR_GOOGLE_REGION: Final[str] = "GOOGLE_CLOUD_REGION"
 ENV_VAR_GITHUB_TOKEN: Final[str] = "GITHUB_TOKEN"
@@ -121,15 +137,13 @@ DIAGRAM_GENERATION_SCHEMA: ConfigDict = {
     },
 }
 
-# SOURCE_INDEX_SCHEMA is removed. 'include_source_index' moved to OUTPUT_SCHEMA.
-
-OUTPUT_SCHEMA: ConfigDict = {  # Added a more explicit OUTPUT_SCHEMA for clarity
+OUTPUT_SCHEMA: ConfigDict = {
     "type": "object",
     "properties": {
         "base_dir": {"type": "string", "default": DEFAULT_OUTPUT_DIR},
         "language": {"type": "string", "default": DEFAULT_LANGUAGE},
         "diagram_generation": DIAGRAM_GENERATION_SCHEMA,
-        "include_source_index": {  # Moved from diagram_generation to direct output property
+        "include_source_index": {
             "type": "boolean",
             "default": False,
             "description": "Globally controls if the source index (code_inventory.md) should be generated.",
@@ -140,7 +154,7 @@ OUTPUT_SCHEMA: ConfigDict = {  # Added a more explicit OUTPUT_SCHEMA for clarity
         "base_dir": DEFAULT_OUTPUT_DIR,
         "language": DEFAULT_LANGUAGE,
         "diagram_generation": DIAGRAM_GENERATION_SCHEMA["default"],
-        "include_source_index": False,  # Default for the new global flag
+        "include_source_index": False,
     },
 }
 
@@ -165,7 +179,7 @@ CONFIG_SCHEMA: ConfigDict = {
             "required": ["language_profiles"],
             "additionalProperties": False,
         },
-        "output": OUTPUT_SCHEMA,  # Use the new OUTPUT_SCHEMA
+        "output": OUTPUT_SCHEMA,
         "logging": {
             "type": "object",
             "properties": {
@@ -214,7 +228,7 @@ class ConfigError(Exception):
 
 
 # --- Logger Setup ---
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 # --- Helper Functions ---
@@ -247,7 +261,8 @@ def _read_config_file(config_path: Path) -> ConfigDict:
         raise FileNotFoundError(f"Configuration file not found: '{config_path.resolve()}'")
     try:
         with config_path.open(encoding="utf-8") as f:
-            return json.load(f)
+            config_data: ConfigDict = json.load(f)
+            return config_data
     except json.JSONDecodeError as e:
         raise ConfigError(f"Invalid JSON syntax in '{config_path.resolve()}': {e}") from e
     except OSError as e:
@@ -269,7 +284,7 @@ def _validate_schema(config_data: ConfigDict, config_path: Path) -> None:
     """
     _ensure_jsonschema_available()
     if validate is None:
-        raise RuntimeError("jsonschema 'validate' function is not available.")
+        raise RuntimeError("jsonschema 'validate' function is not available after availability check.")
     if (
         jsonschema is None
         or not hasattr(jsonschema, "exceptions")
@@ -278,11 +293,10 @@ def _validate_schema(config_data: ConfigDict, config_path: Path) -> None:
         raise RuntimeError("'jsonschema.exceptions.ValidationError' is not available for exception handling.")
 
     try:
-        # jsonschema.exceptions.ValidationError is checked by hasattr
         validation_error_type: type[ValidationError] = jsonschema.exceptions.ValidationError  # type: ignore[attr-defined]
         validate(instance=config_data, schema=CONFIG_SCHEMA)
         logger.debug("Configuration schema validation passed for %s.", config_path.name)
-    except validation_error_type as e_val_err:
+    except validation_error_type as e_val_err:  # type: ignore[misc]
         schema_path_str = " -> ".join(map(str, e_val_err.path)) if e_val_err.path else "root"
         error_message = f"Configuration error in '{config_path.name}' at '{schema_path_str}': {e_val_err.message}"
         logger.debug(
@@ -292,7 +306,7 @@ def _validate_schema(config_data: ConfigDict, config_path: Path) -> None:
             e_val_err.schema,
         )
         raise ConfigError(error_message) from e_val_err
-    except Exception as e:  # pylint: disable=broad-except
+    except Exception as e:
         raise ConfigError(f"Unexpected error during schema validation: {e}") from e
 
 
@@ -344,13 +358,13 @@ def _validate_local_llm_config(config: ProviderConfigDict) -> None:
         ConfigError: If 'api_base_url' is missing or invalid.
 
     """
-    provider = config.get("provider", "local_llm")
-    api_base_url = config.get("api_base_url")
-    api_key = config.get("api_key")
+    provider: str = str(config.get("provider", "local_llm"))
+    api_base_url_any: Any = config.get("api_base_url")
+    api_key_any: Any = config.get("api_key")
 
-    if not api_base_url or not isinstance(api_base_url, str):
+    if not api_base_url_any or not isinstance(api_base_url_any, str):
         raise ConfigError(f"For local provider '{provider}': Missing or invalid 'api_base_url'.")
-    if api_key:
+    if api_key_any:
         logger.info("API key provided for local provider '%s'. Ensure this is supported.", provider)
 
 
@@ -368,8 +382,9 @@ def _validate_vertexai_config(config: ProviderConfigDict, checked_env_var: Optio
         ConfigError: If project or location is missing and not found in env.
 
     """
-    provider = config.get("provider", "vertexai")
-    api_key_or_creds = config.get("api_key")
+    provider: str = str(config.get("provider", "vertexai"))
+    api_key_or_creds_any: Any = config.get("api_key")
+    api_key_or_creds: Optional[str] = str(api_key_or_creds_any) if api_key_or_creds_any else None
 
     if not api_key_or_creds:
         env_var_msg = f" or environment variable '{checked_env_var}'" if checked_env_var else ""
@@ -409,9 +424,13 @@ def _validate_standard_cloud_config(config: ProviderConfigDict, checked_env_var:
         ConfigError: If 'api_key' is missing and not found in env.
 
     """
-    provider = config.get("provider")
-    api_key = config.get("api_key")
-    api_base_url = config.get("api_base_url")
+    provider_any: Any = config.get("provider")
+    provider: str = str(provider_any) if provider_any else "Unknown Cloud Provider"
+    api_key_any: Any = config.get("api_key")
+    api_base_url_any: Any = config.get("api_base_url")
+
+    api_key: Optional[str] = str(api_key_any) if isinstance(api_key_any, str) else None
+    api_base_url: Optional[str] = str(api_base_url_any) if isinstance(api_base_url_any, str) else None
 
     if not api_key:
         env_msg = f" and environment variable '{checked_env_var}' was not set" if checked_env_var else ""
@@ -435,12 +454,17 @@ def _validate_active_llm_config(active_config: ProviderConfigDict) -> None:
         ValueError: If provider name is missing.
 
     """
-    provider = active_config.get("provider")
-    if not isinstance(provider, str):
-        raise ValueError("Active LLM provider config missing 'provider' name.")
+    provider_any: Any = active_config.get("provider")
+    if not isinstance(provider_any, str):
+        raise ValueError("Active LLM provider config missing 'provider' name or it's not a string.")
+    provider: str = provider_any
 
-    is_local = active_config.get("is_local_llm", False)
-    api_key = active_config.get("api_key")
+    is_local_any: Any = active_config.get("is_local_llm", False)
+    is_local: bool = bool(is_local_any)
+
+    api_key_any: Any = active_config.get("api_key")
+    api_key: Optional[str] = str(api_key_any) if isinstance(api_key_any, str) else None
+
     checked_env_var: Optional[str] = None
 
     logger.debug("Validating active LLM provider config: %s", provider)
@@ -474,7 +498,8 @@ def _validate_github_token(github_config: ConfigDict) -> None:
 
     if github_config.get("token") is None:
         logger.debug("GitHub token not in config. Checking env var '%s'.", ENV_VAR_GITHUB_TOKEN)
-        if env_github_token := os.environ.get(ENV_VAR_GITHUB_TOKEN):
+        env_github_token = os.environ.get(ENV_VAR_GITHUB_TOKEN)
+        if env_github_token:
             github_config["token"] = env_github_token
             logger.info("Loaded GitHub token from env var '%s'.", ENV_VAR_GITHUB_TOKEN)
         else:
@@ -495,19 +520,24 @@ def _ensure_directory_exists(dir_path_str: Optional[str], dir_purpose: str, defa
         default_path: The default path string to use if dir_path_str is None or invalid.
 
     """
-    path_to_check_str = dir_path_str if isinstance(dir_path_str, str) and dir_path_str else default_path
-    if not path_to_check_str:  # Should not happen if default_path is always set
+    path_to_check_str = dir_path_str if isinstance(dir_path_str, str) and dir_path_str.strip() else default_path
+    if not path_to_check_str:
         logger.error("Cannot ensure %s directory: No valid path provided.", dir_purpose)
         return
 
+    dir_to_ensure: Path
     try:
         dir_to_ensure = Path(path_to_check_str)
-        if dir_to_ensure != Path():  # Avoid trying to mkdir for a filename without parent
-            dir_to_ensure.mkdir(parents=True, exist_ok=True)
-            logger.debug("Ensured %s directory exists: %s", dir_purpose, dir_to_ensure.resolve())
+        target_dir_for_mkdir = dir_to_ensure
+        if dir_purpose == "LLM cache" and dir_to_ensure.suffix:
+            target_dir_for_mkdir = dir_to_ensure.parent
+
+        if target_dir_for_mkdir != Path():
+            target_dir_for_mkdir.mkdir(parents=True, exist_ok=True)
+            logger.debug("Ensured %s directory structure exists for: %s", dir_purpose, target_dir_for_mkdir.resolve())
     except OSError as e:
-        logger.error("Could not create %s directory '%s': %s.", dir_purpose, dir_to_ensure, e, exc_info=True)
-    except Exception as e:  # pylint: disable=broad-except
+        logger.error("Could not create %s directory '%s': %s.", dir_purpose, path_to_check_str, e, exc_info=True)
+    except Exception as e:
         logger.error("Error ensuring %s directory for path '%s': %s.", dir_purpose, path_to_check_str, e, exc_info=True)
 
 
@@ -520,32 +550,57 @@ def _apply_defaults_and_validate_sections(config_data: ConfigDict) -> None:
         config_data: The main configuration dictionary.
 
     """
-    project_cfg = config_data.setdefault("project", CONFIG_SCHEMA["properties"]["project"]["default"])
+    project_cfg_any: Any = config_data.get("project", CONFIG_SCHEMA["properties"]["project"]["default"])
+    project_cfg: ConfigDict = (
+        project_cfg_any if isinstance(project_cfg_any, dict) else CONFIG_SCHEMA["properties"]["project"]["default"]
+    )
+    config_data["project"] = project_cfg  # Ensure project key exists and is a dict
     project_cfg.setdefault("default_name", None)
 
-    output_cfg = config_data.setdefault("output", OUTPUT_SCHEMA["default"])
+    output_cfg_any: Any = config_data.get("output", OUTPUT_SCHEMA["default"])
+    output_cfg: ConfigDict = output_cfg_any if isinstance(output_cfg_any, dict) else OUTPUT_SCHEMA["default"]
+    config_data["output"] = output_cfg  # Ensure output key exists and is a dict
     output_cfg.setdefault("base_dir", DEFAULT_OUTPUT_DIR)
     output_cfg.setdefault("language", DEFAULT_LANGUAGE)
-    output_cfg.setdefault("include_source_index", False)  # Default for new flag
+    output_cfg.setdefault("include_source_index", False)
 
-    diag_gen_cfg = output_cfg.setdefault("diagram_generation", DIAGRAM_GENERATION_SCHEMA["default"])
+    diag_gen_cfg_any: Any = output_cfg.get("diagram_generation", DIAGRAM_GENERATION_SCHEMA["default"])
+    diag_gen_cfg: ConfigDict = (
+        diag_gen_cfg_any if isinstance(diag_gen_cfg_any, dict) else DIAGRAM_GENERATION_SCHEMA["default"]
+    )
+    output_cfg["diagram_generation"] = diag_gen_cfg  # Ensure diagram_generation key exists
     diag_gen_cfg.setdefault("format", "mermaid")
-    # Other diagram_generation defaults are handled by its own schema default
 
-    logging_cfg = config_data.setdefault("logging", CONFIG_SCHEMA["properties"]["logging"]["default"])
+    logging_cfg_any: Any = config_data.get("logging", CONFIG_SCHEMA["properties"]["logging"]["default"])
+    logging_cfg: ConfigDict = (
+        logging_cfg_any if isinstance(logging_cfg_any, dict) else CONFIG_SCHEMA["properties"]["logging"]["default"]
+    )
+    config_data["logging"] = logging_cfg  # Ensure logging key exists
     logging_cfg.setdefault("log_dir", DEFAULT_LOG_DIR)
     logging_cfg.setdefault("log_level", "INFO")
-    _ensure_directory_exists(logging_cfg.get("log_dir"), "logging", DEFAULT_LOG_DIR)
+    _ensure_directory_exists(str(logging_cfg.get("log_dir")), "logging", DEFAULT_LOG_DIR)
 
-    cache_cfg = config_data.setdefault("cache", CONFIG_SCHEMA["properties"]["cache"]["default"])
+    cache_cfg_any: Any = config_data.get("cache", CONFIG_SCHEMA["properties"]["cache"]["default"])
+    cache_cfg: ConfigDict = (
+        cache_cfg_any if isinstance(cache_cfg_any, dict) else CONFIG_SCHEMA["properties"]["cache"]["default"]
+    )
+    config_data["cache"] = cache_cfg  # Ensure cache key exists
     cache_cfg.setdefault("llm_cache_file", DEFAULT_CACHE_FILE)
+
+    llm_cache_file_str: Optional[str] = (
+        str(cache_cfg.get("llm_cache_file")) if isinstance(cache_cfg.get("llm_cache_file"), str) else None
+    )
     _ensure_directory_exists(
-        Path(str(cache_cfg.get("llm_cache_file"))).parent.as_posix(),
+        llm_cache_file_str,
         "LLM cache",
-        Path(DEFAULT_CACHE_FILE).parent.as_posix(),
+        DEFAULT_CACHE_FILE,
     )
 
-    github_cfg = config_data.setdefault("github", CONFIG_SCHEMA["properties"]["github"]["default"])
+    github_cfg_any: Any = config_data.get("github", CONFIG_SCHEMA["properties"]["github"]["default"])
+    github_cfg: ConfigDict = (
+        github_cfg_any if isinstance(github_cfg_any, dict) else CONFIG_SCHEMA["properties"]["github"]["default"]
+    )
+    config_data["github"] = github_cfg  # Ensure github key exists
     github_cfg.setdefault("token", None)
     _validate_github_token(github_cfg)
 
@@ -569,8 +624,10 @@ def _process_llm_config(llm_section: ConfigDict) -> ConfigDict:
     if not isinstance(llm_section, dict):
         raise ConfigError("Config error: 'llm' section must be a dictionary.")
 
-    provider_configs = llm_section.get("providers", [])
-    if not isinstance(provider_configs, list) or not provider_configs:  # Ensure not empty
+    provider_configs_any: Any = llm_section.get("providers", [])
+    provider_configs: list[Any] = provider_configs_any if isinstance(provider_configs_any, list) else []
+
+    if not provider_configs:
         raise ConfigError("Config error: 'llm.providers' must be a non-empty list.")
 
     active_provider_configs: list[ProviderConfigDict] = [
@@ -582,9 +639,9 @@ def _process_llm_config(llm_section: ConfigDict) -> ConfigDict:
     if len(active_provider_configs) > 1:
         raise ConfigError("Config error: Multiple active LLM providers. Set only one to 'is_active: true'.")
 
-    active_provider_config = active_provider_configs[0]
+    active_provider_config: ProviderConfigDict = active_provider_configs[0]
     if not all(k in active_provider_config for k in ("provider", "model", "is_local_llm")):
-        raise ConfigError(f"Active LLM provider config missing required keys: {active_provider_config}")
+        raise ConfigError(f"Active LLM provider config missing required schema keys: {active_provider_config}")
 
     _validate_active_llm_config(active_provider_config)
 
@@ -597,11 +654,11 @@ def _process_llm_config(llm_section: ConfigDict) -> ConfigDict:
     return final_llm_config
 
 
-def _find_active_language_profile(language_profiles: list[Any]) -> LanguageProfileDict:
+def _find_active_language_profile(language_profiles_any: Any) -> LanguageProfileDict:
     """Iterate through language profiles and return the first active one.
 
     Args:
-        language_profiles: The list of language profile dictionaries.
+        language_profiles_any: The list of language profile dictionaries from config.
 
     Returns:
         The first active language profile dictionary.
@@ -611,7 +668,8 @@ def _find_active_language_profile(language_profiles: list[Any]) -> LanguageProfi
                      is found, or multiple active profiles are found.
 
     """
-    if not isinstance(language_profiles, list) or not language_profiles:  # Ensure not empty
+    language_profiles: list[Any] = language_profiles_any if isinstance(language_profiles_any, list) else []
+    if not language_profiles:
         raise ConfigError("Config error: 'source.language_profiles' must be a non-empty list.")
 
     active_profiles: list[LanguageProfileDict] = [
@@ -623,8 +681,7 @@ def _find_active_language_profile(language_profiles: list[Any]) -> LanguageProfi
     if len(active_profiles) > 1:
         raise ConfigError("Config error: Multiple active language profiles. Set only one to 'is_active: true'.")
 
-    active_profile = active_profiles[0]
-    # Check for essential keys after finding the active profile
+    active_profile: LanguageProfileDict = active_profiles[0]
     required_keys = ("language", "default_include_patterns", "source_index_parser")
     if not all(k in active_profile for k in required_keys):
         missing = [k for k in required_keys if k not in active_profile]
@@ -659,15 +716,12 @@ def _process_source_config(source_section: ConfigDict) -> ConfigDict:
         "max_file_size_bytes": source_section.get("max_file_size_bytes", DEFAULT_MAX_FILE_SIZE),
         "use_relative_paths": source_section.get("use_relative_paths", True),
     }
-    # Overlay active profile settings (these take precedence)
     final_source_config.update(active_profile)
 
-    # Explicitly override with profile's specific values if they exist and are not None
     if active_profile.get("max_file_size_bytes") is not None:
         final_source_config["max_file_size_bytes"] = active_profile["max_file_size_bytes"]
     if active_profile.get("use_relative_paths") is not None:
         final_source_config["use_relative_paths"] = active_profile["use_relative_paths"]
-    # source_index_parser is now directly part of the active_profile and will be included.
 
     final_source_config.pop("is_active", None)
     logger.debug("Processed source config using active lang profile: %s", active_profile.get("language"))
@@ -699,23 +753,26 @@ def load_config(config_path_str: str = "config.json") -> ConfigDict:
     config_data = _read_config_file(config_path)
     _validate_schema(config_data, config_path)
 
-    # Apply defaults before processing sections that depend on them or select active profiles
     _apply_defaults_and_validate_sections(config_data)
 
-    # Process LLM and Source sections to select active profiles and merge settings
-    config_data["llm"] = _process_llm_config(config_data.get("llm", {}))
-    config_data["source"] = _process_source_config(config_data.get("source", {}))
+    llm_config_section_any: Any = config_data.get("llm", {})
+    llm_config_section: ConfigDict = llm_config_section_any if isinstance(llm_config_section_any, dict) else {}
+    config_data["llm"] = _process_llm_config(llm_config_section)
+
+    source_config_section_any: Any = config_data.get("source", {})
+    source_config_section: ConfigDict = source_config_section_any if isinstance(source_config_section_any, dict) else {}
+    config_data["source"] = _process_source_config(source_config_section)
 
     logger.info("Configuration loaded and processed successfully.")
     if logger.isEnabledFor(logging.DEBUG):
         try:
-            log_config_copy = json.loads(json.dumps(config_data))  # Deep copy for logging
-            if log_config_copy.get("llm", {}).get("api_key"):
+            log_config_copy = json.loads(json.dumps(config_data))
+            if isinstance(log_config_copy.get("llm"), dict) and log_config_copy["llm"].get("api_key"):
                 log_config_copy["llm"]["api_key"] = "***REDACTED***"
-            if log_config_copy.get("github", {}).get("token"):
+            if isinstance(log_config_copy.get("github"), dict) and log_config_copy["github"].get("token"):
                 log_config_copy["github"]["token"] = "***REDACTED***"
             logger.debug("Final processed config data: %s", json.dumps(log_config_copy, indent=2))
-        except (TypeError, ValueError) as dump_error:  # pragma: no cover
+        except (TypeError, ValueError) as dump_error:
             logger.debug("Could not serialize final config for debug logging: %s", dump_error)
 
     return config_data

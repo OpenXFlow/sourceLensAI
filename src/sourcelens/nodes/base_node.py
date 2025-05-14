@@ -1,4 +1,18 @@
-# src/sourcelens/nodes/base_node.py
+# Copyright (C) 2025 Jozef Darida (Find me on LinkedIn/Xing)
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+
 
 """Abstract base classes for processing nodes in the SourceLens workflow.
 
@@ -130,7 +144,7 @@ class BaseNode(CoreNode[SLSharedState, SLPrepResType, SLExecResType], ABC, Gener
         """
         raise NotImplementedError(f"{self.__class__.__name__} must implement 'post'")
 
-    def _get_required_shared(self, shared: SLSharedState, key: str) -> Any:  # noqa: ANN401
+    def _get_required_shared(self, shared: SLSharedState, key: str) -> Any:
         """Safely retrieve a required value from the shared state dictionary.
 
         Args:
@@ -203,12 +217,12 @@ class BaseBatchNode(
 
     Inherits batch execution logic from `sourcelens.core.BatchNode`.
     Concrete subclasses must implement `prep` to return an iterable of `SLItemType`,
-    `exec` to process a single `SLItemType` and return `SLBatchItemExecResType`,
+    `exec_item` to process a single `SLItemType` and return `SLBatchItemExecResType`,
     and `post` to handle the list of results. Helper methods for logging and
     accessing shared state are included directly in this class.
 
     This class is generic over `SLItemType` (the type of a single batch item) and
-    `SLBatchItemExecResType` (the result of `exec` on a single batch item).
+    `SLBatchItemExecResType` (the result of `exec_item` on a single batch item).
     `SLSharedState` is fixed as `dict[str, Any]`.
     """
 
@@ -232,7 +246,7 @@ class BaseBatchNode(
         """Prepare an iterable of `SLItemType` items for batch processing.
 
         This method is called once for the entire batch. The returned iterable's
-        items will be passed one by one to the `exec` method by the core
+        items will be passed one by one to the `exec_item` method by the core
         batch processing logic.
 
         Args:
@@ -250,15 +264,11 @@ class BaseBatchNode(
         raise NotImplementedError(f"{self.__class__.__name__} must implement 'prep'")
 
     @abstractmethod
-    def exec(self, item: SLItemType) -> SLBatchItemExecResType:
+    def exec_item(self, item: SLItemType) -> SLBatchItemExecResType:
         """Execute the core logic for a single item in the batch.
 
         This method is called by the underlying `CoreBatchNode`'s execution
         logic for each `item` yielded by this node's `prep` method.
-        The `type: ignore[override]` silences MyPy's Liskov Substitution
-        Principle complaint, as this `exec` signature (for a single item)
-        is intentionally specialized for batch processing, differing from the
-        generic `exec(prep_res: PrepResType)` signature of `CoreNode`.
 
         Args:
             item: A single item from the iterable returned by `prep`.
@@ -270,7 +280,23 @@ class BaseBatchNode(
             NotImplementedError: If the subclass does not implement this method.
 
         """
-        raise NotImplementedError(f"{self.__class__.__name__} must implement 'exec' for a single item")
+        raise NotImplementedError(f"{self.__class__.__name__} must implement 'exec_item' for a single item")
+
+    def exec(self, item: SLItemType) -> SLBatchItemExecResType:  # type: ignore[override]
+        """Process a single item from the batch.
+
+        This method is called internally by the CoreBatchNode's logic
+        for each item. It delegates to the abstract `exec_item` method
+        that subclasses must implement.
+
+        Args:
+            item: A single item of type `SLItemType` to process.
+
+        Returns:
+            The result of processing the item, of type `SLBatchItemExecResType`.
+
+        """
+        return self.exec_item(item)
 
     @abstractmethod
     def post(
@@ -285,7 +311,7 @@ class BaseBatchNode(
             shared: The shared state dictionary to update.
             prep_res: The iterable of items that was originally returned by `prep`.
             exec_res_list: A list containing the execution result (of type
-                           `SLBatchItemExecResType`) for each item processed by `exec`.
+                           `SLBatchItemExecResType`) for each item processed by `exec_item`.
 
         Returns:
             None.
@@ -296,8 +322,7 @@ class BaseBatchNode(
         """
         raise NotImplementedError(f"{self.__class__.__name__} must implement 'post'")
 
-    # Helper methods for logging and shared state access are part of BaseBatchNode
-    def _get_required_shared(self, shared: SLSharedState, key: str) -> Any:  # noqa: ANN401
+    def _get_required_shared(self, shared: SLSharedState, key: str) -> Any:
         """Safely retrieve a required value from the shared state dictionary.
 
         Args:

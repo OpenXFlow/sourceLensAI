@@ -10,31 +10,28 @@ readme = "README.md"
 authors = [
   { name = "Jozef Darida", email = "darijo2@yahoo.com" },
 ]
-license = "GPL-3.0-or-later"
-license-files = ["LICENSE"]
-
+license = {text = "GPL-3.0-or-later"}
 requires-python = ">=3.9"
 classifiers = [
     "Programming Language :: Python :: 3",
-    # "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)", # ODSTRÁNENÉ
     "Operating System :: OS Independent",
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Topic :: Software Development :: Documentation",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
 ]
 dependencies = [
-    # "pocketflow>=0.0.1", # ODSTRÁNENÉ - integrované do projektu
     "PyYAML>=6.0",
     "requests>=2.28.0",
     "GitPython>=3.1.0",
     "google-cloud-aiplatform>=1.25.0",
     "google-generativeai>=0.8.0",
-    # "anthropic>=0.20.0",
-    # "openai>=1.0.0",
     "python-dotenv>=1.0.0",
     "attrs>=21.3.0",
-    "jsonschema>=4.0.0",
+    "jsonschema>=4.0.1",
+    "types-jsonschema==4.23.0.20241208", # For MyPy, consider moving to dev
+    "typing-extensions>=4.0.0", # For TypeAlias and other backports
 ]
 
 [project.urls]
@@ -47,10 +44,11 @@ sourcelens = "sourcelens.main:main"
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
-    "ruff>=0.1.0",
+    "ruff>=0.1.0", # Using Ruff as the primary linter/formatter
     "mypy>=1.0",
     "pre-commit>=3.0",
     "build>=0.10.0",
+    # types-jsonschema could also be here if not in main dependencies
 ]
 
 [tool.setuptools.packages.find]
@@ -58,24 +56,127 @@ where = ["src"]
 
 [tool.ruff]
 line-length = 120
+target-version = "py39" # Specify your target Python version
 
 [tool.ruff.lint]
+# Explicitly select rules based on the INITIAL PROMPT and common best practices.
 select = [
-    "E", "W", "F", "I", "C", "B", "D", "UP", "YTT", "ANN", "ASYNC",
-    "S", "BLE", "FBT", "NPY", "PD", "PGH", "PL", "PT", "PTH", "RSE",
-    "RET", "SLF", "SIM", "TID", "TCH",
+    # Pycodestyle (PEP 8)
+    "E",  # Error
+    "W",  # Warning
+
+    # Pyflakes (Mainly for detecting unused imports, variables, etc.)
+    "F",
+
+    # isort (Import sorting, handled by ruff format or ruff --fix)
+    "I",
+
+    # flake8-comprehensions (More Pythonic comprehensions)
+    "C414", # Unnecessary list() or tuple() in sorted()
+
+    # flake8-bugbear (Finds various possible bugs and design problems)
+    "B904", # raise-without-from-inside-except (use specific exceptions)
+    # BLE001 is handled by B904 if an exception is always raised or logged.
+    # If an empty except is absolutely needed (rare), it can be ignored per-case.
+
+    # pydocstyle (Docstring conventions)
+    "D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107", # Missing docstrings
+    "D200", # First line should end with a period
+    "D211", # No blank lines allowed before class docstring (chosen over D203)
+    "D210", # No whitespaces allowed surrounding docstring text
+    "D212", # Multi-line docstring summary should start at the first line (chosen over D213)
+    "D400", # First line should be imperative and short
+    "D401", # First line should be in imperative mood (e.g. "Return...", "Calculate...") - Overlaps D400 but good to have.
+    "D402", # First line should be on a separate line (for functions/methods)
+    "D403", # First word of the first line should be capitalized
+    "D415", # First line should end with a period (redundant with D200, but no harm)
+    # D417 is implicitly covered by requiring Args, Returns, Raises sections for complex docstrings.
+    # If you want to enforce it strictly for *any* non-None return, add D417.
+
+    # flake8-annotations (Type hinting)
+    "ANN001", "ANN002", "ANN003", # Missing type for args, *args, **kwargs
+    "ANN201", "ANN202", "ANN204", "ANN205", "ANN206", # Missing return type
+    # ANN101, ANN102 for self/cls are often ignored, see 'ignore' section.
+    # ANN401 for Any is often ignored during heavy development, see 'ignore' section.
+
+    # pyupgrade (Modernize syntax)
+    "UP006", # Use `list` instead of `typing.List`
+    "UP007", # Use `X | Y` for `Union` (Python 3.10+) or `typing.Union` for <3.10.
+             # Ruff handles this based on target-version.
+
+    # flake8-type-checking (Imports for type checking)
+    "TC001", "TC002", # For moving imports into `if TYPE_CHECKING:` block
+
+    # mccabe (Code complexity)
+    "C901", # McCabe complexity
+
+    # Pylint rules mentioned in INITIAL PROMPT
+    "PLR0912", # Too many branches
+    "PLR0915", # Too many statements
+    "PLW0603", # global-statement (usage of `global`)
+    "PLR2004", # Magic value used in comparison
+    "PLE1206", # Logging too few arguments (format string)
+
+    # flake8-return
+    "RET504", # Unnecessary variable assignment before return
+
+    # flake8-blind-except
+    "BLE001", # Do not catch blind exception (use specific exceptions or `Exception as e`)
+
+    # flake8-use-pathlib
+    "PTH",    # Enforce usage of pathlib for path operations
+
+    # flake8-boolean-trap
+    "FBT001", # Boolean-typed positional argument in function definition
+    "FBT002", # Boolean default positional argument in function definition
+
+    # pygrep-hooks
+    "PGH003", # Blanket type ignore (use specific codes if ignoring types)
+    # PGH004 is for blanket noqa, which is a general good practice.
+
+    # flake8-simplify
+    "SIM105", # Use `contextlib.suppress` instead of `try-except-pass`
+
+    # Pyflakes rules for undefined names and unused variables
+    "F821",   # undefined name
+    "F841",   # local variable assigned to but never used
+
+    # Ruff specific useful rules
+    "RUF100", # Unused noqa directive (helps clean up suppressions)
 ]
-ignore = []
+
+ignore = [
+    "D203",   # Conflicts with D211 (1 blank line required before class docstring vs no blank lines)
+    "D213",   # Conflicts with D212 (Multi-line docstring summary should start at the second line vs first line)
+    "ANN101", # Missing type annotation for self (common to ignore)
+    "ANN102", # Missing type annotation for cls (common to ignore)
+    "ANN401", # Allow `typing.Any` for now, to be gradually reduced.
+    "S101",   # Allow `assert` statements (common in tests and for internal checks)
+    # "PLR2004", # Magic value comparison. If you want to be very strict, remove this.
+                 # Otherwise, small, obvious numbers (e.g., loop for 2-3 items) are sometimes fine.
+    # "S105", "S106", "S107" for hardcoded passwords - review warnings carefully and use # noqa per line if false positive.
+]
+
+[tool.ruff.lint.pydocstyle]
+# Convention for docstrings. Google style is often preferred for its clarity
+# with Args, Returns, Raises sections, matching your INITIAL PROMPT requirements.
+convention = "google"
 
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+# docstring-code-format = true # Uncomment to enable formatting of code blocks in docstrings
 
 [tool.mypy]
 python_version = "3.9"
 warn_return_any = true
 warn_unused_configs = true
 packages = ["sourcelens"]
-namespace_packages = true
+# namespace_packages = true # Usually not needed if src/sourcelens/__init__.py exists
+# Add `check_untyped_defs = true` for stricter checking of functions without annotations.
+
+# [[tool.mypy.overrides]]
+# module = "jsonschema.*"
+# ignore_missing_imports = true # If types-jsonschema is incomplete or problematic
 
 # End of pyproject.toml

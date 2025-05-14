@@ -1,28 +1,38 @@
-# src/sourcelens/nodes/combine.py
+# Copyright (C) 2025 Jozef Darida (Find me on LinkedIn/Xing)
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 """Node responsible for combining generated tutorial components into final files."""
 
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Final, Literal, Optional, Union, get_args  # Added Union
+from typing import Any, Final, Literal, Optional, Union, get_args
 
-from typing_extensions import TypeAlias  # For TypeAlias compatibility
+from typing_extensions import TypeAlias
 
 from sourcelens.utils._exceptions import LlmApiError
 from sourcelens.utils.helpers import sanitize_filename
 
-# Import BaseNode and SLSharedState from base_node module
 from .base_node import BaseNode, SLSharedState
 
-# --- Type Aliases specific to this Node ---
 CombinePrepResult: TypeAlias = bool
 """Boolean indicating if the preparation (including file writing) was successful."""
 
 CombineExecResult: TypeAlias = None
 """Exec result is None as actual work is done in prep."""
 
-# --- Other Type Aliases used within this module (spresnené) ---
 AbstractionItem: TypeAlias = dict[str, Any]
 AbstractionsList: TypeAlias = list[AbstractionItem]
 
@@ -54,7 +64,6 @@ OutputConfigDict: TypeAlias = dict[str, Any]
 SharedDataForCombine: TypeAlias = dict[str, Any]
 """Aggregated data from shared_state specifically for the combine node's logic."""
 
-# --- Constants ---
 DIAGRAMS_CHAPTER_TITLE: Final[str] = "Architecture Diagrams"
 DIAGRAMS_FILENAME_BASE: Final[str] = "diagrams"
 SOURCE_INDEX_CHAPTER_TITLE: Final[str] = "Code Inventory"
@@ -670,7 +679,7 @@ class CombineTutorial(BaseNode[CombinePrepResult, CombineExecResult]):
             ch_type_val_any: Any = chapter_info.get("chapter_type", "standard")
             ch_type: ChapterTypeLiteral = "standard"
             if ch_type_val_any in get_args(ChapterTypeLiteral):
-                ch_type = ch_type_val_any
+                ch_type = ch_type_val_any  # type: ignore[assignment]
             else:
                 self._log_warning("Unexpected chapter_type '%s'. Defaulting.", ch_type_val_any)
 
@@ -735,7 +744,7 @@ class CombineTutorial(BaseNode[CombinePrepResult, CombineExecResult]):
 
         idx_ctx = IndexContext(
             project_name=str(project_name_any),
-            relationships_data=relationships_data_any if isinstance(relationships_data_any, dict) else {},
+            relationships_data=relationships_data_any if isinstance(relationships_data_any, dict) else {},  # type: ignore[arg-type]
             footer_info=footer_info,
             repo_url=str(repo_url_any) if isinstance(repo_url_any, str) else None,
             local_dir=str(local_dir_any) if isinstance(local_dir_any, str) else None,
@@ -827,13 +836,13 @@ class CombineTutorial(BaseNode[CombinePrepResult, CombineExecResult]):
         data: SharedDataForCombine = {
             "project_name": str(self._get_required_shared(shared, "project_name")),
             "output_base_dir": str(self._get_required_shared(shared, "output_dir")),
-            "relationships_data": self._get_required_shared(shared, "relationships"),
-            "chapter_order": self._get_required_shared(shared, "chapter_order"),
-            "abstractions": self._get_required_shared(shared, "abstractions"),
-            "chapters_content": self._get_required_shared(shared, "chapters"),
-            "llm_config": self._get_required_shared(shared, "llm_config"),
-            "source_config": self._get_required_shared(shared, "source_config"),
-            "config": self._get_required_shared(shared, "config"),
+            "relationships_data": self._get_required_shared(shared, "relationships"),  # type: ignore[assignment]
+            "chapter_order": self._get_required_shared(shared, "chapter_order"),  # type: ignore[assignment]
+            "abstractions": self._get_required_shared(shared, "abstractions"),  # type: ignore[assignment]
+            "chapters_content": self._get_required_shared(shared, "chapters"),  # type: ignore[assignment]
+            "llm_config": self._get_required_shared(shared, "llm_config"),  # type: ignore[assignment]
+            "source_config": self._get_required_shared(shared, "source_config"),  # type: ignore[assignment]
+            "config": self._get_required_shared(shared, "config"),  # type: ignore[assignment]
             "repo_url": shared.get("repo_url"),
             "local_dir": shared.get("local_dir"),
             "relationship_flowchart_markup": shared.get("relationship_flowchart_markup"),
@@ -910,7 +919,7 @@ class CombineTutorial(BaseNode[CombinePrepResult, CombineExecResult]):
             self._log_error("Prep: Critical filesystem error: %s", e_os, exc_info=True)
             shared["final_output_dir"] = None
             raise LlmApiError(f"Combine failed: critical filesystem error: {e_os!s}") from e_os
-        except Exception as e_comb:  # noqa: BLE001
+        except Exception as e_comb:
             self._log_error("Prep: Unexpected critical error: %s", e_comb, exc_info=True)
             shared["final_output_dir"] = None
             raise LlmApiError(f"Combine failed unexpectedly: {e_comb!s}") from e_comb

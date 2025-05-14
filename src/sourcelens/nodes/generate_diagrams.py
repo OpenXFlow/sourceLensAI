@@ -1,4 +1,17 @@
-# src/sourcelens/nodes/generate_diagrams.py
+# Copyright (C) 2025 Jozef Darida (Find me on LinkedIn/Xing)
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 """Node responsible for generating architectural diagrams using an LLM."""
 
@@ -10,10 +23,8 @@ from typing_extensions import TypeAlias
 from sourcelens.prompts import DiagramPrompts, SequenceDiagramContext
 from sourcelens.utils.llm_api import LlmApiError, call_llm
 
-# Import BaseNode and SLSharedState from base_node module
 from .base_node import BaseNode, SLSharedState
 
-# --- Type Aliases specific to this Node ---
 DiagramMarkup: TypeAlias = Optional[str]
 """Type alias for a string containing diagram markup, or None if generation failed."""
 
@@ -21,14 +32,10 @@ SequenceDiagramsListInternal: TypeAlias = list[DiagramMarkup]
 """Type alias for a list of sequence diagram markups."""
 
 DiagramResultDict: TypeAlias = dict[str, Union[DiagramMarkup, SequenceDiagramsListInternal]]
-"""Type alias for the dictionary returned by exec, holding generated diagram markups.
-   Keys like 'relationship_flowchart_markup', 'class_diagram_markup', etc.
-"""
+"""Type alias for the dictionary returned by exec, holding generated diagram markups."""
 
 PrepContext: TypeAlias = dict[str, Any]
-"""Type alias for the dictionary containing preparation results for diagram generation.
-   Includes flags like 'gen_flowchart', 'llm_config', 'project_name', etc.
-"""
+"""Type alias for the dictionary containing preparation results for diagram generation."""
 
 GenerateDiagramsPrepResult: TypeAlias = Optional[PrepContext]
 """Prep result can be a context dictionary or None if skipping diagram generation."""
@@ -36,8 +43,6 @@ GenerateDiagramsPrepResult: TypeAlias = Optional[PrepContext]
 GenerateDiagramsExecResult: TypeAlias = DiagramResultDict
 """Exec result is a dictionary of diagram markups."""
 
-
-# --- Other Type Aliases used within this module ---
 AbstractionItem: TypeAlias = dict[str, Any]
 AbstractionsList: TypeAlias = list[AbstractionItem]
 
@@ -50,14 +55,12 @@ LlmConfigDict: TypeAlias = dict[str, Any]
 CacheConfigDict: TypeAlias = dict[str, Any]
 
 
-# Module-level logger
 module_logger: logging.Logger = logging.getLogger(__name__)
 
-# --- Constants ---
 MAX_FILES_FOR_STRUCTURE_CONTEXT: Final[int] = 50
 SCENARIO_NAME_MAX_WORDS: Final[int] = 5
 DEFAULT_DIAGRAM_FORMAT: Final[str] = "mermaid"
-EXPECTED_FILE_DATA_TUPLE_LENGTH: Final[int] = 2  # Konštanta pre dĺžku tuple
+EXPECTED_FILE_DATA_TUPLE_LENGTH: Final[int] = 2
 
 
 class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagramsExecResult]):
@@ -123,7 +126,6 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
 
         Raises:
             ValueError: If 'config', 'llm_config', or 'cache_config' is missing.
-
         """
         config_any: Any = self._get_required_shared(shared, "config")
         config: dict[str, Any] = config_any if isinstance(config_any, dict) else {}
@@ -132,8 +134,10 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
         diagram_config_raw: Any = output_config.get("diagram_generation", {})
         diagram_config: dict[str, Any] = diagram_config_raw if isinstance(diagram_config_raw, dict) else {}
 
-        llm_config: LlmConfigDict = self._get_required_shared(shared, "llm_config")  # type: ignore[assignment]
-        cache_config: CacheConfigDict = self._get_required_shared(shared, "cache_config")  # type: ignore[assignment]
+        llm_config_val: Any = self._get_required_shared(shared, "llm_config")
+        cache_config_val: Any = self._get_required_shared(shared, "cache_config")
+        llm_config: LlmConfigDict = llm_config_val if isinstance(llm_config_val, dict) else {}
+        cache_config: CacheConfigDict = cache_config_val if isinstance(cache_config_val, dict) else {}
 
         flags_and_configs: dict[str, Any] = {
             "gen_flowchart": bool(diagram_config.get("include_relationship_flowchart", False)),
@@ -162,7 +166,6 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
 
         Raises:
             ValueError: If required shared data is missing for enabled diagrams.
-
         """
         project_name_any: Any = shared.get("project_name", "Unknown Project")
         project_name: str = str(project_name_any)
@@ -185,7 +188,7 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
                 isinstance(t, tuple)
                 and len(t) == EXPECTED_FILE_DATA_TUPLE_LENGTH
                 and isinstance(t[0], str)
-                and isinstance(t[1], str)  # Použitá konštanta
+                and isinstance(t[1], str)
                 for t in files_data_val
             )
             else None
@@ -320,6 +323,8 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
         relationships_any: Any = prep_res_context.get("relationships", {})
         abstractions: AbstractionsList = abstractions_any if isinstance(abstractions_any, list) else []
         relationships: RelationshipsDict = relationships_any if isinstance(relationships_any, dict) else {}
+        llm_cfg: LlmConfigDict = prep_res_context.get("llm_config", {})  # type: ignore[assignment]
+        cache_cfg: CacheConfigDict = prep_res_context.get("cache_config", {})  # type: ignore[assignment]
 
         return self._call_llm_for_diagram(
             prompt=DiagramPrompts.format_relationship_flowchart_prompt(
@@ -328,8 +333,8 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
                 relationships=relationships,
                 diagram_format=str(prep_res_context.get("diagram_format")),
             ),
-            llm_config=prep_res_context["llm_config"],  # type: ignore[typeddict-item]
-            cache_config=prep_res_context["cache_config"],  # type: ignore[typeddict-item]
+            llm_config=llm_cfg,
+            cache_config=cache_cfg,
             diagram_type="relationship_flowchart",
             expected_keywords=["flowchart TD"],
         )
@@ -347,6 +352,8 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
         code_context_str = str(prep_res_context.get("structure_context", "No code context available."))
         if not code_context_str or code_context_str == "No file data available to generate structure context.":
             self._log_warning("No proper code/structure context for class diagram. Diagram might be suboptimal.")
+        llm_cfg: LlmConfigDict = prep_res_context.get("llm_config", {})  # type: ignore[assignment]
+        cache_cfg: CacheConfigDict = prep_res_context.get("cache_config", {})  # type: ignore[assignment]
 
         return self._call_llm_for_diagram(
             prompt=DiagramPrompts.format_class_diagram_prompt(
@@ -354,8 +361,8 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
                 code_context=code_context_str,
                 diagram_format=str(prep_res_context.get("diagram_format")),
             ),
-            llm_config=prep_res_context["llm_config"],  # type: ignore[typeddict-item]
-            cache_config=prep_res_context["cache_config"],  # type: ignore[typeddict-item]
+            llm_config=llm_cfg,
+            cache_config=cache_cfg,
             diagram_type="class",
             expected_keywords=["classDiagram"],
         )
@@ -377,6 +384,8 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
         ):
             self._log_warning("Cannot generate package diagram: structure_context is missing or empty.")
             return None
+        llm_cfg: LlmConfigDict = prep_res_context.get("llm_config", {})  # type: ignore[assignment]
+        cache_cfg: CacheConfigDict = prep_res_context.get("cache_config", {})  # type: ignore[assignment]
 
         return self._call_llm_for_diagram(
             prompt=DiagramPrompts.format_package_diagram_prompt(
@@ -384,8 +393,8 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
                 structure_context=structure_context_str,
                 diagram_format=str(prep_res_context.get("diagram_format")),
             ),
-            llm_config=prep_res_context["llm_config"],  # type: ignore[typeddict-item]
-            cache_config=prep_res_context["cache_config"],  # type: ignore[typeddict-item]
+            llm_config=llm_cfg,
+            cache_config=cache_cfg,
             diagram_type="package",
             expected_keywords=["graph TD"],
         )
@@ -408,6 +417,8 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
         max_diagrams_any: Any = prep_res_context.get("seq_max", 0)
         scenarios: IdentifiedScenarioList = scenarios_any if isinstance(scenarios_any, list) else []
         max_diagrams_to_generate: int = max_diagrams_any if isinstance(max_diagrams_any, int) else 0
+        llm_cfg: LlmConfigDict = prep_res_context.get("llm_config", {})  # type: ignore[assignment]
+        cache_cfg: CacheConfigDict = prep_res_context.get("cache_config", {})  # type: ignore[assignment]
 
         scenarios_to_process = scenarios[:max_diagrams_to_generate]
 
@@ -438,8 +449,8 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
             )
             markup: DiagramMarkup = self._call_llm_for_diagram(
                 prompt=DiagramPrompts.format_sequence_diagram_prompt(sequence_context_obj),
-                llm_config=prep_res_context["llm_config"],  # type: ignore[typeddict-item]
-                cache_config=prep_res_context["cache_config"],  # type: ignore[typeddict-item]
+                llm_config=llm_cfg,
+                cache_config=cache_cfg,
                 diagram_type=f"sequence (scenario: {scenario_name_short})",
                 expected_keywords=["sequenceDiagram"],
             )

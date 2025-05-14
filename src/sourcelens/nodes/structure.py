@@ -1,4 +1,17 @@
-# src/sourcelens/nodes/structure.py
+# Copyright (C) 2025 Jozef Darida (Find me on LinkedIn/Xing)
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 """Node responsible for determining the logical order of tutorial chapters.
 
@@ -8,7 +21,7 @@ relationships to suggest a pedagogical sequence for the tutorial chapters.
 
 import contextlib
 import logging
-from typing import Any, Final, Union  # Pridaný Optional
+from typing import Any, Final, Union
 
 from typing_extensions import TypeAlias
 
@@ -16,36 +29,28 @@ from sourcelens.prompts import ChapterPrompts
 from sourcelens.utils.llm_api import LlmApiError, call_llm
 from sourcelens.utils.validation import ValidationFailure, validate_yaml_list
 
-# Import BaseNode and SLSharedState from base_node module
 from .base_node import BaseNode, SLSharedState
 
-# --- Type Aliases specific to this Node ---
 StructurePrepResult: TypeAlias = dict[str, Any]
-"""Result of the prep phase: context for LLM, including number of abstractions.
-   Keys: 'num_abstractions', 'project_name', 'language', 'llm_config', 'cache_config',
-         'abstraction_listing_str', 'context_str', 'list_lang_note_str'.
-"""
-ChapterOrderList: TypeAlias = list[int]
+"""Result of the prep phase: context for LLM, including number of abstractions."""
+ChapterOrderList: TypeAlias = list[int]  # Modern list
 """Type alias for a list of integer indices representing chapter order."""
 StructureExecResult: TypeAlias = ChapterOrderList
 """Result of the exec phase: the ordered list of chapter indices."""
 
-# --- Other Type Aliases used within this module ---
-AbstractionItem: TypeAlias = dict[str, Any]  # Predpoklad: {'name': str, 'description': str, 'files': list[int]}
-AbstractionsList: TypeAlias = list[AbstractionItem]
+AbstractionItem: TypeAlias = dict[str, Any]
+AbstractionsList: TypeAlias = list[AbstractionItem]  # Modern list
 
-RelationshipDetail: TypeAlias = dict[str, Any]  # Predpoklad: {'from': int, 'to': int, 'label': str}
-RelationshipsDict: TypeAlias = dict[str, Union[str, list[RelationshipDetail]]]
+RelationshipDetail: TypeAlias = dict[str, Any]
+RelationshipsDict: TypeAlias = dict[str, Union[str, list[RelationshipDetail]]]  # Modern list
 
-RawLLMIndexEntry: TypeAlias = Union[str, int, float, None]  # Index entry direct from LLM YAML
+RawLLMIndexEntry: TypeAlias = Union[str, int, float, None]
 
 LlmConfigDictTyped: TypeAlias = dict[str, Any]
 CacheConfigDictTyped: TypeAlias = dict[str, Any]
 
-# Module-level logger
 module_logger: logging.Logger = logging.getLogger(__name__)
 
-# Constants
 MAX_RAW_OUTPUT_SNIPPET_LEN: Final[int] = 500
 
 
@@ -62,20 +67,15 @@ class OrderChapters(BaseNode[StructurePrepResult, StructureExecResult]):
     def _parse_single_index_entry(self, entry: RawLLMIndexEntry, position: int) -> int:
         """Parse a single entry from the LLM's ordered list of indices.
 
-        Attempts to convert various raw entry types (int, str, float) into
-        a valid integer index. Handles simple comments like "index # comment".
-
         Args:
-            entry: The raw entry from the YAML list (e.g., 1, "2", "3 # Abc").
-            position: The zero-based position of the entry in the list, for error reporting.
+            entry: The raw entry from the YAML list.
+            position: The zero-based position of the entry in the list.
 
         Returns:
             The parsed integer index.
 
         Raises:
-            ValidationFailure: If the entry cannot be parsed as a valid integer index
-                               or if it's an unexpected type.
-
+            ValidationFailure: If the entry cannot be parsed.
         """
         try:
             if isinstance(entry, int):
@@ -110,20 +110,15 @@ class OrderChapters(BaseNode[StructurePrepResult, StructureExecResult]):
     def _parse_and_validate_order(self, ordered_indices_raw: list[Any], num_abstractions: int) -> ChapterOrderList:
         """Parse and validate the chapter order list from LLM response.
 
-        Ensures the list contains the correct number of unique indices,
-        all within the valid range [0, num_abstractions - 1].
-
         Args:
-            ordered_indices_raw: The raw list parsed from YAML (expected list of int/str/float).
+            ordered_indices_raw: The raw list parsed from YAML.
             num_abstractions: The expected number of chapters/abstractions.
 
         Returns:
             A validated list of integer indices representing the chapter order.
 
         Raises:
-            ValidationFailure: If list structure, parsing of individual indices,
-                               index range, or uniqueness checks fail.
-
+            ValidationFailure: If validation checks fail.
         """
         if not isinstance(ordered_indices_raw, list):
             raise ValidationFailure(f"Expected YAML list for chapter order, got {type(ordered_indices_raw).__name__}.")
@@ -135,7 +130,6 @@ class OrderChapters(BaseNode[StructurePrepResult, StructureExecResult]):
         ordered_indices: ChapterOrderList = []
         seen_indices: set[int] = set()
         for i, entry_any in enumerate(ordered_indices_raw):
-            # Ensure entry_any is of a type that _parse_single_index_entry expects
             if not isinstance(entry_any, (str, int, float)) and entry_any is not None:
                 raise ValidationFailure(
                     f"Invalid type in raw chapter order at position {i}: {entry_any} (type: {type(entry_any).__name__})"
@@ -161,15 +155,11 @@ class OrderChapters(BaseNode[StructurePrepResult, StructureExecResult]):
 
         Args:
             abstractions: List of identified abstraction dictionaries.
-            relationships: Dictionary of relationship details including summary and list of relations.
+            relationships: Dictionary of relationship details.
             language: The target language for the tutorial.
 
         Returns:
-            A tuple containing:
-                - abstraction_listing_str (str): Formatted list of "Index # Name".
-                - context_str (str): Formatted project summary and relationships.
-                - list_lang_note_str (str): Language hint for the abstraction list.
-
+            A tuple: (abstraction_listing_str, context_str, list_lang_note_str).
         """
         abstraction_info_parts: list[str] = []
         for i, abstr_item in enumerate(abstractions):
@@ -226,14 +216,10 @@ class OrderChapters(BaseNode[StructurePrepResult, StructureExecResult]):
         """Prepare context for the LLM chapter ordering prompt.
 
         Args:
-            shared: The shared state dictionary. Expected to contain 'abstractions',
-                    'relationships', 'project_name', 'llm_config', 'cache_config'.
-                    'language' is optional.
+            shared: The shared state dictionary.
 
         Returns:
-            A `StructurePrepResult` dictionary containing context for the `exec`
-            method. If no abstractions are found, 'num_abstractions' will be 0.
-
+            A `StructurePrepResult` dictionary for the `exec` method.
         """
         self._log_info("Preparing context for chapter ordering...")
         abstractions_any: Any = self._get_required_shared(shared, "abstractions")
@@ -282,11 +268,9 @@ class OrderChapters(BaseNode[StructurePrepResult, StructureExecResult]):
             prep_res: The dictionary returned by the `prep` method.
 
         Returns:
-            A `ChapterOrderList` (list of integer indices). Returns an empty list
-            if no abstractions were provided, or if LLM call or validation fails.
-
+            A `ChapterOrderList`. Returns empty list on failure or if no abstractions.
         """
-        num_abstractions: int = prep_res.get("num_abstractions", 0)
+        num_abstractions: int = prep_res.get("num_abstractions", 0)  # type: ignore[assignment]
         if num_abstractions == 0:
             self._log_warning("Skipping chapter ordering execution: No abstractions were provided.")
             return []
@@ -314,7 +298,7 @@ class OrderChapters(BaseNode[StructurePrepResult, StructureExecResult]):
             return []
 
         try:
-            list_item_schema = {"type": ["integer", "string", "number"]}  # Allow float for int-like numbers
+            list_item_schema = {"type": ["integer", "string", "number"]}
             list_schema_validation = {
                 "type": "array",
                 "items": list_item_schema,
@@ -344,7 +328,6 @@ class OrderChapters(BaseNode[StructurePrepResult, StructureExecResult]):
             shared: The shared state dictionary to update.
             prep_res: Result from the `prep` phase.
             exec_res: List of ordered chapter indices from the `exec` phase.
-
         """
         del prep_res
         shared["chapter_order"] = exec_res

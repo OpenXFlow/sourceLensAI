@@ -1,13 +1,30 @@
-# src/sourcelens/prompts/_common.py
+# Copyright (C) 2025 Jozef Darida (Find me on LinkedIn/Xing)
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+
 
 """Common dataclasses and constants used across different prompt modules."""
 
 from dataclasses import dataclass, field
-from typing import Any, Final, Optional, TypeAlias
+from typing import Any, Final, Optional  # TypeAlias odstránený z typing
+
+from typing_extensions import TypeAlias  # Použitie typing_extensions
 
 # Type Aliases matching those used in nodes for context clarity
+# Používame moderné typy (list namiesto List)
 AbstractionsList: TypeAlias = list[dict[str, Any]]
-RelationshipsDict: TypeAlias = dict[str, Any]
+RelationshipsDict: TypeAlias = dict[str, Any]  # Spresníme neskôr, ak bude treba
 ChapterMetadata: TypeAlias = dict[str, Any]  # keys: num, name, filename, abstraction_index
 
 
@@ -15,7 +32,6 @@ ChapterMetadata: TypeAlias = dict[str, Any]  # keys: num, name, filename, abstra
 CODE_BLOCK_MAX_LINES: Final[int] = 20
 DEFAULT_RELATIONSHIP_LABEL: Final[str] = "related to"
 MAX_FLOWCHART_LABEL_LEN: Final[int] = 30
-# MAX_FILES_FOR_STRUCTURE_CONTEXT is used in generate_diagrams.py, keep it there or move here if widely used
 
 
 # --- Dataclasses for Prompt Context ---
@@ -69,6 +85,7 @@ class SequenceDiagramContext:
     scenario_name: str
     scenario_description: str
     diagram_format: str = "mermaid"
+    # repr=False pre veľké štruktúry, aby neboli v logoch priamo z dataclass repr
     abstractions: AbstractionsList = field(default_factory=list, repr=False)
     relationships: RelationshipsDict = field(default_factory=dict, repr=False)
 
