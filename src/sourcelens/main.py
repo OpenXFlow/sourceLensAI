@@ -13,7 +13,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-
 """Command-line interface entry point for the sourceLens application.
 
 Handles argument parsing, configuration loading, logging setup,
@@ -40,7 +39,6 @@ except ImportError:
 from sourcelens.config import ConfigError, load_config
 from sourcelens.flow import create_tutorial_flow
 
-# Import Flow from the integrated flow engine for type hinting
 if TYPE_CHECKING:
     from sourcelens.core.flow_engine_sync import Flow as SourceLensFlow
 
@@ -49,45 +47,54 @@ SharedStateDict: TypeAlias = dict[str, Any]
 ConfigDict: TypeAlias = dict[str, Any]
 
 DEFAULT_LOG_DIR_MAIN: str = "logs"
+DEFAULT_LOG_FORMAT: str = "%(asctime)s - %(name)s:%(funcName)s - %(levelname)s - %(message)s"
 
 
 def setup_logging(log_config: dict[str, Any]) -> None:
-    """Configure logging based on the loaded configuration."""
+    """Configure logging based on the loaded configuration.
+
+    Args:
+        log_config: A dictionary containing logging configuration,
+                    typically from the main application config.
+    """
     log_dir_str: str = str(log_config.get("log_dir", DEFAULT_LOG_DIR_MAIN))
     log_level_str: str = str(log_config.get("log_level", "INFO")).upper()
-    log_level: int = getattr(logging, log_level_str, logging.INFO)
+    log_level: int = getattr(logging, log_level_str, logging.INFO)  # Default to INFO if invalid
     log_dir: Path = Path(log_dir_str)
     log_file: Optional[Path] = None
-    default_log_format: str = "%(asctime)s - %(name)s:%(funcName)s - %(levelname)s - %(message)s"
 
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
         log_file = log_dir / "sourcelens.log"
         file_handler = logging.FileHandler(log_file, encoding="utf-8")
         stream_handler = logging.StreamHandler(sys.stdout)
-        formatter = logging.Formatter(default_log_format)
+        formatter = logging.Formatter(DEFAULT_LOG_FORMAT)
         file_handler.setFormatter(formatter)
         stream_handler.setFormatter(formatter)
         logging.basicConfig(
             level=log_level,
-            format=default_log_format,
+            format=DEFAULT_LOG_FORMAT,
             handlers=[file_handler, stream_handler],
-            force=True,
+            force=True,  # Override any existing basicConfig
         )
-        logging.getLogger().info("Logging initialized. Log file: %s", log_file)
+        logging.getLogger().info("Logging initialized. Log file: %s", log_file.resolve() if log_file else "N/A")
     except OSError as e:
         print(f"ERROR: Failed create log dir/file '{log_file or log_dir}': {e}", file=sys.stderr)
         logging.basicConfig(
             level=log_level,
-            format=default_log_format,
-            handlers=[logging.StreamHandler(sys.stdout)],
+            format=DEFAULT_LOG_FORMAT,
+            handlers=[logging.StreamHandler(sys.stdout)],  # Fallback to stdout
             force=True,
         )
-        logging.getLogger().error("File logging disabled due to setup error.")
+        logging.getLogger().error("File logging disabled due to setup error. Logging to stdout only.")
 
 
 def parse_arguments() -> argparse.Namespace:
-    """Parse command-line arguments for the sourceLens tool."""
+    """Parse command-line arguments for the sourceLens tool.
+
+    Returns:
+        An argparse.Namespace object containing the parsed command-line arguments.
+    """
     parser = argparse.ArgumentParser(
         description="sourceLens: Generate tutorials for codebases using AI.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -130,7 +137,15 @@ def parse_arguments() -> argparse.Namespace:
 
 
 def _prepare_initial_state(args: argparse.Namespace, config: ConfigDict) -> SharedStateDict:
-    """Prepare the initial shared state dictionary based on args and config."""
+    """Prepare the initial shared state dictionary based on args and config.
+
+    Args:
+        args: Parsed command-line arguments.
+        config: Loaded application configuration dictionary.
+
+    Returns:
+        The initial shared state dictionary for the processing flow.
+    """
     source_cfg_any: Any = config.get("source", {})
     output_cfg_any: Any = config.get("output", {})
     project_cfg_any: Any = config.get("project", {})
@@ -145,7 +160,11 @@ def _prepare_initial_state(args: argparse.Namespace, config: ConfigDict) -> Shar
     llm_cfg: dict[str, Any] = llm_cfg_any if isinstance(llm_cfg_any, dict) else {}
     cache_cfg: dict[str, Any] = cache_cfg_any if isinstance(cache_cfg_any, dict) else {}
 
-    project_name: Optional[str] = args.name or project_cfg.get("default_name")
+    project_name_arg: Optional[str] = args.name if isinstance(args.name, str) else None
+    project_name_cfg: Optional[str] = (
+        project_cfg.get("default_name") if isinstance(project_cfg.get("default_name"), str) else None
+    )
+    project_name: Optional[str] = project_name_arg or project_name_cfg
 
     include_patterns_raw_any: Any = args.include or source_cfg.get("default_include_patterns", [])
     include_patterns_raw: list[Any] = include_patterns_raw_any if isinstance(include_patterns_raw_any, list) else []
@@ -163,14 +182,16 @@ def _prepare_initial_state(args: argparse.Namespace, config: ConfigDict) -> Shar
     )
 
     output_dir_cfg_any: Any = output_cfg.get("base_dir", "output")
-    output_dir: str = str(args.output or output_dir_cfg_any)
+    output_dir_arg_any: Any = args.output
+    output_dir_str: str = str(output_dir_arg_any or output_dir_cfg_any)
 
     language_cfg_any: Any = output_cfg.get("language", "english")
-    language: str = str(args.language or language_cfg_any)
+    language_arg_any: Any = args.language
+    language_str: str = str(language_arg_any or language_cfg_any)
 
     local_dir_display_root = ""
-    if args.dir:
-        local_dir_path = Path(str(args.dir))
+    if args.dir and isinstance(args.dir, str):
+        local_dir_path = Path(args.dir)
         local_dir_display_root = str(local_dir_path.as_posix())
         if local_dir_display_root == ".":
             local_dir_display_root = "./"
@@ -178,17 +199,17 @@ def _prepare_initial_state(args: argparse.Namespace, config: ConfigDict) -> Shar
             local_dir_display_root += "/"
 
     initial_state: SharedStateDict = {
-        "repo_url": args.repo,
-        "local_dir": args.dir,
+        "repo_url": args.repo if isinstance(args.repo, str) else None,
+        "local_dir": args.dir if isinstance(args.dir, str) else None,
         "local_dir_display_root": local_dir_display_root,
         "project_name": project_name,
         "config": config,
         "llm_config": llm_cfg,
         "cache_config": cache_cfg,
         "source_config": source_cfg,
-        "github_token": github_cfg.get("token"),
-        "output_dir": output_dir,
-        "language": language,
+        "github_token": str(github_cfg.get("token")) if github_cfg.get("token") else None,
+        "output_dir": output_dir_str,
+        "language": language_str,
         "include_patterns": include_patterns,
         "exclude_patterns": exclude_patterns,
         "max_file_size": max_size_arg,
@@ -211,7 +232,17 @@ def _prepare_initial_state(args: argparse.Namespace, config: ConfigDict) -> Shar
 
 
 def _initialize_app(args: argparse.Namespace) -> ConfigDict:
-    """Load configuration and set up logging."""
+    """Load configuration and set up logging.
+
+    Args:
+        args: Parsed command-line arguments.
+
+    Returns:
+        The loaded and validated application configuration.
+
+    Raises:
+        SystemExit: If configuration loading or validation fails.
+    """
     logger_init = logging.getLogger(__name__)
     config_data: ConfigDict = {}
     validation_exceptions: tuple[type[Exception], ...] = (ConfigError,)
@@ -224,12 +255,12 @@ def _initialize_app(args: argparse.Namespace) -> ConfigDict:
         validation_exceptions += (jsonschema.exceptions.ValidationError,)  # type: ignore[attr-defined]
 
     try:
-        config_path_str = str(args.config)
+        config_path_str: str = str(args.config)
         config_data = load_config(config_path_str)
-        logging_config: dict[str, Any] = (
-            config_data.get("logging", {}) if isinstance(config_data.get("logging"), dict) else {}
-        )
+        logging_config_any: Any = config_data.get("logging", {})
+        logging_config: dict[str, Any] = logging_config_any if isinstance(logging_config_any, dict) else {}
         setup_logging(logging_config)
+
         logger_init.info("Config loaded successfully from %s", config_path_str)
         logger_init.debug("Effective LLM Config: %s", config_data.get("llm"))
         logger_init.debug("Effective Source Config: %s", config_data.get("source"))
@@ -237,35 +268,40 @@ def _initialize_app(args: argparse.Namespace) -> ConfigDict:
         return config_data
     except FileNotFoundError as e:
         logging.critical("Configuration file not found: %s", e)
-        print(f"\n❌ ERROR: Configuration file not found: {e}", file=sys.stderr)
+        print(f"\n❌ ERROR: Configuration file not found: {e!s}", file=sys.stderr)
         sys.exit(1)
     except validation_exceptions as e:  # type: ignore[misc]
         logging.critical("Configuration loading/validation failed: %s", e, exc_info=True)
-        print(f"\n❌ ERROR: Configuration loading/validation failed: {e}", file=sys.stderr)
+        print(f"\n❌ ERROR: Configuration loading/validation failed: {e!s}", file=sys.stderr)
         sys.exit(1)
     except ImportError as e:
         logging.critical("Missing required library for configuration: %s", e)
         print(
-            f"\n❌ ERROR: Missing required library for configuration: {e}. Please install dependencies.",
+            f"\n❌ ERROR: Missing required library for configuration: {e!s}. Please install dependencies.",
             file=sys.stderr,
         )
         sys.exit(1)
     except OSError as e:
         logging.critical("File system error during config loading: %s", e, exc_info=True)
-        print(f"\n❌ ERROR: File system error during config loading: {e}", file=sys.stderr)
+        print(f"\n❌ ERROR: File system error during config loading: {e!s}", file=sys.stderr)
         sys.exit(1)
-    except (RuntimeError, ValueError, KeyError) as e:
+    except (RuntimeError, ValueError, KeyError) as e:  # Specific errors from load_config or its internals
         logging.critical("Unexpected error during config processing: %s", e, exc_info=True)
-        print(f"\n❌ ERROR: Unexpected error during config processing: {e}", file=sys.stderr)
+        print(f"\n❌ ERROR: Unexpected error during config processing: {e!s}", file=sys.stderr)
         sys.exit(1)
-    except Exception as e:  # noqa: BLE001
-        logging.critical("An unknown critical error occurred during setup: %s", e, exc_info=True)
-        print(f"\n❌ CRITICAL ERROR during setup: {e}", file=sys.stderr)
-        sys.exit(1)
+    # No BLE001 here, as specific common exceptions are caught. If others occur, they are truly unexpected.
+    # and should terminate with a stack trace for debugging.
 
 
 def _run_flow(initial_state: SharedStateDict) -> None:
-    """Create and run the tutorial generation flow."""
+    """Create and run the tutorial generation flow.
+
+    Args:
+        initial_state: The initial shared state for the flow.
+
+    Raises:
+        SystemExit: If flow execution fails critically.
+    """
     logger_run_flow = logging.getLogger(__name__)
     source_desc_any: Any = initial_state.get("repo_url") or initial_state.get("local_dir")
     source_desc: str = str(source_desc_any) if source_desc_any else "Unknown source"
@@ -298,6 +334,15 @@ def _run_flow(initial_state: SharedStateDict) -> None:
         llm_config_param: dict[str, Any] = llm_config_param_any
         cache_config_param: dict[str, Any] = cache_config_param_any
 
+        # Ensure SourceLensFlow is correctly typed or handled if None (from TYPE_CHECKING else block)
+        if TYPE_CHECKING:
+            from sourcelens.core.flow_engine_sync import Flow as RuntimeSourceLensFlow
+        else:
+            from sourcelens.core.flow_engine_sync import Flow as RuntimeSourceLensFlow
+
+        if RuntimeSourceLensFlow is None:  # Should not happen if import is correct
+            raise RuntimeError("SourceLensFlow type could not be resolved at runtime.")
+
         tutorial_flow: SourceLensFlow = create_tutorial_flow(llm_config_param, cache_config_param)
         tutorial_flow.run(initial_state)
 
@@ -315,20 +360,17 @@ def _run_flow(initial_state: SharedStateDict) -> None:
 
     except ImportError as e:
         logging.critical("Failed to import a required module during flow execution: %s", e)
-        print(f"\n❌ ERROR: Module import missing or failed during flow: {e}", file=sys.stderr)
+        print(f"\n❌ ERROR: Module import missing or failed during flow: {e!s}", file=sys.stderr)
         sys.exit(1)
-    except Exception as e:
-        logging.exception("ERROR: Tutorial generation failed during flow execution.")
-        print(f"\n❌ ERROR: Tutorial generation failed: {e}", file=sys.stderr)
+    except (TypeError, RuntimeError, ConfigError, ValueError, KeyError) as e_flow:  # More specific errors
+        logging.exception("ERROR: Tutorial generation failed during flow execution: %s", e_flow)
+        print(f"\n❌ ERROR: Tutorial generation failed: {e_flow!s}", file=sys.stderr)
         sys.exit(1)
+    # No broad Exception to avoid BLE001 unless truly necessary for unknown third-party errors.
 
 
 def main() -> None:
-    """Run the main entry point for the sourceLens application.
-
-    Parses arguments, initializes the application (config, logging),
-    prepares the initial state, and runs the processing flow.
-    """
+    """Run the main entry point for the sourceLens application."""
     args: argparse.Namespace = parse_arguments()
     config_data_main: ConfigDict = _initialize_app(args)
     shared_initial_state: SharedStateDict = _prepare_initial_state(args, config_data_main)

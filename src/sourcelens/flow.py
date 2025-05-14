@@ -13,7 +13,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-
 """Defines the main processing pipeline (Flow) for SourceLens.
 
 Instantiates and connects the various processing nodes using the internal
@@ -27,25 +26,25 @@ from typing import TYPE_CHECKING, Any
 
 from typing_extensions import TypeAlias
 
-# Import Flow class from the integrated flow engine
 if TYPE_CHECKING:
     from sourcelens.core.flow_engine_sync import Flow as SourceLensFlow
 else:
-    SourceLensFlow: Any = None
+    SourceLensFlow: Any = None  # Fallback for runtime if type checking is off
 
+# Import node classes using the updated nodes package __init__
+from sourcelens.nodes import (
+    AnalyzeRelationships,
+    CombineTutorial,
+    FetchCode,
+    GenerateDiagramsNode,
+    GenerateSourceIndexNode,
+    IdentifyAbstractions,
+    IdentifyScenariosNode,
+    OrderChapters,
+    WriteChapters,
+)
 
-# Use absolute imports for nodes within the sourcelens package
-from sourcelens.nodes.analyze import AnalyzeRelationships, IdentifyAbstractions
-from sourcelens.nodes.combine import CombineTutorial
-from sourcelens.nodes.fetch import FetchCode
-from sourcelens.nodes.generate_diagrams import GenerateDiagramsNode
-from sourcelens.nodes.generate_source_index import GenerateSourceIndexNode
-from sourcelens.nodes.identify_scenarios import IdentifyScenariosNode
-from sourcelens.nodes.structure import OrderChapters
-from sourcelens.nodes.write import WriteChapters
-
-# Type alias for Configuration Dictionary
-ConfigDict: TypeAlias = dict[str, Any]  # Generic config dict
+ConfigDict: TypeAlias = dict[str, Any]
 LlmConfigDict: TypeAlias = dict[str, Any]
 CacheConfigDict: TypeAlias = dict[str, Any]
 
@@ -55,25 +54,18 @@ logger: logging.Logger = logging.getLogger(__name__)
 def create_tutorial_flow(llm_config: LlmConfigDict, cache_config: CacheConfigDict) -> "SourceLensFlow":
     """Create and configure the SourceLens tutorial generation flow.
 
-    Instantiates all processing nodes (fetching, analyzing, ordering, scenario
-    identification, diagram generation, writing chapters, source index generation,
-    combining output), passing necessary configurations. Defines the execution
-    sequence of these nodes using the internal SourceLens flow engine.
+    Instantiates all processing nodes, passing necessary configurations,
+    and defines their execution sequence using the SourceLens flow engine.
 
     Args:
-        llm_config: Processed configuration dictionary for the active LLM provider.
-        cache_config: Configuration dictionary related to LLM response caching.
+        llm_config: Processed configuration for the active LLM provider.
+        cache_config: Configuration related to LLM response caching.
 
     Returns:
         An instance of the configured `SourceLensFlow` ready for execution.
-
-    Raises:
-        ImportError: If a required node cannot be imported.
-
     """
     logger.info("Creating tutorial generation flow...")
 
-    # --- Node Instantiation ---
     max_retries_llm_any: Any = llm_config.get("max_retries", 3)
     retry_wait_llm_any: Any = llm_config.get("retry_wait_seconds", 10)
 
@@ -82,6 +74,7 @@ def create_tutorial_flow(llm_config: LlmConfigDict, cache_config: CacheConfigDic
 
     logger.info("Initializing LLM-based nodes with max_retries=%d, retry_wait=%d", max_retries_llm, retry_wait_llm)
 
+    # Instantiate nodes
     fetch_code = FetchCode()
     identify_abstractions = IdentifyAbstractions(max_retries=max_retries_llm, wait=retry_wait_llm)
     analyze_relationships = AnalyzeRelationships(max_retries=max_retries_llm, wait=retry_wait_llm)
@@ -89,11 +82,10 @@ def create_tutorial_flow(llm_config: LlmConfigDict, cache_config: CacheConfigDic
     identify_scenarios = IdentifyScenariosNode(max_retries=max_retries_llm, wait=retry_wait_llm)
     generate_diagrams = GenerateDiagramsNode(max_retries=max_retries_llm, wait=retry_wait_llm)
     write_chapters = WriteChapters(max_retries=max_retries_llm, wait=retry_wait_llm)
-    generate_source_index = GenerateSourceIndexNode(max_retries=1, wait=0)
-    logger.info("Initialized GenerateSourceIndexNode with max_retries=1, wait=0.")
+    generate_source_index = GenerateSourceIndexNode(max_retries=1, wait=0)  # Does not use LLM for content
     combine_tutorial = CombineTutorial()
 
-    # --- Flow Definition ---
+    # Define flow sequence
     (
         fetch_code
         >> identify_abstractions
@@ -106,24 +98,21 @@ def create_tutorial_flow(llm_config: LlmConfigDict, cache_config: CacheConfigDic
         >> combine_tutorial
     )
     logger.info(
-        "Flow sequence defined: Fetch -> IdentifyAbs -> AnalyzeRel -> OrderChap -> "
-        "IdentifyScen -> GenDiag -> WriteChap -> GenSourceIndex -> Combine"
+        "Flow sequence defined: Fetch -> IdentifyAbstractions -> AnalyzeRelationships -> "
+        "OrderChapters -> IdentifyScenariosNode -> GenerateDiagramsNode -> "
+        "WriteChapters -> GenerateSourceIndexNode -> CombineTutorial"
     )
 
-    # --- Flow Creation ---
+    # Create flow instance
+    # This import is done this way to assist type checkers while ensuring runtime functionality
     if TYPE_CHECKING:
-        # This path is for MyPy and other type checkers
         from sourcelens.core.flow_engine_sync import Flow as ActualSourceLensFlow
     else:
-        # This path is for runtime
-        from sourcelens.core.flow_engine_sync import Flow as ActualSourceLensFlow
+        from sourcelens.core.flow_engine_sync import Flow as ActualSourceLensFlow  # Runtime import
 
-    flow_instance: SourceLensFlow = ActualSourceLensFlow(start=fetch_code)  # type: ignore[assignment, misc]
-    # Ignorujeme `assignment` pre prípad, že `ActualSourceLensFlow` by bolo `Any` kvôli problémom s `py.typed`.
-    # Ignorujeme `misc` pre prípad, že by `start` argument nebol presne `BaseNode`, ale kompatibilný podtyp.
+    flow_instance: "SourceLensFlow" = ActualSourceLensFlow(start=fetch_code)  # type: ignore[assignment, misc]
 
     logger.info("Flow instance created successfully using SourceLensFlow.")
-
     return flow_instance
 
 

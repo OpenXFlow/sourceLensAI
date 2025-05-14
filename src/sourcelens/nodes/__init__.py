@@ -13,7 +13,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-
 """Nodes Package for SourceLens Processing Flow.
 
 This package contains the modular processing steps (Nodes) used in the
@@ -22,21 +21,22 @@ a distinct stage of the process, such as fetching code, analyzing structure,
 identifying scenarios, generating content, or combining outputs.
 
 The nodes are designed to be connected in a sequence using a flow execution
-framework (like PocketFlow) to form the complete pipeline.
+framework to form the complete pipeline.
 """
 
-# Import node classes to make them easily accessible via `from sourcelens.nodes import ...`
-from .analyze import AnalyzeRelationships, IdentifyAbstractions
-from .base_node import BaseBatchNode, BaseNode  # Base classes for node implementation
-from .combine import CombineTutorial
-from .fetch import FetchCode
-from .generate_diagrams import GenerateDiagramsNode
+# Import base classes for node implementation
+from .base_node import BaseBatchNode, BaseNode
 
-# --- Import the new node ---
-from .generate_source_index import GenerateSourceIndexNode  # Added import
-from .identify_scenarios import IdentifyScenariosNode
-from .structure import OrderChapters
-from .write import WriteChapters
+# Import node classes from their new locations
+from .n01_fetch_code import FetchCode
+from .n02_identify_abstractions import IdentifyAbstractions
+from .n03_analyze_relationships import AnalyzeRelationships
+from .n04_order_chapters import OrderChapters
+from .n05_identify_scenarios import IdentifyScenariosNode
+from .n06_generate_diagrams import GenerateDiagramsNode
+from .n07_write_chapters import WriteChapters
+from .n08_generate_source_index import GenerateSourceIndexNode
+from .n09_combine_tutorial import CombineTutorial
 
 # Define __all__ for explicit public interface of the package
 # Controls what `from sourcelens.nodes import *` imports
@@ -49,7 +49,7 @@ __all__ = [
     "OrderChapters",
     "IdentifyScenariosNode",
     "GenerateDiagramsNode",
-    "GenerateSourceIndexNode",  # Added new node
+    "GenerateSourceIndexNode",
     "WriteChapters",
     "CombineTutorial",
 ]

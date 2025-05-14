@@ -12,7 +12,6 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
-# src/sourcelens/config.py
 
 """Load, validate, and process configuration for the SourceLens application.
 
@@ -35,12 +34,12 @@ from typing_extensions import TypeAlias
 # Safe imports for optional dependencies
 try:
     import jsonschema
-    from jsonschema import validate
+    from jsonschema import validate as jsonschema_validate_func
 
     JSONSCHEMA_AVAILABLE = True
 except ImportError:
     jsonschema = None  # type: ignore[assignment]
-    validate = None  # type: ignore[assignment]
+    jsonschema_validate_func = None  # type: ignore[assignment]
     JSONSCHEMA_AVAILABLE = False
 
 if TYPE_CHECKING:
@@ -71,7 +70,6 @@ ENV_VAR_ANTHROPIC_KEY: Final[str] = "ANTHROPIC_API_KEY"
 ENV_VAR_OPENAI_KEY: Final[str] = "OPENAI_API_KEY"
 ENV_VAR_PERPLEXITY_KEY: Final[str] = "PERPLEXITY_API_KEY"
 
-
 # --- JSON Schema Definitions ---
 LLM_PROVIDER_SCHEMA: ConfigDict = {
     "type": "object",
@@ -88,7 +86,6 @@ LLM_PROVIDER_SCHEMA: ConfigDict = {
     "required": ["is_active", "is_local_llm", "provider", "model"],
     "additionalProperties": False,
 }
-
 LANGUAGE_PROFILE_SCHEMA: ConfigDict = {
     "type": "object",
     "properties": {
@@ -107,7 +104,6 @@ LANGUAGE_PROFILE_SCHEMA: ConfigDict = {
     "required": ["is_active", "language", "source_index_parser"],
     "additionalProperties": False,
 }
-
 SEQUENCE_DIAGRAM_SCHEMA: ConfigDict = {
     "type": "object",
     "properties": {
@@ -117,7 +113,6 @@ SEQUENCE_DIAGRAM_SCHEMA: ConfigDict = {
     "additionalProperties": False,
     "default": {"enabled": False, "max_diagrams": 5},
 }
-
 DIAGRAM_GENERATION_SCHEMA: ConfigDict = {
     "type": "object",
     "properties": {
@@ -136,7 +131,6 @@ DIAGRAM_GENERATION_SCHEMA: ConfigDict = {
         "include_sequence_diagrams": SEQUENCE_DIAGRAM_SCHEMA["default"],
     },
 }
-
 OUTPUT_SCHEMA: ConfigDict = {
     "type": "object",
     "properties": {
@@ -157,8 +151,6 @@ OUTPUT_SCHEMA: ConfigDict = {
         "include_source_index": False,
     },
 }
-
-
 CONFIG_SCHEMA: ConfigDict = {
     "type": "object",
     "properties": {
@@ -222,522 +214,377 @@ CONFIG_SCHEMA: ConfigDict = {
 }
 
 
-# --- Custom Exception ---
 class ConfigError(Exception):
     """Custom exception for configuration loading or validation errors."""
 
 
-# --- Logger Setup ---
 logger: logging.Logger = logging.getLogger(__name__)
 
 
-# --- Helper Functions ---
-def _ensure_jsonschema_available() -> None:
-    """Raise ImportError if jsonschema is not available.
+class ConfigLoader:
+    """Handles loading, validation, and processing of application configuration."""
 
-    Raises:
-        ImportError: If the jsonschema library is not installed and available.
+    _config_data: ConfigDict
+    _config_path: Path
 
-    """
-    if not JSONSCHEMA_AVAILABLE:
-        raise ImportError("The 'jsonschema' library is required for config validation. Please install it.")
+    def __init__(self, config_path_str: str) -> None:
+        """Initialize the ConfigLoader.
 
+        Args:
+            config_path_str: Path to the JSON configuration file.
+        """
+        self._config_path = Path(config_path_str).resolve()
+        self._config_data = {}
 
-def _read_config_file(config_path: Path) -> ConfigDict:
-    """Read and parse the JSON configuration file.
+    def _ensure_jsonschema_available(self) -> None:
+        """Raise ImportError if jsonschema is not available."""
+        if not JSONSCHEMA_AVAILABLE:
+            raise ImportError("The 'jsonschema' library is required for config validation. Please install it.")
 
-    Args:
-        config_path: Path object to the configuration file.
+    def _read_config_file(self) -> None:
+        """Read and parse the JSON configuration file into self._config_data."""
+        if not self._config_path.is_file():
+            raise FileNotFoundError(f"Configuration file not found: '{self._config_path}'")
+        try:
+            with self._config_path.open(encoding="utf-8") as f:
+                self._config_data = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ConfigError(f"Invalid JSON syntax in '{self._config_path}': {e!s}") from e
+        except OSError as e:
+            raise ConfigError(f"Could not read configuration file '{self._config_path}': {e!s}") from e
 
-    Returns:
-        The parsed configuration data as a dictionary.
+    def _validate_schema(self) -> None:
+        """Validate the loaded configuration data against the main JSON schema."""
+        self._ensure_jsonschema_available()
+        if jsonschema_validate_func is None:
+            raise RuntimeError("jsonschema 'validate' function is not available after availability check.")
+        if (
+            jsonschema is None
+            or not hasattr(jsonschema, "exceptions")
+            or not hasattr(jsonschema.exceptions, "ValidationError")
+        ):
+            raise RuntimeError("'jsonschema.exceptions.ValidationError' is not available for exception handling.")
 
-    Raises:
-        FileNotFoundError: If the config file does not exist.
-        ConfigError: If the file cannot be read or parsed as JSON.
-
-    """
-    if not config_path.is_file():
-        raise FileNotFoundError(f"Configuration file not found: '{config_path.resolve()}'")
-    try:
-        with config_path.open(encoding="utf-8") as f:
-            config_data: ConfigDict = json.load(f)
-            return config_data
-    except json.JSONDecodeError as e:
-        raise ConfigError(f"Invalid JSON syntax in '{config_path.resolve()}': {e}") from e
-    except OSError as e:
-        raise ConfigError(f"Could not read configuration file '{config_path.resolve()}': {e}") from e
-
-
-def _validate_schema(config_data: ConfigDict, config_path: Path) -> None:
-    """Validate the loaded configuration data against the main JSON schema.
-
-    Args:
-        config_data: The configuration data loaded from the file.
-        config_path: Path object to the configuration file (for error reporting).
-
-    Raises:
-        RuntimeError: If jsonschema components are unexpectedly unavailable.
-        ConfigError: If schema validation fails or an unexpected error occurs.
-        ImportError: If jsonschema library is not installed.
-
-    """
-    _ensure_jsonschema_available()
-    if validate is None:
-        raise RuntimeError("jsonschema 'validate' function is not available after availability check.")
-    if (
-        jsonschema is None
-        or not hasattr(jsonschema, "exceptions")
-        or not hasattr(jsonschema.exceptions, "ValidationError")
-    ):
-        raise RuntimeError("'jsonschema.exceptions.ValidationError' is not available for exception handling.")
-
-    try:
-        validation_error_type: type[ValidationError] = jsonschema.exceptions.ValidationError  # type: ignore[attr-defined]
-        validate(instance=config_data, schema=CONFIG_SCHEMA)
-        logger.debug("Configuration schema validation passed for %s.", config_path.name)
-    except validation_error_type as e_val_err:  # type: ignore[misc]
-        schema_path_str = " -> ".join(map(str, e_val_err.path)) if e_val_err.path else "root"
-        error_message = f"Configuration error in '{config_path.name}' at '{schema_path_str}': {e_val_err.message}"
-        logger.debug(
-            "Schema validation failed. Instance: %s. Path: %s. Schema: %s",
-            e_val_err.instance,
-            schema_path_str,
-            e_val_err.schema,
-        )
-        raise ConfigError(error_message) from e_val_err
-    except Exception as e:
-        raise ConfigError(f"Unexpected error during schema validation: {e}") from e
-
-
-def _resolve_api_key(provider_name: Optional[str], current_key: Optional[str]) -> tuple[Optional[str], Optional[str]]:
-    """Resolve API key from config value or standard environment variables.
-
-    Args:
-        provider_name: The name of the LLM provider (e.g., "gemini", "openai").
-        current_key: The API key value currently set in the configuration.
-
-    Returns:
-        A tuple containing:
-            - The resolved API key (str or None).
-            - The name of the environment variable used (str or None).
-
-    """
-    if current_key is not None:
-        return current_key, None
-
-    env_var_map: dict[str, str] = {
-        "gemini": ENV_VAR_GEMINI_KEY,
-        "vertexai": ENV_VAR_VERTEX_CREDS,
-        "anthropic": ENV_VAR_ANTHROPIC_KEY,
-        "openai": ENV_VAR_OPENAI_KEY,
-        "perplexity": ENV_VAR_PERPLEXITY_KEY,
-    }
-    env_key_name = env_var_map.get(str(provider_name)) if provider_name else None
-
-    if env_key_name:
-        api_key_from_env = os.environ.get(env_key_name)
-        if api_key_from_env:
-            logger.info(
-                "Loaded LLM API key for provider '%s' from environment variable '%s'.",
-                provider_name,
-                env_key_name,
+        try:
+            validation_error_type: type[ValidationError] = jsonschema.exceptions.ValidationError  # type: ignore[attr-defined]
+            jsonschema_validate_func(instance=self._config_data, schema=CONFIG_SCHEMA)
+            logger.debug("Configuration schema validation passed for %s.", self._config_path.name)
+        except validation_error_type as e_val_err:  # type: ignore[misc]
+            path_str = " -> ".join(map(str, e_val_err.path)) if e_val_err.path else "root"
+            err_msg = f"Config error in '{self._config_path.name}' at '{path_str}': {e_val_err.message}"
+            logger.debug(
+                "Schema validation failed. Instance: %s. Path: %s. Schema: %s",
+                e_val_err.instance,
+                path_str,
+                e_val_err.schema,
             )
+            raise ConfigError(err_msg) from e_val_err
+        except Exception as e:
+            raise ConfigError(f"Unexpected error during schema validation: {e!s}") from e
+
+    def _resolve_api_key(
+        self, provider_name: Optional[str], current_key: Optional[str]
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Resolve API key from config or environment variables."""
+        if current_key is not None:
+            return current_key, None
+        env_var_map: dict[str, str] = {
+            "gemini": ENV_VAR_GEMINI_KEY,
+            "vertexai": ENV_VAR_VERTEX_CREDS,
+            "anthropic": ENV_VAR_ANTHROPIC_KEY,
+            "openai": ENV_VAR_OPENAI_KEY,
+            "perplexity": ENV_VAR_PERPLEXITY_KEY,
+        }
+        env_key_name = env_var_map.get(str(provider_name)) if provider_name else None
+        if env_key_name and (api_key_from_env := os.environ.get(env_key_name)):
+            logger.info("Loaded LLM API key for provider '%s' from env var '%s'.", provider_name, env_key_name)
             return api_key_from_env, env_key_name
-        logger.debug("Environment variable '%s' not set for provider '%s'.", env_key_name, provider_name)
-    return None, env_key_name
+        if env_key_name:
+            logger.debug("Environment variable '%s' not set for provider '%s'.", env_key_name, provider_name)
+        return None, env_key_name
 
+    def _validate_local_llm_config(self, provider_cfg: ProviderConfigDict) -> None:
+        """Validate config for local OpenAI-compatible LLMs."""
+        provider: str = str(provider_cfg.get("provider", "local_llm"))
+        api_base_url: Any = provider_cfg.get("api_base_url")
+        if not api_base_url or not isinstance(api_base_url, str):
+            raise ConfigError(f"For local provider '{provider}': Missing or invalid 'api_base_url'.")
+        if provider_cfg.get("api_key"):
+            logger.info("API key provided for local provider '%s'. Ensure this is supported.", provider)
 
-def _validate_local_llm_config(config: ProviderConfigDict) -> None:
-    """Validate configuration specific to local OpenAI-compatible LLM providers.
+    def _validate_vertexai_config(self, provider_cfg: ProviderConfigDict, checked_env_var: Optional[str]) -> None:
+        """Validate config for Vertex AI."""
+        provider: str = str(provider_cfg.get("provider", "vertexai"))
+        api_key_or_creds_any: Any = provider_cfg.get("api_key")
+        api_key_or_creds: Optional[str] = str(api_key_or_creds_any) if api_key_or_creds_any else None
 
-    Args:
-        config: The LLM provider's configuration dictionary.
+        env_var_msg: str = ""  # Initialize env_var_msg
+        if not api_key_or_creds:
+            env_var_msg = f" or environment variable '{checked_env_var}'" if checked_env_var else ""
+            logger.warning("Vertex AI: No API key/creds path in config%s. Using ADC.", env_var_msg)
+        # env_var_msg is now defined regardless of the if condition.
 
-    Raises:
-        ConfigError: If 'api_base_url' is missing or invalid.
+        if not provider_cfg.get("vertex_project"):
+            if proj_env := os.environ.get(ENV_VAR_GOOGLE_PROJECT):
+                provider_cfg["vertex_project"] = proj_env
+                logger.info("Loaded Vertex AI project '%s' from env var '%s'.", proj_env, ENV_VAR_GOOGLE_PROJECT)
+            else:
+                raise ConfigError(
+                    f"Provider '{provider}': Missing 'vertex_project' and env var '{ENV_VAR_GOOGLE_PROJECT}'."
+                )
+        if not provider_cfg.get("vertex_location"):
+            if loc_env := os.environ.get(ENV_VAR_GOOGLE_REGION):
+                provider_cfg["vertex_location"] = loc_env
+                logger.info("Loaded Vertex AI location '%s' from env var '%s'.", loc_env, ENV_VAR_GOOGLE_REGION)
+            else:
+                raise ConfigError(
+                    f"Provider '{provider}': Missing 'vertex_location' and env var '{ENV_VAR_GOOGLE_REGION}'."
+                )
 
-    """
-    provider: str = str(config.get("provider", "local_llm"))
-    api_base_url_any: Any = config.get("api_base_url")
-    api_key_any: Any = config.get("api_key")
-
-    if not api_base_url_any or not isinstance(api_base_url_any, str):
-        raise ConfigError(f"For local provider '{provider}': Missing or invalid 'api_base_url'.")
-    if api_key_any:
-        logger.info("API key provided for local provider '%s'. Ensure this is supported.", provider)
-
-
-def _validate_vertexai_config(config: ProviderConfigDict, checked_env_var: Optional[str]) -> None:
-    """Validate configuration specific to the Vertex AI provider.
-
-    Ensures 'vertex_project' and 'vertex_location' are set, either in config
-    or via environment variables.
-
-    Args:
-        config: The Vertex AI provider's configuration dictionary.
-        checked_env_var: The environment variable that was checked for credentials.
-
-    Raises:
-        ConfigError: If project or location is missing and not found in env.
-
-    """
-    provider: str = str(config.get("provider", "vertexai"))
-    api_key_or_creds_any: Any = config.get("api_key")
-    api_key_or_creds: Optional[str] = str(api_key_or_creds_any) if api_key_or_creds_any else None
-
-    if not api_key_or_creds:
-        env_var_msg = f" or environment variable '{checked_env_var}'" if checked_env_var else ""
-        logger.warning(
-            "Vertex AI: No API key/creds path in config%s. Using Application Default Credentials.",
-            env_var_msg,
-        )
-
-    if not config.get("vertex_project"):
-        proj_env = os.environ.get(ENV_VAR_GOOGLE_PROJECT)
-        if proj_env:
-            config["vertex_project"] = proj_env
-            logger.info("Loaded Vertex AI project '%s' from env var '%s'.", proj_env, ENV_VAR_GOOGLE_PROJECT)
-        else:
-            raise ConfigError(
-                f"For provider '{provider}': Missing 'vertex_project' and env var '{ENV_VAR_GOOGLE_PROJECT}' not set."
-            )
-    if not config.get("vertex_location"):
-        loc_env = os.environ.get(ENV_VAR_GOOGLE_REGION)
-        if loc_env:
-            config["vertex_location"] = loc_env
-            logger.info("Loaded Vertex AI location '%s' from env var '%s'.", loc_env, ENV_VAR_GOOGLE_REGION)
-        else:
-            raise ConfigError(
-                f"For provider '{provider}': Missing 'vertex_location' and env var '{ENV_VAR_GOOGLE_REGION}' not set."
-            )
-
-
-def _validate_standard_cloud_config(config: ProviderConfigDict, checked_env_var: Optional[str]) -> None:
-    """Validate configuration for standard cloud providers requiring an API key.
-
-    Args:
-        config: The cloud provider's configuration dictionary.
-        checked_env_var: The environment variable that was checked for the API key.
-
-    Raises:
-        ConfigError: If 'api_key' is missing and not found in env.
-
-    """
-    provider_any: Any = config.get("provider")
-    provider: str = str(provider_any) if provider_any else "Unknown Cloud Provider"
-    api_key_any: Any = config.get("api_key")
-    api_base_url_any: Any = config.get("api_base_url")
-
-    api_key: Optional[str] = str(api_key_any) if isinstance(api_key_any, str) else None
-    api_base_url: Optional[str] = str(api_base_url_any) if isinstance(api_base_url_any, str) else None
-
-    if not api_key:
-        env_msg = f" and environment variable '{checked_env_var}' was not set" if checked_env_var else ""
-        raise ConfigError(f"For cloud provider '{provider}': Missing 'api_key' in config{env_msg}.")
-    if api_base_url:
-        logger.warning(
-            "For cloud provider '%s': 'api_base_url' ('%s') is set but likely unused.",
-            provider,
-            api_base_url,
-        )
-
-
-def _validate_active_llm_config(active_config: ProviderConfigDict) -> None:
-    """Validate the chosen active LLM provider configuration by dispatching.
-
-    Args:
-        active_config: The configuration dictionary for the active LLM provider.
-
-    Raises:
-        ConfigError: If validation for the specific provider type fails.
-        ValueError: If provider name is missing.
-
-    """
-    provider_any: Any = active_config.get("provider")
-    if not isinstance(provider_any, str):
-        raise ValueError("Active LLM provider config missing 'provider' name or it's not a string.")
-    provider: str = provider_any
-
-    is_local_any: Any = active_config.get("is_local_llm", False)
-    is_local: bool = bool(is_local_any)
-
-    api_key_any: Any = active_config.get("api_key")
-    api_key: Optional[str] = str(api_key_any) if isinstance(api_key_any, str) else None
-
-    checked_env_var: Optional[str] = None
-
-    logger.debug("Validating active LLM provider config: %s", provider)
-
-    if not is_local:
-        resolved_key, checked_env_var = _resolve_api_key(provider, api_key)
-        active_config["api_key"] = resolved_key
-
-    if is_local:
-        _validate_local_llm_config(active_config)
-    elif provider == "vertexai":
-        _validate_vertexai_config(active_config, checked_env_var)
-    else:
-        _validate_standard_cloud_config(active_config, checked_env_var)
-
-    logger.debug("Active LLM provider config validation successful for: %s", provider)
-
-
-def _validate_github_token(github_config: ConfigDict) -> None:
-    """Validate GitHub token presence (from config or environment).
-
-    Updates the `github_config` dictionary in-place if token is found in env.
-
-    Args:
-        github_config: The 'github' section dictionary from the configuration.
-
-    """
-    if not isinstance(github_config, dict):
-        logger.warning("GitHub config section missing/invalid. Token checks skipped.")
-        return
-
-    if github_config.get("token") is None:
-        logger.debug("GitHub token not in config. Checking env var '%s'.", ENV_VAR_GITHUB_TOKEN)
-        env_github_token = os.environ.get(ENV_VAR_GITHUB_TOKEN)
-        if env_github_token:
-            github_config["token"] = env_github_token
-            logger.info("Loaded GitHub token from env var '%s'.", ENV_VAR_GITHUB_TOKEN)
-        else:
+    def _validate_standard_cloud_config(self, provider_cfg: ProviderConfigDict, checked_env_var: Optional[str]) -> None:
+        """Validate config for standard cloud LLMs needing an API key."""
+        provider = str(provider_cfg.get("provider", "Unknown Cloud Provider"))
+        if not provider_cfg.get("api_key"):
+            env_msg = f" and env var '{checked_env_var}' was not set" if checked_env_var else ""
+            raise ConfigError(f"Cloud provider '{provider}': Missing 'api_key' in config{env_msg}.")
+        if api_base_url := provider_cfg.get("api_base_url"):
             logger.warning(
-                "No GitHub token in config or env var '%s'. Private repo access/API rates may be affected.",
-                ENV_VAR_GITHUB_TOKEN,
+                "Cloud provider '%s': 'api_base_url' ('%s') is set but likely unused.", provider, api_base_url
             )
-    else:
-        logger.debug("GitHub token found in configuration file.")
 
+    def _validate_active_llm_config(self, active_llm_cfg: ProviderConfigDict) -> None:
+        """Validate the chosen active LLM provider's configuration."""
+        provider_any: Any = active_llm_cfg.get("provider")
+        if not isinstance(provider_any, str):
+            raise ValueError("Active LLM provider config missing 'provider' name or it's not a string.")
+        provider: str = provider_any
+        is_local: bool = bool(active_llm_cfg.get("is_local_llm", False))
+        current_api_key: Optional[str] = str(active_llm_cfg.get("api_key")) if active_llm_cfg.get("api_key") else None
+        checked_env_var: Optional[str] = None
 
-def _ensure_directory_exists(dir_path_str: Optional[str], dir_purpose: str, default_path: str) -> None:
-    """Ensure a directory exists, creating it if necessary.
+        logger.debug("Validating active LLM provider config: %s", provider)
+        if not is_local:
+            resolved_key, checked_env_var = self._resolve_api_key(provider, current_api_key)
+            active_llm_cfg["api_key"] = resolved_key
 
-    Args:
-        dir_path_str: The directory path string from config (can be None).
-        dir_purpose: A string describing the directory's purpose (for logging).
-        default_path: The default path string to use if dir_path_str is None or invalid.
+        if is_local:
+            self._validate_local_llm_config(active_llm_cfg)
+        elif provider == "vertexai":
+            self._validate_vertexai_config(active_llm_cfg, checked_env_var)
+        else:
+            self._validate_standard_cloud_config(active_llm_cfg, checked_env_var)
+        logger.debug("Active LLM provider config validation successful for: %s", provider)
 
-    """
-    path_to_check_str = dir_path_str if isinstance(dir_path_str, str) and dir_path_str.strip() else default_path
-    if not path_to_check_str:
-        logger.error("Cannot ensure %s directory: No valid path provided.", dir_purpose)
-        return
+    def _validate_github_token(self) -> None:
+        """Validate GitHub token presence, updating `self._config_data`."""
+        github_cfg: ConfigDict = self._config_data.get("github", {})  # type: ignore[assignment]
+        if not isinstance(github_cfg, dict):
+            logger.warning("GitHub config section missing or invalid. Token checks skipped.")
+            return
+        if github_cfg.get("token") is None:
+            logger.debug("GitHub token not in config. Checking env var '%s'.", ENV_VAR_GITHUB_TOKEN)
+            if env_github_token := os.environ.get(ENV_VAR_GITHUB_TOKEN):
+                github_cfg["token"] = env_github_token
+                logger.info("Loaded GitHub token from env var '%s'.", ENV_VAR_GITHUB_TOKEN)
+            else:
+                logger.warning(
+                    "No GitHub token in config or env var '%s'. Private repo access may be affected.",
+                    ENV_VAR_GITHUB_TOKEN,
+                )
+        else:
+            logger.debug("GitHub token found in configuration file.")
 
-    dir_to_ensure: Path
-    try:
-        dir_to_ensure = Path(path_to_check_str)
-        target_dir_for_mkdir = dir_to_ensure
-        if dir_purpose == "LLM cache" and dir_to_ensure.suffix:
-            target_dir_for_mkdir = dir_to_ensure.parent
+    def _ensure_directory_exists(self, dir_path_str: Optional[str], dir_purpose: str, default_path: str) -> None:
+        """Ensure a directory exists, creating it if necessary."""
+        path_to_use = dir_path_str if isinstance(dir_path_str, str) and dir_path_str.strip() else default_path
+        if not path_to_use:
+            logger.error("Cannot ensure %s directory: No valid path provided.", dir_purpose)
+            return
+        try:
+            dir_obj = Path(path_to_use)
+            target_for_mkdir = dir_obj.parent if dir_purpose == "LLM cache" and dir_obj.suffix else dir_obj
+            if target_for_mkdir != Path():
+                target_for_mkdir.mkdir(parents=True, exist_ok=True)
+                logger.debug("Ensured %s directory structure exists for: %s", dir_purpose, target_for_mkdir.resolve())
+        except OSError as e:
+            logger.error(
+                "Could not create/ensure %s directory for '%s': %s", dir_purpose, path_to_use, e, exc_info=True
+            )
+        except Exception as e:
+            logger.error("Unexpected error ensuring %s dir for '%s': %s", dir_purpose, path_to_use, e, exc_info=True)
 
-        if target_dir_for_mkdir != Path():
-            target_dir_for_mkdir.mkdir(parents=True, exist_ok=True)
-            logger.debug("Ensured %s directory structure exists for: %s", dir_purpose, target_dir_for_mkdir.resolve())
-    except OSError as e:
-        logger.error("Could not create %s directory '%s': %s.", dir_purpose, path_to_check_str, e, exc_info=True)
-    except Exception as e:
-        logger.error("Error ensuring %s directory for path '%s': %s.", dir_purpose, path_to_check_str, e, exc_info=True)
+    def _apply_defaults_and_validate_sections(self) -> None:
+        """Apply default values and run specific validations on `self._config_data`."""
+        cfg = self._config_data
 
-
-def _apply_defaults_and_validate_sections(config_data: ConfigDict) -> None:
-    """Apply default values for missing sections/keys and run specific validations.
-
-    Modifies `config_data` in-place.
-
-    Args:
-        config_data: The main configuration dictionary.
-
-    """
-    project_cfg_any: Any = config_data.get("project", CONFIG_SCHEMA["properties"]["project"]["default"])
-    project_cfg: ConfigDict = (
-        project_cfg_any if isinstance(project_cfg_any, dict) else CONFIG_SCHEMA["properties"]["project"]["default"]
-    )
-    config_data["project"] = project_cfg  # Ensure project key exists and is a dict
-    project_cfg.setdefault("default_name", None)
-
-    output_cfg_any: Any = config_data.get("output", OUTPUT_SCHEMA["default"])
-    output_cfg: ConfigDict = output_cfg_any if isinstance(output_cfg_any, dict) else OUTPUT_SCHEMA["default"]
-    config_data["output"] = output_cfg  # Ensure output key exists and is a dict
-    output_cfg.setdefault("base_dir", DEFAULT_OUTPUT_DIR)
-    output_cfg.setdefault("language", DEFAULT_LANGUAGE)
-    output_cfg.setdefault("include_source_index", False)
-
-    diag_gen_cfg_any: Any = output_cfg.get("diagram_generation", DIAGRAM_GENERATION_SCHEMA["default"])
-    diag_gen_cfg: ConfigDict = (
-        diag_gen_cfg_any if isinstance(diag_gen_cfg_any, dict) else DIAGRAM_GENERATION_SCHEMA["default"]
-    )
-    output_cfg["diagram_generation"] = diag_gen_cfg  # Ensure diagram_generation key exists
-    diag_gen_cfg.setdefault("format", "mermaid")
-
-    logging_cfg_any: Any = config_data.get("logging", CONFIG_SCHEMA["properties"]["logging"]["default"])
-    logging_cfg: ConfigDict = (
-        logging_cfg_any if isinstance(logging_cfg_any, dict) else CONFIG_SCHEMA["properties"]["logging"]["default"]
-    )
-    config_data["logging"] = logging_cfg  # Ensure logging key exists
-    logging_cfg.setdefault("log_dir", DEFAULT_LOG_DIR)
-    logging_cfg.setdefault("log_level", "INFO")
-    _ensure_directory_exists(str(logging_cfg.get("log_dir")), "logging", DEFAULT_LOG_DIR)
-
-    cache_cfg_any: Any = config_data.get("cache", CONFIG_SCHEMA["properties"]["cache"]["default"])
-    cache_cfg: ConfigDict = (
-        cache_cfg_any if isinstance(cache_cfg_any, dict) else CONFIG_SCHEMA["properties"]["cache"]["default"]
-    )
-    config_data["cache"] = cache_cfg  # Ensure cache key exists
-    cache_cfg.setdefault("llm_cache_file", DEFAULT_CACHE_FILE)
-
-    llm_cache_file_str: Optional[str] = (
-        str(cache_cfg.get("llm_cache_file")) if isinstance(cache_cfg.get("llm_cache_file"), str) else None
-    )
-    _ensure_directory_exists(
-        llm_cache_file_str,
-        "LLM cache",
-        DEFAULT_CACHE_FILE,
-    )
-
-    github_cfg_any: Any = config_data.get("github", CONFIG_SCHEMA["properties"]["github"]["default"])
-    github_cfg: ConfigDict = (
-        github_cfg_any if isinstance(github_cfg_any, dict) else CONFIG_SCHEMA["properties"]["github"]["default"]
-    )
-    config_data["github"] = github_cfg  # Ensure github key exists
-    github_cfg.setdefault("token", None)
-    _validate_github_token(github_cfg)
-
-
-def _process_llm_config(llm_section: ConfigDict) -> ConfigDict:
-    """Find the active LLM provider config, validate it, and merge with common settings.
-
-    Args:
-        llm_section: The 'llm' dictionary from the loaded configuration.
-
-    Returns:
-        A dictionary containing the merged configuration for the active LLM provider.
-
-    Raises:
-        ConfigError: If 'llm' section or 'providers' list is malformed,
-                     no active provider found, multiple active providers found,
-                     or active provider's config fails validation.
-        ValueError: If provider name is missing in active config.
-
-    """
-    if not isinstance(llm_section, dict):
-        raise ConfigError("Config error: 'llm' section must be a dictionary.")
-
-    provider_configs_any: Any = llm_section.get("providers", [])
-    provider_configs: list[Any] = provider_configs_any if isinstance(provider_configs_any, list) else []
-
-    if not provider_configs:
-        raise ConfigError("Config error: 'llm.providers' must be a non-empty list.")
-
-    active_provider_configs: list[ProviderConfigDict] = [
-        p_cfg for p_cfg in provider_configs if isinstance(p_cfg, dict) and p_cfg.get("is_active") is True
-    ]
-
-    if not active_provider_configs:
-        raise ConfigError("Config error: No active LLM provider in 'llm.providers'.")
-    if len(active_provider_configs) > 1:
-        raise ConfigError("Config error: Multiple active LLM providers. Set only one to 'is_active: true'.")
-
-    active_provider_config: ProviderConfigDict = active_provider_configs[0]
-    if not all(k in active_provider_config for k in ("provider", "model", "is_local_llm")):
-        raise ConfigError(f"Active LLM provider config missing required schema keys: {active_provider_config}")
-
-    _validate_active_llm_config(active_provider_config)
-
-    final_llm_config: ConfigDict = {
-        "max_retries": llm_section.get("max_retries", DEFAULT_LLM_RETRIES),
-        "retry_wait_seconds": llm_section.get("retry_wait_seconds", DEFAULT_LLM_WAIT),
-        "use_cache": llm_section.get("use_cache", True),
-        **active_provider_config,
-    }
-    return final_llm_config
-
-
-def _find_active_language_profile(language_profiles_any: Any) -> LanguageProfileDict:
-    """Iterate through language profiles and return the first active one.
-
-    Args:
-        language_profiles_any: The list of language profile dictionaries from config.
-
-    Returns:
-        The first active language profile dictionary.
-
-    Raises:
-        ConfigError: If 'language_profiles' is not a list, no active profile
-                     is found, or multiple active profiles are found.
-
-    """
-    language_profiles: list[Any] = language_profiles_any if isinstance(language_profiles_any, list) else []
-    if not language_profiles:
-        raise ConfigError("Config error: 'source.language_profiles' must be a non-empty list.")
-
-    active_profiles: list[LanguageProfileDict] = [
-        profile for profile in language_profiles if isinstance(profile, dict) and profile.get("is_active") is True
-    ]
-
-    if not active_profiles:
-        raise ConfigError("Config error: No active language profile in 'source.language_profiles'.")
-    if len(active_profiles) > 1:
-        raise ConfigError("Config error: Multiple active language profiles. Set only one to 'is_active: true'.")
-
-    active_profile: LanguageProfileDict = active_profiles[0]
-    required_keys = ("language", "default_include_patterns", "source_index_parser")
-    if not all(k in active_profile for k in required_keys):
-        missing = [k for k in required_keys if k not in active_profile]
-        raise ConfigError(
-            f"Active language profile missing required key(s): {', '.join(missing)}. Profile: {active_profile}"
+        project_s_any: Any = cfg.get("project")
+        project_s: ConfigDict = (
+            project_s_any
+            if isinstance(project_s_any, dict)
+            else CONFIG_SCHEMA["properties"]["project"]["default"].copy()
         )
+        cfg["project"] = project_s
+        project_s.setdefault("default_name", None)
 
-    return active_profile
+        output_s_any: Any = cfg.get("output")
+        output_s: ConfigDict = output_s_any if isinstance(output_s_any, dict) else OUTPUT_SCHEMA["default"].copy()
+        cfg["output"] = output_s
+        output_s.setdefault("base_dir", DEFAULT_OUTPUT_DIR)
+        output_s.setdefault("language", DEFAULT_LANGUAGE)
+        output_s.setdefault("include_source_index", False)
+        diag_gen_s_any: Any = output_s.get("diagram_generation")
+        diag_gen_s: ConfigDict = (
+            diag_gen_s_any if isinstance(diag_gen_s_any, dict) else DIAGRAM_GENERATION_SCHEMA["default"].copy()
+        )
+        output_s["diagram_generation"] = diag_gen_s
+        diag_gen_s.setdefault("format", "mermaid")
+
+        logging_s_any: Any = cfg.get("logging")
+        logging_s: ConfigDict = (
+            logging_s_any
+            if isinstance(logging_s_any, dict)
+            else CONFIG_SCHEMA["properties"]["logging"]["default"].copy()
+        )
+        cfg["logging"] = logging_s
+        logging_s.setdefault("log_dir", DEFAULT_LOG_DIR)
+        logging_s.setdefault("log_level", "INFO")
+        self._ensure_directory_exists(str(logging_s.get("log_dir")), "logging", DEFAULT_LOG_DIR)
+
+        cache_s_any: Any = cfg.get("cache")
+        cache_s: ConfigDict = (
+            cache_s_any if isinstance(cache_s_any, dict) else CONFIG_SCHEMA["properties"]["cache"]["default"].copy()
+        )
+        cfg["cache"] = cache_s
+        cache_file_path = str(cache_s.setdefault("llm_cache_file", DEFAULT_CACHE_FILE))
+        self._ensure_directory_exists(cache_file_path, "LLM cache", DEFAULT_CACHE_FILE)
+
+        github_s_any: Any = cfg.get("github")
+        github_s: ConfigDict = (
+            github_s_any if isinstance(github_s_any, dict) else CONFIG_SCHEMA["properties"]["github"]["default"].copy()
+        )
+        cfg["github"] = github_s
+        github_s.setdefault("token", None)
+        self._validate_github_token()
+
+    def _process_llm_config(self) -> None:
+        """Process the LLM section of `self._config_data`."""
+        llm_section_any: Any = self._config_data.get("llm", {})
+        llm_section: ConfigDict = llm_section_any if isinstance(llm_section_any, dict) else {}
+        if not llm_section:
+            raise ConfigError("Config error: 'llm' section is missing or not a dictionary.")
+
+        provider_configs_any: Any = llm_section.get("providers", [])
+        provider_configs: list[Any] = provider_configs_any if isinstance(provider_configs_any, list) else []
+        if not provider_configs:
+            raise ConfigError("Config error: 'llm.providers' must be a non-empty list.")
+
+        active_provider_configs = [
+            p_cfg for p_cfg in provider_configs if isinstance(p_cfg, dict) and p_cfg.get("is_active") is True
+        ]
+        if not active_provider_configs:
+            raise ConfigError("No active LLM provider in 'llm.providers'.")
+        if len(active_provider_configs) > 1:
+            raise ConfigError("Multiple active LLM providers. Set only one 'is_active: true'.")
+
+        active_provider_config: ProviderConfigDict = active_provider_configs[0]
+        if not all(k in active_provider_config for k in ("provider", "model", "is_local_llm")):
+            raise ConfigError(f"Active LLM provider config missing required keys: {active_provider_config}")
+
+        self._validate_active_llm_config(active_provider_config)
+
+        final_llm_config: ConfigDict = {
+            "max_retries": llm_section.get("max_retries", DEFAULT_LLM_RETRIES),
+            "retry_wait_seconds": llm_section.get("retry_wait_seconds", DEFAULT_LLM_WAIT),
+            "use_cache": llm_section.get("use_cache", True),
+            **active_provider_config,
+        }
+        self._config_data["llm"] = final_llm_config
+
+    def _find_active_language_profile(self) -> LanguageProfileDict:
+        """Find and return the active language profile from `self._config_data`."""
+        source_section_any: Any = self._config_data.get("source", {})
+        source_section: ConfigDict = source_section_any if isinstance(source_section_any, dict) else {}
+        if not source_section:
+            raise ConfigError("Config error: 'source' section missing or not a dictionary.")
+
+        lang_profiles_any: Any = source_section.get("language_profiles", [])
+        lang_profiles: list[Any] = lang_profiles_any if isinstance(lang_profiles_any, list) else []
+        if not lang_profiles:
+            raise ConfigError("Config error: 'source.language_profiles' must be a non-empty list.")
+
+        active_profiles = [p for p in lang_profiles if isinstance(p, dict) and p.get("is_active") is True]
+        if not active_profiles:
+            raise ConfigError("No active language profile in 'source.language_profiles'.")
+        if len(active_profiles) > 1:
+            raise ConfigError("Multiple active language profiles. Set only one 'is_active: true'.")
+
+        active_profile: LanguageProfileDict = active_profiles[0]
+        req_keys = ("language", "default_include_patterns", "source_index_parser")
+        if not all(k in active_profile for k in req_keys):
+            missing = [k for k in req_keys if k not in active_profile]
+            raise ConfigError(f"Active language profile missing keys: {', '.join(missing)}. Profile: {active_profile}")
+        return active_profile
+
+    def _process_source_config(self) -> None:
+        """Process the source section of `self._config_data`."""
+        source_section_any: Any = self._config_data.get("source", {})
+        source_section: ConfigDict = source_section_any if isinstance(source_section_any, dict) else {}
+        if not source_section:
+            raise ConfigError("Config error: 'source' section is missing or not a dictionary.")
+
+        active_profile = self._find_active_language_profile()
+        final_source_config: ConfigDict = {
+            "default_exclude_patterns": source_section.get("default_exclude_patterns", []),
+            "max_file_size_bytes": source_section.get("max_file_size_bytes", DEFAULT_MAX_FILE_SIZE),
+            "use_relative_paths": source_section.get("use_relative_paths", True),
+        }
+        final_source_config.update(active_profile)
+
+        if active_profile.get("max_file_size_bytes") is not None:
+            final_source_config["max_file_size_bytes"] = active_profile["max_file_size_bytes"]
+        if active_profile.get("use_relative_paths") is not None:
+            final_source_config["use_relative_paths"] = active_profile["use_relative_paths"]
+
+        final_source_config.pop("is_active", None)
+        self._config_data["source"] = final_source_config
+        logger.debug("Processed source config using active lang profile: %s", active_profile.get("language"))
+
+    def process(self) -> ConfigDict:
+        """Load, validate, and process the configuration.
+
+        Returns:
+            The fully processed and validated configuration dictionary.
+        """
+        logger.info("Loading configuration from: %s", self._config_path)
+        self._read_config_file()
+        self._validate_schema()
+        self._apply_defaults_and_validate_sections()
+        self._process_llm_config()
+        self._process_source_config()
+
+        logger.info("Configuration loaded and processed successfully.")
+        if logger.isEnabledFor(logging.DEBUG):
+            try:
+                log_config_copy = json.loads(json.dumps(self._config_data))
+                llm_log_data = log_config_copy.get("llm")
+                if isinstance(llm_log_data, dict) and llm_log_data.get("api_key"):
+                    llm_log_data["api_key"] = "***REDACTED***"
+                github_log_data = log_config_copy.get("github")
+                if isinstance(github_log_data, dict) and github_log_data.get("token"):
+                    github_log_data["token"] = "***REDACTED***"
+                logger.debug("Final processed config data: %s", json.dumps(log_config_copy, indent=2))
+            except (TypeError, ValueError) as dump_error:
+                logger.debug("Could not serialize final config for debug logging: %s", dump_error)
+        return self._config_data
 
 
-def _process_source_config(source_section: ConfigDict) -> ConfigDict:
-    """Find active language profile and merge with common source settings.
-
-    Args:
-        source_section: The 'source' dictionary from the loaded configuration.
-
-    Returns:
-        A dictionary containing the merged source configuration for the active profile.
-
-    Raises:
-        ConfigError: If 'source' section or 'language_profiles' list is malformed,
-                     or if active language profile validation fails.
-
-    """
-    if not isinstance(source_section, dict):
-        raise ConfigError("Config error: 'source' section must be a dictionary.")
-
-    active_profile = _find_active_language_profile(source_section.get("language_profiles", []))
-
-    final_source_config: ConfigDict = {
-        "default_exclude_patterns": source_section.get("default_exclude_patterns", []),
-        "max_file_size_bytes": source_section.get("max_file_size_bytes", DEFAULT_MAX_FILE_SIZE),
-        "use_relative_paths": source_section.get("use_relative_paths", True),
-    }
-    final_source_config.update(active_profile)
-
-    if active_profile.get("max_file_size_bytes") is not None:
-        final_source_config["max_file_size_bytes"] = active_profile["max_file_size_bytes"]
-    if active_profile.get("use_relative_paths") is not None:
-        final_source_config["use_relative_paths"] = active_profile["use_relative_paths"]
-
-    final_source_config.pop("is_active", None)
-    logger.debug("Processed source config using active lang profile: %s", active_profile.get("language"))
-    return final_source_config
-
-
-# --- Main load_config Function ---
 def load_config(config_path_str: str = "config.json") -> ConfigDict:
     """Load, validate, process, and return the application configuration.
 
-    Orchestrates reading, schema validation, applying defaults, and processing
-    specific sections like LLM and source configurations.
+    This function now instantiates and uses `ConfigLoader` to perform the work.
 
     Args:
         config_path_str: The path string to the configuration JSON file.
-                         Defaults to "config.json".
 
     Returns:
         The fully processed and validated configuration dictionary.
@@ -746,36 +593,9 @@ def load_config(config_path_str: str = "config.json") -> ConfigDict:
         ConfigError: If any step of configuration loading or processing fails.
         FileNotFoundError: If the configuration file is not found.
         ImportError: If jsonschema is required but not installed.
-
     """
-    logger.info("Loading configuration from: %s", config_path_str)
-    config_path = Path(config_path_str).resolve()
-    config_data = _read_config_file(config_path)
-    _validate_schema(config_data, config_path)
-
-    _apply_defaults_and_validate_sections(config_data)
-
-    llm_config_section_any: Any = config_data.get("llm", {})
-    llm_config_section: ConfigDict = llm_config_section_any if isinstance(llm_config_section_any, dict) else {}
-    config_data["llm"] = _process_llm_config(llm_config_section)
-
-    source_config_section_any: Any = config_data.get("source", {})
-    source_config_section: ConfigDict = source_config_section_any if isinstance(source_config_section_any, dict) else {}
-    config_data["source"] = _process_source_config(source_config_section)
-
-    logger.info("Configuration loaded and processed successfully.")
-    if logger.isEnabledFor(logging.DEBUG):
-        try:
-            log_config_copy = json.loads(json.dumps(config_data))
-            if isinstance(log_config_copy.get("llm"), dict) and log_config_copy["llm"].get("api_key"):
-                log_config_copy["llm"]["api_key"] = "***REDACTED***"
-            if isinstance(log_config_copy.get("github"), dict) and log_config_copy["github"].get("token"):
-                log_config_copy["github"]["token"] = "***REDACTED***"
-            logger.debug("Final processed config data: %s", json.dumps(log_config_copy, indent=2))
-        except (TypeError, ValueError) as dump_error:
-            logger.debug("Could not serialize final config for debug logging: %s", dump_error)
-
-    return config_data
+    loader = ConfigLoader(config_path_str)
+    return loader.process()
 
 
 # End of src/sourcelens/config.py
