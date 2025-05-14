@@ -16,32 +16,45 @@ from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 from typing_extensions import TypeAlias
 
-from .base_node import BaseNode, SharedState
+# Import BaseNode and SLSharedState from base_node module
+from .base_node import BaseNode, SLSharedState
 
 if TYPE_CHECKING:
-    ConfigDict: TypeAlias = dict[str, Any]
+    ConfigDictTyped: TypeAlias = dict[str, Any]  # Pre config slovníky
+    LlmConfigDictTyped: TypeAlias = dict[str, Any]
+    CacheConfigDictTyped: TypeAlias = dict[str, Any]
+    SourceConfigDictTyped: TypeAlias = dict[str, Any]
+    OutputConfigDictTyped: TypeAlias = dict[str, Any]
+
 
 # --- Type Aliases specific to this Node ---
 SourceIndexPrepResult: TypeAlias = dict[str, Any]
+"""Type alias for the preparation result of GenerateSourceIndexNode.
+   Contains keys like 'skip', 'reason' (if skipping), 'files_data',
+   'project_name', 'language', 'parser_type', 'project_scan_root_display',
+   'llm_config', 'cache_config'.
+"""
 SourceIndexExecResult: TypeAlias = Optional[str]
+"""Type alias for the execution result of GenerateSourceIndexNode (Markdown content or None)."""
 
 # --- Other Type Aliases used within this module ---
-FileDataList: TypeAlias = list[tuple[str, str]]
-ClassAttributeStructure: TypeAlias = dict[str, str]
-ClassMethodStructure: TypeAlias = dict[str, str]
-ClassStructure: TypeAlias = dict[str, Any]
-FunctionStructure: TypeAlias = dict[str, str]
-ModuleStructure: TypeAlias = dict[str, Any]
-DirTree: TypeAlias = dict[str, Any]
+FileData: TypeAlias = tuple[str, Optional[str]]  # path, content (content can be None if read fails)
+FileDataList: TypeAlias = list[FileData]
 
-# Type alias for AST nodes that can have docstrings processed by ast.get_docstring
+ClassAttributeStructure: TypeAlias = dict[str, str]  # name, type
+ClassMethodStructure: TypeAlias = dict[str, str]  # signature, doc
+ClassStructure: TypeAlias = dict[str, Any]  # doc, decorators, attributes, methods
+FunctionStructure: TypeAlias = dict[str, str]  # signature, doc
+ModuleStructure: TypeAlias = dict[str, Any]  # doc, classes, functions, parsing_error
+DirTree: TypeAlias = dict[str, Any]  # Pre Mermaid štruktúru adresárov
+
 DocstringParentNode: TypeAlias = Union[ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef]
 
 visitor_logger: logging.Logger = logging.getLogger(__name__ + ".PythonCodeVisitor")
 
 # --- Constants ---
 DEBUG_SNIPPET_LENGTH: Final[int] = 50
-EXPECTED_FILE_DATA_TUPLE_LENGTH: Final[int] = 2
+EXPECTED_FILE_DATA_TUPLE_LENGTH_SRC_IDX: Final[int] = 2  # Namiesto magického čísla 2
 MAX_SUMMARY_DOC_LENGTH: Final[int] = 100
 MAX_SUMMARY_DOC_SNIPPET_LEN: Final[int] = MAX_SUMMARY_DOC_LENGTH - 3
 
@@ -54,19 +67,23 @@ class PythonCodeVisitor(ast.NodeVisitor):
     their attributes and methods), and the module's docstring.
     """
 
-    def __init__(self: "PythonCodeVisitor") -> None:
+    module_doc: Optional[str]
+    classes: dict[str, ClassStructure]
+    functions: list[FunctionStructure]
+    _current_class_name: Optional[str]
+    _source_code_lines: list[str]
+
+    def __init__(self) -> None:
         """Initialize the visitor, resetting its internal state."""
         super().__init__()
-        self.module_doc: Optional[str] = None
-        self.classes: dict[str, ClassStructure] = defaultdict(
-            lambda: {"doc": "", "decorators": [], "attributes": [], "methods": []}
-        )
-        self.functions: list[FunctionStructure] = []
-        self._current_class_name: Optional[str] = None
-        self._source_code_lines: list[str] = []
+        self.module_doc = None
+        self.classes = defaultdict(lambda: {"doc": "", "decorators": [], "attributes": [], "methods": []})
+        self.functions = []
+        self._current_class_name = None
+        self._source_code_lines = []
         visitor_logger.debug("PythonCodeVisitor initialized.")
 
-    def _get_first_line_of_docstring(self: "PythonCodeVisitor", node: DocstringParentNode) -> str:
+    def _get_first_line_of_docstring(self, node: DocstringParentNode) -> str:
         """Extract the first line of a docstring from an AST node.
 
         Args:
@@ -82,7 +99,7 @@ class PythonCodeVisitor(ast.NodeVisitor):
             return docstring.lstrip().split("\n", 1)[0].strip()
         return ""
 
-    def _is_forward_ref_candidate(self: "PythonCodeVisitor", name: str) -> bool:
+    def _is_forward_ref_candidate(self, name: str) -> bool:
         """Heuristically determine if a name is a candidate for forward reference quoting.
 
         Args:
@@ -122,7 +139,7 @@ class PythonCodeVisitor(ast.NodeVisitor):
             return False
         return name[0].isupper() and name.replace("_", "").isalnum() and "." not in name
 
-    def _parse_annotation_segment(self: "PythonCodeVisitor", segment: str, *, is_self_arg: bool) -> str:
+    def _parse_annotation_segment(self, segment: str, *, is_self_arg: bool) -> str:
         """Parse an annotation string obtained from ast.get_source_segment.
 
         Args:
@@ -139,9 +156,9 @@ class PythonCodeVisitor(ast.NodeVisitor):
 
         generic_match = re.fullmatch(r"(\w+)\[(['\"]?)(.+?)(['\"]?)\]", cleaned_segment)
         if generic_match:
-            base_type, q1, inner_types_str, q2 = generic_match.groups()
+            base_type, _q1, inner_types_str, _q2 = generic_match.groups()
             inner_params = [p.strip() for p in inner_types_str.split(",")]
-            formatted_inner_params = []
+            formatted_inner_params: list[str] = []
             for p_raw in inner_params:
                 p = p_raw.strip("'\" ")
                 formatted_inner_params.append(f'"{p}"' if self._is_forward_ref_candidate(p) else p)
@@ -151,14 +168,14 @@ class PythonCodeVisitor(ast.NodeVisitor):
             cleaned_segment.startswith("'") and cleaned_segment.endswith("'")
         ):
             inner_content = cleaned_segment[1:-1]
-            if "[" in inner_content and "]" in inner_content:
+            if "[" in inner_content and "]" in inner_content:  # Nested generics in string literal
                 return self._parse_annotation_segment(inner_content, is_self_arg=False)
-            return f'"{inner_content}"'
+            return f'"{inner_content}"'  # Keep quotes if it was a string literal
         if self._is_forward_ref_candidate(cleaned_segment):
             return f'"{cleaned_segment}"'
         return cleaned_segment
 
-    def _parse_node_based_annotation(self: "PythonCodeVisitor", node: ast.expr, *, is_self_arg: bool) -> str:
+    def _parse_node_based_annotation(self, node: ast.expr, *, is_self_arg: bool) -> str:
         """Parse an annotation based on the AST node type (fallback).
 
         Args:
@@ -172,7 +189,7 @@ class PythonCodeVisitor(ast.NodeVisitor):
         res_str: str
         if isinstance(node, ast.Name):
             name_id = node.id
-            if name_id == "None":
+            if name_id == "None":  # "None" is a valid type hint (NoneType)
                 res_str = "None"
             elif (
                 is_self_arg and self._current_class_name and name_id == self._current_class_name
@@ -181,12 +198,12 @@ class PythonCodeVisitor(ast.NodeVisitor):
             else:
                 res_str = name_id
         elif isinstance(node, ast.Constant) and node.value is None:
-            res_str = "None"
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            res_str = node.value
-        elif isinstance(node, ast.Subscript):
+            res_str = "None"  # For `-> None` annotations
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):  # Forward ref as string constant
+            res_str = node.value  # Use the string value directly
+        elif isinstance(node, ast.Subscript):  # e.g., list[int], dict[str, int]
             value_str = self._get_annotation_str(node.value, is_self_arg=False)
-            slice_val = node.slice
+            slice_val = node.slice  # This can be ast.Tuple or another ast.expr
             slice_inner_str: str
             if isinstance(slice_val, ast.Tuple):
                 slice_elts = [self._get_annotation_str(elt, is_self_arg=False) for elt in slice_val.elts]
@@ -200,10 +217,10 @@ class PythonCodeVisitor(ast.NodeVisitor):
                 type(node).__name__,
                 ast.dump(node) if hasattr(ast, "dump") else str(node),
             )
-            res_str = "Any"
+            res_str = "Any"  # Fallback
         return res_str
 
-    def _get_annotation_str(self: "PythonCodeVisitor", node: Optional[ast.expr], *, is_self_arg: bool = False) -> str:
+    def _get_annotation_str(self, node: Optional[ast.expr], *, is_self_arg: bool = False) -> str:
         """Attempt to get the source string for a type annotation node.
 
         Args:
@@ -215,19 +232,21 @@ class PythonCodeVisitor(ast.NodeVisitor):
 
         """
         if node is None:
-            return ""
-        if self._source_code_lines and hasattr(node, "lineno"):
+            return ""  # No annotation
+        if self._source_code_lines and hasattr(node, "lineno"):  # Ensure node has line info
             try:
                 full_source_code = "".join(self._source_code_lines)
+                # ast.get_source_segment can raise various errors
                 segment = ast.get_source_segment(full_source_code, node)
                 if segment:
                     return self._parse_annotation_segment(segment, is_self_arg=is_self_arg)
-            except (AttributeError, TypeError, ValueError, IndexError) as e_segment:
+            except (AttributeError, TypeError, ValueError, IndexError) as e_segment:  # More specific exceptions
                 visitor_logger.debug(
                     "Failed to get source segment for annotation node (line %s): %s. Falling back to AST parsing.",
                     getattr(node, "lineno", "N/A"),
                     str(e_segment),
                 )
+        # Fallback if get_source_segment fails
         return self._parse_node_based_annotation(node, is_self_arg=is_self_arg)
 
     def _format_single_arg(self, arg_node: ast.arg, *, has_default: bool, is_self_or_cls: bool) -> str:
@@ -245,10 +264,10 @@ class PythonCodeVisitor(ast.NodeVisitor):
         anno_str = self._get_annotation_str(arg_node.annotation, is_self_arg=is_self_or_cls)
         arg_repr = f"{arg_node.arg}: {anno_str}" if anno_str else arg_node.arg
         if has_default:
-            arg_repr += " = ..."
+            arg_repr += " = ..."  # Indicate default exists, not its value
         return arg_repr
 
-    def _format_arguments(self: "PythonCodeVisitor", args_node: ast.arguments) -> str:
+    def _format_arguments(self, args_node: ast.arguments) -> str:
         """Format function arguments including type hints and default value indicators.
 
         Args:
@@ -261,38 +280,51 @@ class PythonCodeVisitor(ast.NodeVisitor):
         args_list: list[str] = []
         num_regular_args = len(args_node.args)
 
+        # Positional-only arguments
         for arg in args_node.posonlyargs:
+            # Defaults are not allowed for pos-only args before '/' in Python syntax
+            # unless through complex means not typically represented this way by AST.
             args_list.append(self._format_single_arg(arg, has_default=False, is_self_or_cls=False))
         if args_node.posonlyargs:
             args_list.append("/")
 
+        # Regular arguments (positional or keyword)
         for i, arg in enumerate(args_node.args):
             is_self_or_cls = (
                 arg.arg in {"self", "cls"}
-                and (i == 0 and not args_node.posonlyargs)
+                and i == 0
+                and not args_node.posonlyargs
                 and self._current_class_name is not None
             )
-            has_default = (num_regular_args - 1 - i) < len(args_node.defaults)
+            # Check if this arg has a default value
+            num_defaults = len(args_node.defaults)
+            # Index for default from the right end of args list
+            default_idx_from_end = num_regular_args - 1 - i
+            has_default = default_idx_from_end < num_defaults
+
             args_list.append(self._format_single_arg(arg, has_default=has_default, is_self_or_cls=is_self_or_cls))
 
+        # Vararg (*args)
         if args_node.vararg:
             vararg_anno = self._get_annotation_str(args_node.vararg.annotation)
             args_list.append(f"*{args_node.vararg.arg}: {vararg_anno}" if vararg_anno else f"*{args_node.vararg.arg}")
 
+        # Keyword-only arguments
         if args_node.kwonlyargs:
-            if not args_node.vararg:
+            if not args_node.vararg:  # If no *args, need a bare *
                 args_list.append("*")
             for i, arg in enumerate(args_node.kwonlyargs):
                 has_default = args_node.kw_defaults[i] is not None
                 args_list.append(self._format_single_arg(arg, has_default=has_default, is_self_or_cls=False))
 
+        # Kwarg (**kwargs)
         if args_node.kwarg:
             kwarg_anno = self._get_annotation_str(args_node.kwarg.annotation)
             args_list.append(f"**{args_node.kwarg.arg}: {kwarg_anno}" if kwarg_anno else f"**{args_node.kwarg.arg}")
 
-        return ", ".join(filter(None, args_list))
+        return ", ".join(filter(None, args_list))  # filter(None, ...) removes empty strings
 
-    def _format_return_annotation(self: "PythonCodeVisitor", returns_node: Optional[ast.expr]) -> str:
+    def _format_return_annotation(self, returns_node: Optional[ast.expr]) -> str:
         """Format the return type annotation of a function or method.
 
         Args:
@@ -305,9 +337,9 @@ class PythonCodeVisitor(ast.NodeVisitor):
         if returns_node:
             anno_str = self._get_annotation_str(returns_node, is_self_arg=False)
             return f" -> {anno_str}" if anno_str else ""
-        return ""
+        return ""  # No return annotation
 
-    def _get_decorator_name_str(self: "PythonCodeVisitor", decorator_func_node: ast.expr) -> str:
+    def _get_decorator_name_str(self, decorator_func_node: ast.expr) -> str:
         """Return the name part of a decorator's function or attribute chain.
 
         Args:
@@ -320,8 +352,10 @@ class PythonCodeVisitor(ast.NodeVisitor):
         if isinstance(decorator_func_node, ast.Name):
             return decorator_func_node.id
         if isinstance(decorator_func_node, ast.Attribute):
+            # Recursively build the attribute chain
             value_str = self._get_decorator_name_str(decorator_func_node.value)
             return f"{value_str}.{decorator_func_node.attr}"
+        # Fallback if source segment cannot be obtained or node type is complex
         try:
             if self._source_code_lines and hasattr(decorator_func_node, "lineno"):
                 full_source_code = "".join(self._source_code_lines)
@@ -332,9 +366,9 @@ class PythonCodeVisitor(ast.NodeVisitor):
             visitor_logger.debug(
                 "Could not get source segment for decorator part: %s", str(e_dec_segment), exc_info=False
             )
-        return "..."
+        return "..."  # Placeholder for complex decorators not easily parsed
 
-    def _get_decorator_str(self: "PythonCodeVisitor", decorator_node: ast.expr) -> str:
+    def _get_decorator_str(self, decorator_node: ast.expr) -> str:
         """Convert a decorator AST node to its string representation.
 
         Args:
@@ -350,7 +384,7 @@ class PythonCodeVisitor(ast.NodeVisitor):
                 dec_src = ast.get_source_segment(full_source_code, decorator_node)
                 if dec_src:
                     return f"@{dec_src.strip()}"
-        except (TypeError, ValueError, IndexError, AttributeError) as e_dec_str_segment:  # noqa: BLE001
+        except (TypeError, ValueError, IndexError, AttributeError) as e_dec_str_segment:
             visitor_logger.debug(
                 "Failed to get source segment for decorator %s: %s. Falling back to AST parsing.",
                 str(decorator_node),
@@ -360,12 +394,12 @@ class PythonCodeVisitor(ast.NodeVisitor):
 
         if isinstance(decorator_node, (ast.Name, ast.Attribute)):
             return f"@{self._get_decorator_name_str(decorator_node)}"
-        if isinstance(decorator_node, ast.Call):
+        if isinstance(decorator_node, ast.Call):  # Decorator with arguments
             func_str = self._get_decorator_name_str(decorator_node.func)
-            return f"@{func_str}(...)"
-        return "@..."
+            return f"@{func_str}(...)"  # Arguments are not detailed here
+        return "@..."  # Fallback for unknown decorator structure
 
-    def visit_Module(self: "PythonCodeVisitor", node: ast.Module) -> None:
+    def visit_Module(self, node: ast.Module) -> None:
         """Visit a Module node and extract its docstring.
 
         Args:
@@ -373,9 +407,9 @@ class PythonCodeVisitor(ast.NodeVisitor):
 
         """
         self.module_doc = self._get_first_line_of_docstring(node)
-        self.generic_visit(node)
+        self.generic_visit(node)  # Continue visiting child nodes
 
-    def visit_ClassDef(self: "PythonCodeVisitor", node: ast.ClassDef) -> None:
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
         """Visit a ClassDef node.
 
         Args:
@@ -384,25 +418,27 @@ class PythonCodeVisitor(ast.NodeVisitor):
         """
         class_name = node.name
         original_current_class_name_context = self._current_class_name
-        self._current_class_name = class_name
+        self._current_class_name = class_name  # Set context for method parsing
 
-        class_data = self.classes[class_name]
+        class_data = self.classes[class_name]  # defaultdict ensures it exists
         class_data["doc"] = self._get_first_line_of_docstring(node)
         class_data["decorators"] = [self._get_decorator_str(d) for d in node.decorator_list]
 
+        # Iterate over class body to find attributes and methods
         for child_node in node.body:
             if isinstance(child_node, ast.AnnAssign) and isinstance(child_node.target, ast.Name):
+                # Annotated assignment (class variable with type hint)
                 annotation_str = self._get_annotation_str(child_node.annotation) or "Any"
                 class_data["attributes"].append({"name": child_node.target.id, "type": annotation_str})
-            elif isinstance(child_node, ast.Assign):
+            elif isinstance(child_node, ast.Assign):  # Simple assignment (class variable without type hint)
                 for target_node in child_node.targets:
                     if isinstance(target_node, ast.Name):
                         class_data["attributes"].append({"name": target_node.id, "type": "Any # (Assigned)"})
             elif isinstance(child_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                self.visit(child_node)
-        self._current_class_name = original_current_class_name_context
+                self.visit(child_node)  # This will call visit_FunctionDef or visit_AsyncFunctionDef
+        self._current_class_name = original_current_class_name_context  # Restore context
 
-    def visit_FunctionDef(self: "PythonCodeVisitor", node: ast.FunctionDef) -> None:
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         """Visit a FunctionDef node.
 
         Args:
@@ -415,12 +451,12 @@ class PythonCodeVisitor(ast.NodeVisitor):
         signature = f"def {func_name}({args_str}){return_anno_str}"
         doc = self._get_first_line_of_docstring(node)
 
-        if self._current_class_name:
+        if self._current_class_name:  # If we are inside a class context
             self.classes[self._current_class_name]["methods"].append({"signature": signature, "doc": doc})
-        else:
+        else:  # Top-level function
             self.functions.append({"signature": signature, "doc": doc})
 
-    def visit_AsyncFunctionDef(self: "PythonCodeVisitor", node: ast.AsyncFunctionDef) -> None:
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         """Visit an AsyncFunctionDef node.
 
         Args:
@@ -438,7 +474,7 @@ class PythonCodeVisitor(ast.NodeVisitor):
         else:
             self.functions.append({"signature": signature, "doc": doc})
 
-    def parse(self: "PythonCodeVisitor", code: str) -> ModuleStructure:
+    def parse(self, code: str) -> ModuleStructure:
         """Parse Python code and return its structured representation.
 
         Args:
@@ -448,7 +484,8 @@ class PythonCodeVisitor(ast.NodeVisitor):
             A `ModuleStructure` dictionary.
 
         """
-        self._source_code_lines = code.splitlines(keepends=True)
+        self._source_code_lines = code.splitlines(keepends=True)  # For get_source_segment
+        # Reset state for fresh parse
         self.module_doc = None
         self.classes.clear()
         self.functions.clear()
@@ -466,19 +503,17 @@ class PythonCodeVisitor(ast.NodeVisitor):
             visitor_logger.error("An unexpected error occurred during AST parsing: %s", e, exc_info=True)
 
         return {
-            "doc": self.module_doc or "",
-            "classes": dict(self.classes),
+            "doc": self.module_doc or "",  # Ensure always a string
+            "classes": dict(self.classes),  # Convert defaultdict to dict
             "functions": self.functions,
-            "parsing_error": parsing_error_message,
+            "parsing_error": parsing_error_message,  # Can be None
         }
 
 
 class GenerateSourceIndexNode(BaseNode[SourceIndexPrepResult, SourceIndexExecResult]):
     """Generates a Markdown file listing files, classes, and functions."""
 
-    def _generate_mermaid_file_structure(
-        self: "GenerateSourceIndexNode", project_scan_root_display: str, files_data: FileDataList
-    ) -> str:
+    def _generate_mermaid_file_structure(self, project_scan_root_display: str, files_data: FileDataList) -> str:
         """Generate Mermaid code for a file structure diagram.
 
         Args:
@@ -495,24 +530,27 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPrepResult, SourceIndexExecRes
             root_label += "/"
         elif root_label == ".":
             root_label = "./"
-        root_node_id_mermaid = "ROOT_DIR_MERMAID"
+        root_node_id_mermaid = "ROOT_DIR_MERMAID"  # Consistent ID
         lines.append(f'    {root_node_id_mermaid}["{root_label}"]')
         node_definitions: list[str] = []
         connections: list[str] = []
         style_assignments: list[str] = [f"    class {root_node_id_mermaid} dir;"]
         tree: DirTree = defaultdict(dict)
-        file_id_map: dict[str, str] = {}
+        file_id_map: dict[str, str] = {}  # path_rel -> mermaid_id
+
         for i, (path_rel_to_scan_root, _) in enumerate(files_data):
             p_rel = Path(path_rel_to_scan_root)
             file_node_id = f"FILE_{i}"
             file_id_map[path_rel_to_scan_root] = file_node_id
             node_definitions.append(f'    {file_node_id}["{p_rel.name}"]')
             style_assignments.append(f"    class {file_node_id} file;")
-            current_level = tree
+
+            current_level_tree_ref = tree
             for part in p_rel.parent.parts:
-                current_level = current_level.setdefault(part, {})
-            current_level[p_rel.name] = file_node_id
-        dir_id_counter: dict[str, int] = {"val": 0}
+                current_level_tree_ref = current_level_tree_ref.setdefault(part, {})
+            current_level_tree_ref[p_rel.name] = file_node_id  # Store file_id, not content
+
+        dir_id_counter_val: int = 0  # Simpler counter
 
         def generate_recursive_mermaid_for_tree(
             _current_dir_name_disp: str, current_tree_lvl: DirTree, parent_id: str
@@ -525,18 +563,21 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPrepResult, SourceIndexExecRes
                 parent_id: Mermaid ID of the parent directory node.
 
             """
+            nonlocal dir_id_counter_val  # Modify outer scope counter
+            # Sort to have directories (subgraphs) potentially listed before files if preferred
             sorted_items = sorted(current_tree_lvl.items(), key=lambda item_pair: not isinstance(item_pair[1], dict))
+
             for name, content_or_subtree in sorted_items:
-                if isinstance(content_or_subtree, dict):
+                if isinstance(content_or_subtree, dict):  # It's a subdirectory
                     safe_dir_name_part = name.replace("/", "_").replace(".", "_")
-                    sub_dir_mermaid_id = f"DIR_{safe_dir_name_part}_{dir_id_counter['val']}"
-                    dir_id_counter["val"] += 1
+                    sub_dir_mermaid_id = f"DIR_{safe_dir_name_part}_{dir_id_counter_val}"
+                    dir_id_counter_val += 1
                     node_definitions.append(f'    subgraph {sub_dir_mermaid_id} ["{name}/"]')
                     style_assignments.append(f"    class {sub_dir_mermaid_id} dir;")
                     connections.append(f"    {parent_id} --> {sub_dir_mermaid_id}")
                     generate_recursive_mermaid_for_tree(name, content_or_subtree, sub_dir_mermaid_id)
-                    node_definitions.append("    end")
-                else:
+                    node_definitions.append("    end")  # Close subgraph
+                else:  # It's a file (content_or_subtree is the file_node_id_str)
                     file_node_id_str: str = content_or_subtree
                     connections.append(f"    {parent_id} --> {file_node_id_str}")
 
@@ -550,11 +591,11 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPrepResult, SourceIndexExecRes
                 "    classDef file fill:#f9f9f9,stroke:#ccc,stroke-width:1px,color:#333",
             ]
         )
-        lines.extend(style_assignments)
+        lines.extend(style_assignments)  # Apply styles after all definitions
         return "\n".join(lines)
 
     def _append_module_functions_md(
-        self: "GenerateSourceIndexNode", lines: list[str], module_functions: list[FunctionStructure], path_str: str
+        self, lines: list[str], module_functions: list[FunctionStructure], path_str: str
     ) -> None:
         """Append Markdown for module-level functions.
 
@@ -566,18 +607,16 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPrepResult, SourceIndexExecRes
         """
         if module_functions:
             self._logger.debug("Formatting %d module functions for %s", len(module_functions), path_str)
-            if lines and lines[-1].strip():
+            if lines and lines[-1].strip():  # Ensure a blank line before this section if needed
                 lines.append("\n")
             for func_info in sorted(module_functions, key=lambda x: x.get("signature", "")):
                 signature = func_info.get("signature", "Unknown signature")
                 doc = func_info.get("doc", "")
-                lines.append(f"*   **`{signature}:`**\n")
+                lines.append(f"*   **`{signature}:`**\n")  # Bold signature
                 if doc:
-                    lines.append(f"    ... {doc}\n")
+                    lines.append(f"    ... {doc}\n")  # Indented docstring summary
 
-    def _append_class_attributes_md(
-        self: "GenerateSourceIndexNode", lines: list[str], attributes: list[ClassAttributeStructure]
-    ) -> None:
+    def _append_class_attributes_md(self, lines: list[str], attributes: list[ClassAttributeStructure]) -> None:
         """Append Markdown for class attributes.
 
         Args:
@@ -592,9 +631,7 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPrepResult, SourceIndexExecRes
                 attr_type = attr.get("type", "Any")
                 lines.append(f"    *   **`{name}: {attr_type}`**\n")
 
-    def _append_class_methods_md(
-        self: "GenerateSourceIndexNode", lines: list[str], methods: list[ClassMethodStructure]
-    ) -> None:
+    def _append_class_methods_md(self, lines: list[str], methods: list[ClassMethodStructure]) -> None:
         """Append Markdown for class methods.
 
         Args:
@@ -607,13 +644,11 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPrepResult, SourceIndexExecRes
             for method_info in sorted(methods, key=lambda x: x.get("signature", "")):
                 signature = method_info.get("signature", "Unknown signature")
                 doc = method_info.get("doc", "")
-                lines.append(f"    *   **`{signature}:`**\n")
+                lines.append(f"    *   **`{signature}:`**\n")  # Bold signature
                 if doc:
-                    lines.append(f"        ... {doc}\n")
+                    lines.append(f"        ... {doc}\n")  # Indented docstring summary
 
-    def _append_class_md(
-        self: "GenerateSourceIndexNode", lines: list[str], class_name: str, class_data: ClassStructure
-    ) -> None:
+    def _append_class_md(self, lines: list[str], class_name: str, class_data: ClassStructure) -> None:
         """Append Markdown for a single class.
 
         Args:
@@ -623,17 +658,17 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPrepResult, SourceIndexExecRes
 
         """
         if lines and lines[-1].strip() and not lines[-1].endswith(("\n\n", "\n")):
-            lines.append("\n\n")
+            lines.append("\n\n")  # Ensure enough space before class
         elif lines and not lines[-1].endswith("\n"):
             lines.append("\n")
 
         for decorator_str in class_data.get("decorators", []):
-            lines.append(f"**`{decorator_str}`**\n")
+            lines.append(f"**`{decorator_str}`**\n")  # Bold decorator
 
-        lines.append(f"### **`class {class_name}()`**\n")
+        lines.append(f"### **`class {class_name}()`**\n")  # H3 for class name, bolded
         class_doc_str = class_data.get("doc", "")
         lines.append(f"... {class_doc_str}\n" if class_doc_str else "... No class docstring found.\n")
-        lines.append("\n")
+        lines.append("\n")  # Extra newline after class docstring
 
         attributes: list[ClassAttributeStructure] = class_data.get("attributes", [])
         methods: list[ClassMethodStructure] = class_data.get("methods", [])
@@ -641,13 +676,11 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPrepResult, SourceIndexExecRes
         if attributes:
             self._append_class_attributes_md(lines, attributes)
         if methods:
-            if attributes:
+            if attributes:  # Add space between attributes and methods if both exist
                 lines.append("\n")
             self._append_class_methods_md(lines, methods)
 
-    def _format_file_entry(
-        self: "GenerateSourceIndexNode", file_display_path: str, structure: ModuleStructure, file_number: int
-    ) -> list[str]:
+    def _format_file_entry(self, file_display_path: str, structure: ModuleStructure, file_number: int) -> list[str]:
         """Format the Markdown entry for a single Python file using its parsed structure.
 
         Args:
@@ -660,23 +693,23 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPrepResult, SourceIndexExecRes
 
         """
         self._logger.debug("Formatting file entry for: %s (File #: %d)", file_display_path, file_number)
-        lines: list[str] = ["\n##\n"]
+        lines: list[str] = ["\n##\n"]  # Separator for major file sections
         p = Path(file_display_path)
         parent_dir_for_h6 = p.parent.as_posix()
         if parent_dir_for_h6 == ".":
             parent_dir_for_h6 = "./"
         elif parent_dir_for_h6 and not parent_dir_for_h6.endswith("/"):
             parent_dir_for_h6 += "/"
-        elif not parent_dir_for_h6:
+        elif not parent_dir_for_h6:  # Handles case where path is just filename.py
             parent_dir_for_h6 = "./"
 
-        lines.append(f"###### {file_number}) {parent_dir_for_h6}\n")
-        lines.append(f"#  {p.name}\n")
+        lines.append(f"###### {file_number}) {parent_dir_for_h6}\n")  # H6 for file numbering and parent dir
+        lines.append(f"#  {p.name}\n")  # H1 for filename
 
         parsing_error = structure.get("parsing_error")
         module_doc = structure.get("doc", "")
         module_functions = structure.get("functions", [])
-        classes = structure.get("classes", {})
+        classes = structure.get("classes", {})  # dict[str, ClassStructure]
 
         if parsing_error:
             lines.append(f"... Error parsing this file: {parsing_error}\n")
@@ -684,21 +717,21 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPrepResult, SourceIndexExecRes
             lines.append(f"... {module_doc}\n")
         elif not classes and not module_functions:
             lines.append("... (No parseable top-level functions or classes, and no module docstring found)\n")
-        elif not module_doc:
+        elif not module_doc:  # Classes or functions exist, but no module doc
             lines.append("... No module-level docstring found.\n")
 
         self._append_module_functions_md(lines, module_functions, file_display_path)
+
+        # Sort classes by name for consistent output
         for class_name in sorted(classes.keys()):
             self._append_class_md(lines, class_name, classes[class_name])
 
-        if lines and lines[-1].strip():
+        if lines and lines[-1].strip():  # Ensure a newline after the last content of the file
             lines.append("\n")
-        lines.append("---\n")
+        lines.append("---\n")  # Horizontal rule after each file entry
         return lines
 
-    def _format_file_summary_list(
-        self: "GenerateSourceIndexNode", files_data: FileDataList, visitor: PythonCodeVisitor
-    ) -> list[str]:
+    def _format_file_summary_list(self, files_data: FileDataList, visitor: PythonCodeVisitor) -> list[str]:
         """Format a summary list of files with their module docstrings.
 
         Args:
@@ -714,31 +747,34 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPrepResult, SourceIndexExecRes
             summary_lines.append("No files to summarize.\n")
             return summary_lines
 
-        for path_rel_to_scan_root, file_content_str in files_data:
+        for path_rel_to_scan_root, file_content_str_opt in files_data:
             file_name_only = Path(path_rel_to_scan_root).name
             module_doc_for_summary = ""
-            if path_rel_to_scan_root.endswith((".py", ".pyi")) and file_content_str:
-                temp_structure = visitor.parse(file_content_str)
+            if path_rel_to_scan_root.endswith((".py", ".pyi")) and file_content_str_opt:
+                # Ensure content is string before parsing
+                temp_structure = visitor.parse(file_content_str_opt)
                 module_doc_for_summary = temp_structure.get("doc", "")
-            elif file_content_str:
-                first_line = file_content_str.strip().split("\n", 1)[0].strip()
+            elif file_content_str_opt:  # For non-python files with content
+                first_line = file_content_str_opt.strip().split("\n", 1)[0].strip()
                 if (first_line.startswith('"""') and first_line.endswith('"""')) or (
                     first_line.startswith("'''") and first_line.endswith("'''")
                 ):
                     module_doc_for_summary = first_line[3:-3].strip()
                 elif first_line.startswith("#"):
                     module_doc_for_summary = first_line[1:].strip()
-                else:
+                else:  # Use the first line as is, if not a clear docstring/comment
                     module_doc_for_summary = first_line
+                # Truncate if too long
                 if len(module_doc_for_summary) > MAX_SUMMARY_DOC_LENGTH:
                     module_doc_for_summary = module_doc_for_summary[:MAX_SUMMARY_DOC_SNIPPET_LEN] + "..."
+
             doc_to_display = module_doc_for_summary if module_doc_for_summary else "No specific description available."
             summary_lines.append(f"*   **`{file_name_only}`**: {doc_to_display}\n")
         summary_lines.append("\n---\n")
         return summary_lines
 
     def _format_detailed_file_entries(
-        self: "GenerateSourceIndexNode",
+        self,
         files_data: FileDataList,
         project_scan_root_display: str,
         visitor: PythonCodeVisitor,
@@ -758,27 +794,36 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPrepResult, SourceIndexExecRes
         processed_file_count = 0
         for i, item in enumerate(files_data):
             processed_file_count += 1
-            if not (isinstance(item, tuple) and len(item) == EXPECTED_FILE_DATA_TUPLE_LENGTH):
-                self._log_error("Invalid item structure at index %d. Skipping.", i)
-                continue
-            path_from_files_data, content = item
-            if not (isinstance(path_from_files_data, str) and (isinstance(content, str) or content is None)):
-                self._log_error("Invalid path/content type for item at index %d. Skipping.", i)
+            if not (isinstance(item, tuple) and len(item) == EXPECTED_FILE_DATA_TUPLE_LENGTH_SRC_IDX):
+                self._log_error("Invalid item structure at index %d for detailed entry. Skipping.", i)
                 continue
 
+            path_from_files_data: str = item[0]
+            content_opt: Optional[str] = item[1]  # Content can be None
+
+            if not isinstance(path_from_files_data, str):
+                self._log_error("Invalid path type for item at index %d. Skipping.", i)
+                continue
+            # content_opt can be None or str, _format_non_python_file_entry handles this
+
+            # Construct display path relative to the originally scanned root
             file_display_path = (Path(project_scan_root_display) / path_from_files_data).as_posix()
+
             if path_from_files_data.endswith((".py", ".pyi")):
-                structure = visitor.parse(content if isinstance(content, str) else "")
-                detailed_lines.extend(self._format_file_entry(file_display_path, structure, processed_file_count))
+                if content_opt is not None:
+                    structure = visitor.parse(content_opt)
+                    detailed_lines.extend(self._format_file_entry(file_display_path, structure, processed_file_count))
+                else:
+                    detailed_lines.extend(
+                        self._format_non_python_file_entry(processed_file_count, file_display_path, None)
+                    )
             else:
                 detailed_lines.extend(
-                    self._format_non_python_file_entry(processed_file_count, file_display_path, content)
+                    self._format_non_python_file_entry(processed_file_count, file_display_path, content_opt)
                 )
         return detailed_lines, processed_file_count
 
-    def _format_python_index(
-        self: "GenerateSourceIndexNode", project_name: str, files_data: FileDataList, project_scan_root_display: str
-    ) -> str:
+    def _format_python_index(self, project_name: str, files_data: FileDataList, project_scan_root_display: str) -> str:
         """Format the source index for Python projects using AST parsing.
 
         Args:
@@ -799,26 +844,26 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPrepResult, SourceIndexExecRes
         else:
             markdown_lines.append("\nNo files found to display structure.\n")
 
-        visitor = PythonCodeVisitor()
+        visitor = PythonCodeVisitor()  # Create one visitor instance
         markdown_lines.extend(self._format_file_summary_list(files_data, visitor))
         detailed_lines, processed_count = self._format_detailed_file_entries(
             files_data, project_scan_root_display, visitor
         )
         markdown_lines.extend(detailed_lines)
 
-        if processed_count == 0 and files_data:
+        if processed_count == 0 and files_data:  # Some files existed but none were processed
             markdown_lines.append("\n\nNo files were processed for detailed indexing.\n")
-        elif not files_data:
+        elif not files_data:  # No files at all
             markdown_lines.append("\n\nNo files found in the source to index.\n")
 
-        result = "".join(markdown_lines)
+        result: str = "".join(markdown_lines)
         self._log_info(
             "Finished Python source index for '%s'. Files: %d. Length: %d", project_name, processed_count, len(result)
         )
         return result
 
     def _format_non_python_file_entry(
-        self: "GenerateSourceIndexNode", processed_file_number: int, file_display_path: str, content: Optional[str]
+        self, processed_file_number: int, file_display_path: str, content: Optional[str]
     ) -> list[str]:
         """Format entry for a non-Python file.
 
@@ -833,13 +878,13 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPrepResult, SourceIndexExecRes
         """
         lines: list[str] = ["\n##\n"]
         p_non_py = Path(file_display_path)
-        parent_dir_for_h6 = p_non_py.parent.as_posix()  # Corrected variable name
+        parent_dir_for_h6 = p_non_py.parent.as_posix()
         if parent_dir_for_h6 == ".":
             parent_dir_for_h6 = "./"
         elif parent_dir_for_h6 and not parent_dir_for_h6.endswith("/"):
-            parent_dir_for_h6 += "/"  # Corrected variable name
+            parent_dir_for_h6 += "/"
         elif not parent_dir_for_h6:
-            parent_dir_for_h6 = "./"  # Corrected variable name
+            parent_dir_for_h6 = "./"
 
         lines.append(f"###### {processed_file_number}) {parent_dir_for_h6}\n")
         lines.append(f"#  {p_non_py.name}\n")
@@ -854,6 +899,7 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPrepResult, SourceIndexExecRes
                 first_line_doc = first_line_doc_raw[1:].strip()
             else:
                 first_line_doc = first_line_doc_raw
+
             if len(first_line_doc) > MAX_SUMMARY_DOC_LENGTH:
                 first_line_doc = first_line_doc[:MAX_SUMMARY_DOC_SNIPPET_LEN] + "..."
         lines.append(f"\n... {first_line_doc}\n" if first_line_doc else "\n... (Non-Python file)\n")
@@ -862,9 +908,7 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPrepResult, SourceIndexExecRes
         lines.append("---\n")
         return lines
 
-    def _format_generic_index(
-        self: "GenerateSourceIndexNode", project_name: str, files_data: FileDataList, project_scan_root_display: str
-    ) -> str:
+    def _format_generic_index(self, project_name: str, files_data: FileDataList, project_scan_root_display: str) -> str:
         """Format a generic source index listing files.
 
         Args:
@@ -886,23 +930,32 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPrepResult, SourceIndexExecRes
 
         markdown_lines.append("\n## File List\n")
         if files_data:
-            for i, (path_rel_to_scan_root, content_str_opt) in enumerate(files_data):
+            for _, (path_rel_to_scan_root, content_str_opt) in enumerate(files_data):
                 file_display_path_obj = Path(project_scan_root_display) / path_rel_to_scan_root
                 file_display_path = file_display_path_obj.as_posix()
-                lines_for_file = self._format_non_python_file_entry(i + 1, file_display_path, content_str_opt)
-                filtered_lines = [
-                    line
-                    for line in lines_for_file
-                    if line.strip() != "##" and not line.startswith("######") and not line.startswith("#  ")
-                ]
-                markdown_lines.append(f"* **`{Path(file_display_path).name}`** (`{file_display_path}`)\n")
-                if filtered_lines and "".join(filtered_lines).strip() != "---":
-                    markdown_lines.extend(["    " + line for line in filtered_lines if line.strip() != "---"])
+                # Get first line for summary, similar to _format_non_python_file_entry
+                first_line_doc = ""
+                if content_str_opt and content_str_opt.strip():
+                    first_line_doc_raw = content_str_opt.strip().split("\n", 1)[0].strip()
+                    if (first_line_doc_raw.startswith('"""') and first_line_doc_raw.endswith('"""')) or (
+                        first_line_doc_raw.startswith("'''") and first_line_doc_raw.endswith("'''")
+                    ):
+                        first_line_doc = first_line_doc_raw[3:-3].strip()
+                    elif first_line_doc_raw.startswith("#"):
+                        first_line_doc = first_line_doc_raw[1:].strip()
+                    else:
+                        first_line_doc = first_line_doc_raw
+                    if len(first_line_doc) > MAX_SUMMARY_DOC_LENGTH:
+                        first_line_doc = first_line_doc[:MAX_SUMMARY_DOC_SNIPPET_LEN] + "..."
+                summary_for_list = f" ({first_line_doc})" if first_line_doc else ""
+                markdown_lines.append(
+                    f"* **`{Path(file_display_path).name}`** (`{file_display_path}`){summary_for_list}\n"
+                )
         else:
             markdown_lines.append("No files found in the source to list.\n")
         return "".join(markdown_lines)
 
-    def prep(self, shared: SharedState) -> SourceIndexPrepResult:
+    def prep(self, shared: SLSharedState) -> SourceIndexPrepResult:
         """Prepare data and configuration for source index generation.
 
         Args:
@@ -914,15 +967,23 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPrepResult, SourceIndexExecRes
         """
         self._log_info(">>> GenerateSourceIndexNode.prep: Preparing for source index generation. <<<")
         try:
-            files_data: FileDataList = self._get_required_shared(shared, "files")
-            project_name: str = self._get_required_shared(shared, "project_name")
-            config: ConfigDict = self._get_required_shared(shared, "config")
-            source_config: ConfigDict = self._get_required_shared(shared, "source_config")
-            llm_config: dict[str, Any] = self._get_required_shared(shared, "llm_config")
-            cache_config: dict[str, Any] = self._get_required_shared(shared, "cache_config")
+            files_data_any: Any = self._get_required_shared(shared, "files")
+            project_name_any: Any = self._get_required_shared(shared, "project_name")
+            config_any: Any = self._get_required_shared(shared, "config")
+            source_config_any: Any = self._get_required_shared(shared, "source_config")
+            llm_config_any: Any = self._get_required_shared(shared, "llm_config")
+            cache_config_any: Any = self._get_required_shared(shared, "cache_config")
+
+            # Type validation/casting
+            files_data: FileDataList = files_data_any if isinstance(files_data_any, list) else []
+            project_name: str = str(project_name_any) if isinstance(project_name_any, str) else "Unknown Project"
+            config: ConfigDictTyped = config_any if isinstance(config_any, dict) else {}
+            source_config: SourceConfigDictTyped = source_config_any if isinstance(source_config_any, dict) else {}
+            llm_config: LlmConfigDictTyped = llm_config_any if isinstance(llm_config_any, dict) else {}
+            cache_config: CacheConfigDictTyped = cache_config_any if isinstance(cache_config_any, dict) else {}
 
             project_scan_root_display_val: Any = shared.get("local_dir_display_root", "./")
-            project_scan_root_display = (
+            project_scan_root_display: str = (
                 str(project_scan_root_display_val).rstrip("/") if project_scan_root_display_val else "./"
             )
             if project_scan_root_display == ".":
@@ -930,9 +991,10 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPrepResult, SourceIndexExecRes
             elif project_scan_root_display and not project_scan_root_display.endswith("/"):
                 project_scan_root_display += "/"
 
-            output_config: dict[str, Any] = config.get("output", {})
+            output_config_any: Any = config.get("output", {})
+            output_config: OutputConfigDictTyped = output_config_any if isinstance(output_config_any, dict) else {}
             include_source_index_flag_raw: Any = output_config.get("include_source_index")
-            include_source_index_flag = (
+            include_source_index_flag: bool = (
                 include_source_index_flag_raw if isinstance(include_source_index_flag_raw, bool) else False
             )
             if not isinstance(include_source_index_flag_raw, bool) and include_source_index_flag_raw is not None:
@@ -945,7 +1007,8 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPrepResult, SourceIndexExecRes
             language: str = str(source_config.get("language", "unknown"))
             parser_type: str = str(source_config.get("source_index_parser", "none"))
             self._log_info("Decision for source_index: lang=%s, parser=%s", language, parser_type)
-            return {
+
+            prep_result: SourceIndexPrepResult = {
                 "skip": False,
                 "files_data": files_data,
                 "project_name": project_name,
@@ -955,7 +1018,8 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPrepResult, SourceIndexExecRes
                 "llm_config": llm_config,
                 "cache_config": cache_config,
             }
-        except ValueError as e:
+            return prep_result
+        except ValueError as e:  # From _get_required_shared
             self._log_error("Prep for source index failed (missing data): %s", e, exc_info=True)
             return {"skip": True, "reason": f"Missing shared data: {e!s}"}
         except Exception as e:  # noqa: BLE001
@@ -974,18 +1038,20 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPrepResult, SourceIndexExecRes
         """
         self._log_info(">>> GenerateSourceIndexNode.exec: Start. Skip flag: %s <<<", prep_res.get("skip"))
         if not isinstance(prep_res, dict) or prep_res.get("skip", True):
-            reason = prep_res.get("reason", "N/A") if isinstance(prep_res, dict) else "Invalid prep_res"
+            reason_any: Any = prep_res.get("reason", "N/A") if isinstance(prep_res, dict) else "Invalid prep_res"
+            reason: str = str(reason_any)
             self._log_info("Skipping source index generation in exec. Reason: %s", reason)
             return None
 
-        files_data: FileDataList = prep_res["files_data"]
-        project_name: str = prep_res["project_name"]
-        language: str = prep_res["language"]
-        parser_type: str = prep_res["parser_type"]
-        scan_root: str = prep_res["project_scan_root_display"]
-        log_exec_params_format = "project '%s' (Language:%s, Parser:%s, Files:%d, Scan Root Display:'%s')"
+        files_data: FileDataList = prep_res["files_data"]  # type: ignore[assignment]
+        project_name: str = prep_res["project_name"]  # type: ignore[assignment]
+        language: str = prep_res["language"]  # type: ignore[assignment]
+        parser_type: str = prep_res["parser_type"]  # type: ignore[assignment]
+        scan_root: str = prep_res["project_scan_root_display"]  # type: ignore[assignment]
+
+        log_format = "project '%s' (Language:%s, Parser:%s, Files:%d, Scan Root Display:'%s')"
         self._log_info(
-            "Executing source index generation for " + log_exec_params_format,
+            "Executing source index generation for " + log_format,
             project_name,
             language,
             parser_type,
@@ -1002,20 +1068,21 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPrepResult, SourceIndexExecRes
                 self._log_info("Using AST-based parser for Python source index.")
                 markdown_content = self._format_python_index(project_name, files_data, scan_root)
             elif parser_type == "llm":
+                # Placeholder for LLM-based parsing if implemented
                 self._log_warning("LLM-based source index for '%s' not implemented. Using generic.", language)
                 markdown_content = self._format_generic_index(project_name, files_data, scan_root)
-            else:
+            else:  # Default to generic
                 self._log_info("Using generic file list for source index (parser: %s).", parser_type)
                 markdown_content = self._format_generic_index(project_name, files_data, scan_root)
             return markdown_content if markdown_content.strip() else None
         except Exception as e:  # noqa: BLE001
             self._log_error("Unexpected error formatting source index: %s", e, exc_info=True)
-            return None
+            return None  # Return None on failure
 
     def post(
-        self: "GenerateSourceIndexNode",
-        shared: SharedState,
-        prep_res: SourceIndexPrepResult,
+        self,
+        shared: SLSharedState,
+        prep_res: SourceIndexPrepResult,  # prep_res not used, but part of signature
         exec_res: SourceIndexExecResult,
     ) -> None:
         """Store the generated source index content in the shared state.
@@ -1026,9 +1093,9 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPrepResult, SourceIndexExecRes
             exec_res: The Markdown content string from `exec`, or None.
 
         """
-        del prep_res
+        del prep_res  # Mark as unused
         self._log_info(">>> GenerateSourceIndexNode.post: Finalizing. <<<")
-        shared["source_index_content"] = None
+        shared["source_index_content"] = None  # Default to None
 
         if isinstance(exec_res, str) and exec_res.strip():
             shared["source_index_content"] = exec_res

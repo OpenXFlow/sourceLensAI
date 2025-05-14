@@ -21,30 +21,43 @@ from sourcelens.utils.validation import (
     validate_yaml_list,
 )
 
-# Import BaseNode and generic TypeVars from our base_node module
-from .base_node import BaseNode, SharedState
+# Import BaseNode and SharedState type alias from base_node module
+from .base_node import BaseNode, SLSharedState  # Corrected import for SLSharedState
 
 # --- Type Aliases for IdentifyAbstractions ---
-IdentifyAbstractionsPrepResult: TypeAlias = dict[str, Any]
-"""Type alias for the preparation result of IdentifyAbstractions node."""
-
-AbstractionItem: TypeAlias = dict[str, Any]
+AbstractionItem: TypeAlias = dict[str, Union[str, list[int]]]
+"""Type alias for a single identified abstraction after processing.
+   Keys: 'name' (str), 'description' (str), 'files' (list[int] - validated indices).
+"""
 AbstractionsList: TypeAlias = list[AbstractionItem]
-"""Type alias for the list of identified abstractions (execution result)."""
+"""Type alias for the list of identified abstractions (execution result for IdentifyAbstractions)."""
+
+IdentifyAbstractionsPrepResult: TypeAlias = dict[str, Any]
+"""Type alias for the preparation result of IdentifyAbstractions node.
+   Contains keys like 'context_str', 'file_listing_str', 'file_count',
+   'project_name', 'language', 'llm_config', 'cache_config', 'files_data_ref'.
+"""
 
 # --- Type Aliases for AnalyzeRelationships ---
+RelationshipDetail: TypeAlias = dict[str, Union[int, str]]
+"""Type alias for a single relationship detail.
+   Keys: 'from' (int), 'to' (int), 'label' (str).
+"""
+RelationshipsOutput: TypeAlias = dict[str, Union[str, list[RelationshipDetail]]]
+"""Type alias for the execution result of AnalyzeRelationships node.
+   Keys: 'summary' (str), 'details' (list[RelationshipDetail]).
+"""
 AnalyzeRelationshipsPrepResult: TypeAlias = dict[str, Any]
-"""Type alias for the preparation result of AnalyzeRelationships node."""
-
-RelationshipDetail: TypeAlias = dict[str, Any]
-RelationshipsOutput: TypeAlias = dict[str, Any]
-"""Type alias for the execution result of AnalyzeRelationships node."""
+"""Type alias for the preparation result of AnalyzeRelationships node.
+   Contains keys like 'num_abstractions', 'project_name', 'language',
+   'llm_config', 'cache_config', 'context_str', 'abstraction_listing_str'.
+"""
 
 
 # Common Type Aliases used within this module
 FileDataList: TypeAlias = list[tuple[str, str]]
 PathToIndexMap: TypeAlias = dict[str, int]
-RawIndexEntry: TypeAlias = Union[str, int, float, None]
+RawLLMIndexEntry: TypeAlias = Union[str, int, float, None]  # Index entry direct from LLM YAML
 
 # Module-level logger
 module_logger: logging.Logger = logging.getLogger(__name__)
@@ -59,7 +72,7 @@ ABSTRACTION_ITEM_SCHEMA: dict[str, Any] = {
     "properties": {
         "name": {"type": "string", "minLength": 1},
         "description": {"type": "string", "minLength": 1},
-        "file_indices": {"type": "array", "items": {"type": ["integer", "string"]}},
+        "file_indices": {"type": "array", "items": {"type": ["integer", "string", "number"]}},  # Allow number for float
     },
     "required": ["name", "description", "file_indices"],
     "additionalProperties": False,
@@ -67,8 +80,8 @@ ABSTRACTION_ITEM_SCHEMA: dict[str, Any] = {
 RELATIONSHIP_ITEM_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "from_abstraction": {"type": ["integer", "string"]},
-        "to_abstraction": {"type": ["integer", "string"]},
+        "from_abstraction": {"type": ["integer", "string", "number"]},  # Allow number for float
+        "to_abstraction": {"type": ["integer", "string", "number"]},  # Allow number for float
         "label": {"type": "string", "minLength": 1},
     },
     "required": ["from_abstraction", "to_abstraction", "label"],
@@ -94,9 +107,7 @@ class IdentifyAbstractions(BaseNode[IdentifyAbstractionsPrepResult, Abstractions
     in the shared state.
     """
 
-    def _try_parse_index_from_string(
-        self: "IdentifyAbstractions", entry_str: str, path_to_index_map: PathToIndexMap
-    ) -> Optional[int]:
+    def _try_parse_index_from_string(self, entry_str: str, path_to_index_map: PathToIndexMap) -> Optional[int]:
         """Attempt to parse an integer index from a string entry.
 
         Handles formats like "idx # comment", "idx", or a direct file path
@@ -126,7 +137,7 @@ class IdentifyAbstractions(BaseNode[IdentifyAbstractionsPrepResult, Abstractions
         return parsed_idx
 
     def _parse_single_index(
-        self: "IdentifyAbstractions", idx_entry: RawIndexEntry, path_to_index_map: PathToIndexMap, file_count: int
+        self, idx_entry: RawLLMIndexEntry, path_to_index_map: PathToIndexMap, file_count: int
     ) -> Optional[int]:
         """Parse a single file index entry from the LLM response.
 
@@ -169,8 +180,8 @@ class IdentifyAbstractions(BaseNode[IdentifyAbstractionsPrepResult, Abstractions
             return None
 
     def _parse_and_validate_indices(
-        self: "IdentifyAbstractions",
-        raw_indices: list[Any],
+        self,
+        raw_indices: list[Any],  # LLM can return various types in the list
         path_to_index_map: PathToIndexMap,
         file_count: int,
         item_name: str,
@@ -196,7 +207,18 @@ class IdentifyAbstractions(BaseNode[IdentifyAbstractionsPrepResult, Abstractions
             )
             return []
 
-        for idx_entry in raw_indices:
+        for idx_entry_any in raw_indices:
+            # Ensure idx_entry_any is of a type that _parse_single_index expects
+            if not isinstance(idx_entry_any, (str, int, float)) and idx_entry_any is not None:
+                module_logger.warning(
+                    "Skipping invalid type in raw_indices for abstraction '%s': %s (type: %s)",
+                    item_name,
+                    idx_entry_any,
+                    type(idx_entry_any).__name__,
+                )
+                continue
+            idx_entry: RawLLMIndexEntry = idx_entry_any
+
             valid_idx = self._parse_single_index(idx_entry, path_to_index_map, file_count)
             if valid_idx is not None:
                 validated_indices.add(valid_idx)
@@ -209,7 +231,7 @@ class IdentifyAbstractions(BaseNode[IdentifyAbstractionsPrepResult, Abstractions
             )
         return sorted(validated_indices)
 
-    def prep(self, shared: SharedState) -> IdentifyAbstractionsPrepResult:
+    def prep(self, shared: SLSharedState) -> IdentifyAbstractionsPrepResult:
         """Prepare context and parameters for abstraction identification LLM prompt.
 
         Args:
@@ -243,11 +265,11 @@ class IdentifyAbstractions(BaseNode[IdentifyAbstractionsPrepResult, Abstractions
             "language": language,
             "llm_config": llm_config,
             "cache_config": cache_config,
-            "files_data_ref": files_data,
+            "files_data_ref": files_data,  # Reference for _process_raw_abstractions
         }
 
     def _process_raw_abstractions(
-        self: "IdentifyAbstractions", raw_abstractions_list: list[Any], files_data: FileDataList, file_count: int
+        self, raw_abstractions_list: list[Any], files_data_ref: FileDataList, file_count: int
     ) -> AbstractionsList:
         """Process and validate a list of raw abstraction items from LLM response.
 
@@ -259,30 +281,41 @@ class IdentifyAbstractions(BaseNode[IdentifyAbstractionsPrepResult, Abstractions
             raw_abstractions_list: List of items parsed from LLM's YAML response.
                                    These items are expected to have already passed
                                    the ABSTRACTION_ITEM_SCHEMA validation.
-            files_data: Original list of (path, content) tuples from `shared_state`,
-                        used to map file paths to indices if necessary.
+            files_data_ref: Original list of (path, content) tuples from `shared_state`,
+                            used to map file paths to indices if necessary.
             file_count: Total number of files, for validating index ranges.
 
         Returns:
-            A list of `AbstractionItem` dictionaries, where 'files' key now
+            A list of `AbstractionItem` dictionaries, where 'file_indices' key now
             contains a list of validated integer indices.
 
         """
         validated_abstractions: AbstractionsList = []
-        path_to_index_map: PathToIndexMap = {path: i for i, (path, _) in enumerate(files_data)}
+        path_to_index_map: PathToIndexMap = {path: i for i, (path, _) in enumerate(files_data_ref)}
 
-        for item_dict in raw_abstractions_list:
-            item_name = str(item_dict.get("name", "Unknown Abstraction"))
-            item_desc = str(item_dict.get("description", ""))
+        for item_dict_any in raw_abstractions_list:
+            if not isinstance(item_dict_any, dict):  # Should be caught by validate_yaml_list with item_schema
+                module_logger.warning("Skipping non-dictionary item in raw_abstractions_list: %s", item_dict_any)
+                continue
+            item_dict: dict[str, Any] = item_dict_any
+
+            item_name_raw: Any = item_dict.get("name", "Unknown Abstraction")
+            item_desc_raw: Any = item_dict.get("description", "")
+            item_name: str = str(item_name_raw).strip() if isinstance(item_name_raw, str) else "Unknown Abstraction"
+            item_desc: str = str(item_desc_raw).strip() if isinstance(item_desc_raw, str) else ""
+
             raw_indices_list_val: Any = item_dict.get("file_indices", [])
             raw_indices_list = raw_indices_list_val if isinstance(raw_indices_list_val, list) else []
 
-            unique_indices = self._parse_and_validate_indices(
+            unique_indices: list[int] = self._parse_and_validate_indices(
                 raw_indices_list, path_to_index_map, file_count, item_name
             )
-            validated_abstractions.append(
-                {"name": item_name.strip(), "description": item_desc.strip(), "files": unique_indices}
-            )
+            processed_item: AbstractionItem = {
+                "name": item_name,
+                "description": item_desc,
+                "files": unique_indices,
+            }
+            validated_abstractions.append(processed_item)
         return validated_abstractions
 
     def exec(self, prep_res: IdentifyAbstractionsPrepResult) -> AbstractionsList:
@@ -309,14 +342,16 @@ class IdentifyAbstractions(BaseNode[IdentifyAbstractionsPrepResult, Abstractions
             file_listing=prep_res["file_listing_str"],
             language=prep_res["language"],
         )
+        response_text: str
         try:
-            response_text: str = call_llm(prompt, llm_config, cache_config)
+            response_text = call_llm(prompt, llm_config, cache_config)
         except LlmApiError as e:
             self._log_error("LLM call failed during abstraction identification: %s", e, exc_info=True)
             return []
 
+        raw_abstractions_from_yaml: list[Any]  # Type from validate_yaml_list
         try:
-            raw_abstractions_from_yaml: list[Any] = validate_yaml_list(response_text, ABSTRACTION_ITEM_SCHEMA)
+            raw_abstractions_from_yaml = validate_yaml_list(response_text, ABSTRACTION_ITEM_SCHEMA)
         except ValidationFailure as e_val:
             self._log_error("YAML validation failed for abstractions: %s", e_val)
             if e_val.raw_output:
@@ -327,6 +362,7 @@ class IdentifyAbstractions(BaseNode[IdentifyAbstractionsPrepResult, Abstractions
             return []
 
         try:
+            # files_data_ref and file_count are present in prep_res
             validated_abstractions = self._process_raw_abstractions(
                 raw_abstractions_from_yaml, prep_res["files_data_ref"], prep_res["file_count"]
             )
@@ -343,7 +379,7 @@ class IdentifyAbstractions(BaseNode[IdentifyAbstractionsPrepResult, Abstractions
             self._log_error("Error processing validated abstractions: %s", e_proc, exc_info=True)
             return []
 
-    def post(self, shared: SharedState, prep_res: IdentifyAbstractionsPrepResult, exec_res: AbstractionsList) -> None:
+    def post(self, shared: SLSharedState, prep_res: IdentifyAbstractionsPrepResult, exec_res: AbstractionsList) -> None:
         """Update the shared state with identified abstractions.
 
         Args:
@@ -368,7 +404,7 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
     """
 
     def _parse_single_relationship(
-        self: "AnalyzeRelationships", rel_item: dict[str, Any], num_abstractions: int
+        self, rel_item: dict[str, Any], num_abstractions: int
     ) -> Optional[tuple[RelationshipDetail, set[int]]]:
         """Parse and validate a single relationship item from LLM response.
 
@@ -383,21 +419,26 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
 
         """
         try:
-            from_entry: Any = rel_item.get("from_abstraction")
-            to_entry: Any = rel_item.get("to_abstraction")
-            label_val: Any = rel_item.get("label")
+            from_entry_any: Any = rel_item.get("from_abstraction")
+            to_entry_any: Any = rel_item.get("to_abstraction")
+            label_val_any: Any = rel_item.get("label")
+
+            from_entry: RawLLMIndexEntry = from_entry_any
+            to_entry: RawLLMIndexEntry = to_entry_any
 
             from_idx_str: Optional[str] = None
-            if isinstance(from_entry, (str, int, float)):
+            if isinstance(from_entry, (str, int, float)):  # float can be int-like
                 from_idx_str = str(from_entry).split("#", 1)[0].strip()
 
             to_idx_str: Optional[str] = None
-            if isinstance(to_entry, (str, int, float)):
+            if isinstance(to_entry, (str, int, float)):  # float can be int-like
                 to_idx_str = str(to_entry).split("#", 1)[0].strip()
 
             from_idx: Optional[int] = int(from_idx_str) if from_idx_str and from_idx_str.isdigit() else None
             to_idx: Optional[int] = int(to_idx_str) if to_idx_str and to_idx_str.isdigit() else None
-            label: Optional[str] = str(label_val).strip() if isinstance(label_val, str) and label_val.strip() else None
+            label: Optional[str] = (
+                str(label_val_any).strip() if isinstance(label_val_any, str) and label_val_any.strip() else None
+            )
 
             if from_idx is None or to_idx is None or label is None:
                 raise ValueError("Missing or invalid 'from_abstraction', 'to_abstraction', or 'label'.")
@@ -405,13 +446,14 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
                 raise ValueError(
                     f"Relationship index out of range [0-{num_abstractions - 1}]: from={from_idx}, to={to_idx}."
                 )
-            return {"from": from_idx, "to": to_idx, "label": label}, {from_idx, to_idx}
+            relationship_detail: RelationshipDetail = {"from": from_idx, "to": to_idx, "label": label}
+            return relationship_detail, {from_idx, to_idx}
         except (ValueError, TypeError, AttributeError) as e:
             module_logger.warning("Could not parse relationship item: %s. Error: %s", rel_item, e)
             return None
 
     def _parse_and_validate_relationships(
-        self: "AnalyzeRelationships", raw_rels_list: list[Any], num_abstractions: int
+        self, raw_rels_list: list[Any], num_abstractions: int
     ) -> tuple[list[RelationshipDetail], set[int]]:
         """Parse and validate the list of relationship details from LLM response.
 
@@ -434,10 +476,11 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
             )
             return [], set()
 
-        for rel_item in raw_rels_list:
-            if not isinstance(rel_item, dict):  # Should be guaranteed by RELATIONSHIP_ITEM_SCHEMA
-                module_logger.warning("Skipping non-dictionary relationship item: %s", rel_item)
+        for rel_item_any in raw_rels_list:
+            if not isinstance(rel_item_any, dict):  # Should be guaranteed by RELATIONSHIP_ITEM_SCHEMA
+                module_logger.warning("Skipping non-dictionary relationship item: %s", rel_item_any)
                 continue
+            rel_item: dict[str, Any] = rel_item_any
             parsed_result = self._parse_single_relationship(rel_item, num_abstractions)
             if parsed_result:
                 validated_rel, involved = parsed_result
@@ -445,9 +488,7 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
                 involved_indices.update(involved)
         return validated_relationships, involved_indices
 
-    def _build_relationship_context(
-        self: "AnalyzeRelationships", abstractions: AbstractionsList, files_data: FileDataList
-    ) -> tuple[str, str]:
+    def _build_relationship_context(self, abstractions: AbstractionsList, files_data: FileDataList) -> tuple[str, str]:
         """Build context string and abstraction listing for the LLM prompt.
 
         Args:
@@ -469,10 +510,8 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
         for i, abstr in enumerate(abstractions):
             abstr_name = str(abstr.get("name", f"Unnamed Abstraction {i}"))
             abstr_desc = str(abstr.get("description", "N/A"))
-            file_indices_val: Any = abstr.get("files", [])
-            file_indices = (
-                [idx for idx in file_indices_val if isinstance(idx, int)] if isinstance(file_indices_val, list) else []
-            )
+            # 'files' in AbstractionItem is list[int]
+            file_indices: list[int] = abstr.get("files", [])  # type: ignore[assignment]
             file_indices_str = ", ".join(map(str, file_indices)) if file_indices else "None"
 
             context_builder.append(f"- Index {i}: {abstr_name}\n  Desc: {abstr_desc}\n  Files: [{file_indices_str}]")
@@ -493,7 +532,7 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
             context_builder.append("No specific file content linked for relationship analysis based on abstractions.")
         return "\n".join(context_builder), "\n".join(abstraction_info_for_prompt)
 
-    def prep(self, shared: SharedState) -> AnalyzeRelationshipsPrepResult:
+    def prep(self, shared: SLSharedState) -> AnalyzeRelationshipsPrepResult:
         """Prepare context for relationship analysis LLM prompt.
 
         Args:
@@ -519,8 +558,8 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
             "language": language,
             "llm_config": llm_config,
             "cache_config": cache_config,
-            "context_str": "No abstractions to analyze.",
-            "abstraction_listing_str": "N/A",
+            "context_str": "No abstractions to analyze.",  # Default
+            "abstraction_listing_str": "N/A",  # Default
         }
         if not abstractions:
             self._log_warning("No abstractions provided for relationship analysis. Exec will produce default output.")
@@ -533,7 +572,7 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
         return prep_data
 
     def _call_llm_and_validate_response(
-        self: "AnalyzeRelationships", prompt: str, llm_config: dict[str, Any], cache_config: dict[str, Any]
+        self, prompt: str, llm_config: dict[str, Any], cache_config: dict[str, Any]
     ) -> Optional[dict[str, Any]]:
         """Call the LLM and perform initial YAML validation for relationship data.
 
@@ -550,8 +589,9 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
             otherwise None.
 
         """
+        response_text: str
         try:
-            response_text: str = call_llm(prompt, llm_config, cache_config)
+            response_text = call_llm(prompt, llm_config, cache_config)
             # validate_yaml_dict returns dict[str, Any] or raises ValidationFailure
             return validate_yaml_dict(response_text, RELATIONSHIPS_DICT_SCHEMA)
         except LlmApiError as e:
@@ -567,7 +607,7 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
             return None
 
     def _process_validated_yaml_data(
-        self: "AnalyzeRelationships", relationships_data_yaml: Optional[dict[str, Any]], num_abstractions: int
+        self, relationships_data_yaml: Optional[dict[str, Any]], num_abstractions: int
     ) -> RelationshipsOutput:
         """Process validated YAML data to extract and refine relationship details.
 
@@ -588,20 +628,19 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
         """
         default_output: RelationshipsOutput = {"summary": DEFAULT_ERROR_SUMMARY, "details": []}
         if not isinstance(relationships_data_yaml, dict):
-            # This implies relationships_data_yaml is None or an unexpected type if validate_yaml_dict failed silently.
-            if relationships_data_yaml is not None:  # Log only if it's an unexpected type
+            if relationships_data_yaml is not None:
                 self._log_error(
                     "Invalid data type for relationships_data_yaml: expected dict or None, got %s",
                     type(relationships_data_yaml).__name__,
                 )
-            # Default summary if YAML was None (e.g. LLM/validation failed)
             default_output["summary"] = "Failed to obtain or validate relationship data from LLM."
             return default_output
 
         raw_rels_list_val: Any = relationships_data_yaml.get("relationships", [])
         raw_rels_list = raw_rels_list_val if isinstance(raw_rels_list_val, list) else []
         valid_rels, involved_indices = self._parse_and_validate_relationships(raw_rels_list, num_abstractions)
-        summary_text = str(relationships_data_yaml.get("summary", "No summary provided by LLM."))
+        summary_text_raw: Any = relationships_data_yaml.get("summary", "No summary provided by LLM.")
+        summary_text: str = str(summary_text_raw)
 
         if num_abstractions > 1 and not valid_rels and raw_rels_list:
             self._log_warning("Relationships parsed from LLM, but none were valid after processing.")
@@ -610,7 +649,7 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
 
         if num_abstractions > 1 and len(involved_indices) < num_abstractions:
             missing_indices = set(range(num_abstractions)) - involved_indices
-            if missing_indices:  # Only log if there are actually missing indices
+            if missing_indices:
                 self._log_warning(
                     "Relationship analysis may be incomplete. Abstractions not involved in any "
                     "valid reported relationship (indices): %s",
@@ -647,11 +686,10 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
             language=prep_res["language"],
         )
 
-        validated_yaml_data = self._call_llm_and_validate_response(
+        validated_yaml_data: Optional[dict[str, Any]] = self._call_llm_and_validate_response(
             prompt, prep_res["llm_config"], prep_res["cache_config"]
         )
 
-        # _call_llm_and_validate_response returns None on LLM or YAML validation failure
         if validated_yaml_data is None:
             default_output["summary"] = "Failed to get valid relationship data from LLM."
             return default_output
@@ -664,7 +702,7 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
             return default_output
 
     def post(
-        self, shared: SharedState, prep_res: AnalyzeRelationshipsPrepResult, exec_res: RelationshipsOutput
+        self, shared: SLSharedState, prep_res: AnalyzeRelationshipsPrepResult, exec_res: RelationshipsOutput
     ) -> None:
         """Update shared state with analyzed relationships.
 
@@ -677,8 +715,11 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
         """
         del prep_res  # Mark as unused
         shared["relationships"] = exec_res
-        summary_snippet = str(exec_res.get("summary", ""))[:50]
-        details_count = len(exec_res.get("details", []))
+        summary_snippet_raw: Any = exec_res.get("summary", "")
+        summary_snippet: str = str(summary_snippet_raw)[:50]
+        details_raw: Any = exec_res.get("details", [])
+        details_list: list[RelationshipDetail] = details_raw if isinstance(details_raw, list) else []
+        details_count = len(details_list)
         self._log_info(
             "Stored relationship analysis results. Summary: '%s...', Details count: %d",
             summary_snippet,

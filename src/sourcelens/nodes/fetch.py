@@ -2,23 +2,39 @@
 
 """Node responsible for fetching source code from GitHub or local directories."""
 
-# import logging # F401: Removed unused import
 from pathlib import Path
-from typing import Optional, TypeAlias
+from typing import Any, Optional, TypedDict
 
-from .base_node import BaseNode, SharedState
+from typing_extensions import TypeAlias  # Použijeme TypeAlias z typing_extensions
+
+# Import BaseNode and SLSharedState from base_node module
+from .base_node import BaseNode, SLSharedState
 
 # Local type aliases for this node's prep/exec results
 FetchPrepResult: TypeAlias = bool
 """Type alias for the result of the preparation phase of FetchCode (fetch success status)."""
-FetchExecResult: TypeAlias = None
+FetchExecResult: TypeAlias = None  # Pre None nepotrebujeme TypeAlias, ale pre konzistenciu môže byť
 """Type alias for the result of the execution phase of FetchCode (always None)."""
 
-FileDataList: TypeAlias = list[tuple[str, str]]
-"""Type alias for a list of (filepath, content) tuples."""
+FileDataListInternal: TypeAlias = list[tuple[str, str]]
+"""Type alias for a list of (filepath, content) tuples used internally."""
 
 
-class FetchCode(BaseNode[FetchPrepResult, FetchExecResult]):
+# TypedDict for better internal context management in prep sub-methods
+class _PrepContext(TypedDict):
+    """Internal context for prep method sub-functions."""
+
+    project_name: str
+    repo_url: Optional[str]
+    local_dir_str: Optional[str]
+    include_patterns: set[str]
+    exclude_patterns: set[str]
+    max_file_size: int
+    use_relative_paths: bool
+    github_token: Optional[str]
+
+
+class FetchCode(BaseNode[FetchPrepResult, FetchExecResult]):  # Použité aliasy
     """Fetch source code files from GitHub or a local directory.
 
     This node is responsible for the initial step of acquiring the codebase
@@ -27,38 +43,34 @@ class FetchCode(BaseNode[FetchPrepResult, FetchExecResult]):
     file data and the derived project name.
     """
 
-    def _derive_project_name(self, shared: SharedState) -> str:
+    def _derive_project_name(self, shared: SLSharedState) -> str:
         """Derive a project name from repo URL or local directory path.
 
-        If a project name is already set in `shared_state` (e.g., from command-line
-        arguments), it's used directly. Otherwise, this method attempts to derive
-        the name from the repository URL (typically the last part of the path,
-        stripping ".git") or from the name of the local directory being processed.
-        If derivation fails or no source is provided, it defaults to "unknown_project".
-        The determined project name is stored back into `shared["project_name"]`.
-
         Args:
-            shared: The shared state dictionary. Expected to contain 'repo_url'
-                    or 'local_dir' if 'project_name' is not already set.
+            shared: The shared state dictionary.
 
         Returns:
             The derived or existing project name.
 
         Raises:
-            ValueError: If neither 'repo_url' nor 'local_dir' is present in the
-                        shared state when a project name needs to be derived and
-                        'project_name' is not already set.
+            ValueError: If project name derivation fails.
 
         """
-        project_name_shared: Optional[str] = shared.get("project_name")
-        if isinstance(project_name_shared, str) and project_name_shared.strip():
-            self._log_info("Using provided project name: %s", project_name_shared)
+        project_name_shared_any: Any = shared.get("project_name")
+        project_name_shared: Optional[str] = (
+            str(project_name_shared_any) if isinstance(project_name_shared_any, str) else None
+        )
+
+        if project_name_shared and project_name_shared.strip():
+            self._log_info("Using provided project name: %s", project_name_shared.strip())
             return project_name_shared.strip()
 
-        repo_url: Optional[str] = shared.get("repo_url")
-        local_dir_str: Optional[str] = shared.get("local_dir")
-        derived_name: Optional[str] = None
+        repo_url_any: Any = shared.get("repo_url")
+        local_dir_str_any: Any = shared.get("local_dir")
+        repo_url: Optional[str] = str(repo_url_any) if isinstance(repo_url_any, str) else None
+        local_dir_str: Optional[str] = str(local_dir_str_any) if isinstance(local_dir_str_any, str) else None
 
+        derived_name: Optional[str] = None
         if repo_url:
             try:
                 name_part = repo_url.split("/")[-1]
@@ -88,85 +100,120 @@ class FetchCode(BaseNode[FetchPrepResult, FetchExecResult]):
         self._log_info("Derived project name: %s", final_name)
         return final_name
 
-    def prep(self, shared: SharedState) -> FetchPrepResult:
-        """Prepare parameters, fetch files, and update shared state.
-
-        This method orchestrates the code fetching process. It first derives the
-        project name. Then, based on 'repo_url' or 'local_dir' in `shared_state`,
-        it calls the appropriate crawling utility. Fetched file data (path and content)
-        is stored in `shared['files']`.
+    def _gather_prep_context(self, shared: SLSharedState, project_name: str) -> _PrepContext:
+        """Gather and validate context needed for fetching files.
 
         Args:
-            shared: The shared state dictionary. It is updated with 'files'
-                    (a `FileDataList`) and 'project_name' (a string).
+            shared: The shared state dictionary.
+            project_name: The derived or provided project name.
 
         Returns:
-            A boolean indicating whether the fetching attempt was made and
-            was not critically interrupted (True), or if a critical error
-            occurred preventing even an attempt (False). Note that True
-            is returned even if zero files are found after filtering.
+            A _PrepContext dictionary.
+
+        Raises:
+            TypeError: If max_file_size is not an integer.
+
+        """
+        repo_url_any: Any = shared.get("repo_url")
+        local_dir_str_any: Any = shared.get("local_dir")
+        include_patterns_any: Any = self._get_required_shared(shared, "include_patterns")
+        exclude_patterns_any: Any = self._get_required_shared(shared, "exclude_patterns")
+        max_file_size_any: Any = self._get_required_shared(shared, "max_file_size")
+        use_relative_paths_any: Any = shared.get("use_relative_paths", True)
+        github_token_any: Any = shared.get("github_token")
+
+        if not isinstance(max_file_size_any, int):
+            raise TypeError(f"max_file_size must be an int, got {type(max_file_size_any)}")
+
+        context: _PrepContext = {
+            "project_name": project_name,
+            "repo_url": str(repo_url_any) if isinstance(repo_url_any, str) else None,
+            "local_dir_str": str(local_dir_str_any) if isinstance(local_dir_str_any, str) else None,
+            "include_patterns": include_patterns_any if isinstance(include_patterns_any, set) else set(),
+            "exclude_patterns": exclude_patterns_any if isinstance(exclude_patterns_any, set) else set(),
+            "max_file_size": max_file_size_any,
+            "use_relative_paths": bool(use_relative_paths_any),
+            "github_token": str(github_token_any) if isinstance(github_token_any, str) else None,
+        }
+        return context
+
+    def _fetch_files_from_source(self, context: _PrepContext) -> tuple[dict[str, str], bool]:
+        """Fetch files based on the provided context (repo or local dir).
+
+        Args:
+            context: The _PrepContext dictionary.
+
+        Returns:
+            A tuple: (dictionary of fetched files, boolean success status).
+
+        """
+        from sourcelens.utils.github import crawl_github_repo
+        from sourcelens.utils.local import crawl_local_directory
+
+        files_dict: dict[str, str] = {}
+        fetch_successful = False
+
+        if context["repo_url"]:
+            self._log_info("Crawling GitHub repository: %s", context["repo_url"])
+            files_dict = crawl_github_repo(
+                repo_url=context["repo_url"],
+                token=context["github_token"],
+                include_patterns=context["include_patterns"],
+                exclude_patterns=context["exclude_patterns"],
+                max_file_size=context["max_file_size"],
+                use_relative_paths=context["use_relative_paths"],
+            )
+            fetch_successful = True
+        elif context["local_dir_str"]:
+            self._log_info("Crawling local directory: %s", context["local_dir_str"])
+            files_dict = crawl_local_directory(
+                directory=context["local_dir_str"],
+                include_patterns=context["include_patterns"],
+                exclude_patterns=context["exclude_patterns"],
+                max_file_size=context["max_file_size"],
+                use_relative_paths=context["use_relative_paths"],
+            )
+            fetch_successful = True
+        else:
+            self._log_error("Neither repository URL nor local directory specified for fetching.")
+            fetch_successful = False
+        return files_dict, fetch_successful
+
+    def prep(self, shared: SLSharedState) -> FetchPrepResult:
+        """Prepare parameters, fetch files, and update shared state.
+
+        Args:
+            shared: The shared state dictionary.
+
+        Returns:
+            A boolean indicating fetch attempt success.
 
         """
         self._log_info("Preparing and fetching code...")
-        files_list: FileDataList = []
+        files_list: FileDataListInternal = []
         fetch_attempt_made_successfully = False
         project_name_for_log: str = str(shared.get("project_name", "unknown_project_initial"))
 
-        from sourcelens.utils.github import GithubApiError, crawl_github_repo
-        from sourcelens.utils.local import crawl_local_directory
+        from sourcelens.utils.github import GithubApiError
 
         try:
             project_name = self._derive_project_name(shared)
             project_name_for_log = project_name
 
-            repo_url: Optional[str] = shared.get("repo_url")
-            local_dir_str: Optional[str] = shared.get("local_dir")
-
-            include_patterns: set[str] = self._get_required_shared(shared, "include_patterns")
-            exclude_patterns: set[str] = self._get_required_shared(shared, "exclude_patterns")
-            max_file_size: int = self._get_required_shared(shared, "max_file_size")
-
-            use_relative_paths: bool = shared.get("use_relative_paths", True)
-            github_token: Optional[str] = shared.get("github_token")
-
-            files_dict: dict[str, str] = {}
-            if repo_url:
-                self._log_info("Crawling GitHub repository: %s", repo_url)
-                files_dict = crawl_github_repo(
-                    repo_url=repo_url,
-                    token=github_token,
-                    include_patterns=include_patterns,
-                    exclude_patterns=exclude_patterns,
-                    max_file_size=max_file_size,
-                    use_relative_paths=use_relative_paths,
-                )
-                fetch_attempt_made_successfully = True
-            elif local_dir_str:
-                self._log_info("Crawling local directory: %s", local_dir_str)
-                files_dict = crawl_local_directory(
-                    directory=local_dir_str,
-                    include_patterns=include_patterns,
-                    exclude_patterns=exclude_patterns,
-                    max_file_size=max_file_size,
-                    use_relative_paths=use_relative_paths,
-                )
-                fetch_attempt_made_successfully = True
-            else:
-                self._log_error("Neither repository URL nor local directory specified for fetching.")
-                fetch_attempt_made_successfully = False
-
+            prep_context = self._gather_prep_context(shared, project_name)
+            files_dict, fetch_attempt_made_successfully = self._fetch_files_from_source(prep_context)
             files_list = list(files_dict.items())
 
-        except (OSError, GithubApiError, ValueError, ImportError) as e:
+        except (OSError, GithubApiError, ValueError, ImportError, TypeError) as e:
             self._log_error(
-                "File crawling failed for '%s': %s. Proceeding with empty file list.",
+                "File crawling or context gathering failed for '%s': %s. Proceeding with empty file list.",
                 project_name_for_log,
                 e,
                 exc_info=True,
             )
             files_list = []
             fetch_attempt_made_successfully = False
-        except Exception as e:  # noqa: BLE001 - Catch-all for unexpected errors during complex I/O
+        except Exception as e:  # noqa: BLE001
             self._log_error("Unexpected error during code fetching: %s", e, exc_info=True)
             files_list = []
             fetch_attempt_made_successfully = False
@@ -183,21 +230,18 @@ class FetchCode(BaseNode[FetchPrepResult, FetchExecResult]):
         return fetch_attempt_made_successfully
 
     def exec(self, prep_res: FetchPrepResult) -> FetchExecResult:
-        """Execute step for FetchCode (no-op as work is done in prep).
+        """Execute step for FetchCode (no-op).
 
         Args:
             prep_res: The boolean result from the `prep` method.
-
-        Returns:
-            Always None.
 
         """
         self._log_info("Exec step skipped (prep result: %s).", prep_res)
         if not prep_res:
             self._log_warning("Prep step for FetchCode indicated a failure. No files may have been fetched.")
-        return None
+        # No return value for None type
 
-    def post(self, shared: SharedState, prep_res: FetchPrepResult, exec_res: FetchExecResult) -> None:
+    def post(self, shared: SLSharedState, prep_res: FetchPrepResult, exec_res: FetchExecResult) -> None:
         """Finalize the FetchCode node's operation.
 
         Args:
@@ -206,8 +250,12 @@ class FetchCode(BaseNode[FetchPrepResult, FetchExecResult]):
             exec_res: The result from the `exec` method (None).
 
         """
-        num_files = len(shared.get("files", []))
+        del exec_res
+
+        files_any: Any = shared.get("files", [])
+        num_files: int = len(files_any) if isinstance(files_any, list) else 0
         status_message: str
+
         if not prep_res:
             status_message = "with critical errors during fetch attempt"
         elif num_files > 0:
