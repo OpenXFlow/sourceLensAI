@@ -1,4 +1,4 @@
-# Copyright (C) 2025 Jozef Darida (Find me on LinkedIn/Xing)
+# Copyright (C) 2025 Jozef Darida (LinkedIn/Xing)
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -17,7 +17,7 @@
 
 This package centralizes all prompt generation logic, organizing prompts
 into specific classes or modules based on their purpose (e.g., abstractions,
-relationships, chapter writing, diagram generation). It also provides
+relationships, chapter writing, diagram generation, source index). It also provides
 common data classes used as context for these prompts.
 
 Key exports:
@@ -27,6 +27,8 @@ Key exports:
       writing tutorial chapters.
     - ScenarioPrompts: Class for formatting prompts related to identifying
       interaction scenarios.
+    - SourceIndexPrompts: Class for formatting prompts related to LLM-based
+      source code analysis for indexing.
     - Individual diagram prompt formatters from the `diagrams` sub-package.
     - WriteChapterContext: Dataclass for chapter writing context.
     - SequenceDiagramContext: Dataclass for sequence diagram context.
@@ -34,7 +36,6 @@ Key exports:
 """
 
 # Import common dataclasses and constants first
-# Using absolute imports assuming 'src' is in PYTHONPATH or project root is set up correctly
 from sourcelens.prompts._common import (
     CODE_BLOCK_MAX_LINES,
     DEFAULT_RELATIONSHIP_LABEL,
@@ -49,15 +50,16 @@ from sourcelens.prompts._common import (
 # Import prompt-generating classes/modules
 from sourcelens.prompts.abstraction_prompts import AbstractionPrompts
 from sourcelens.prompts.chapter_prompts import ChapterPrompts
-
-# Import individual diagram prompt functions from the new sub-package
 from sourcelens.prompts.diagrams import (
+    INLINE_MERMAID_DIAGRAM_GUIDELINES_TEXT,  # Added this as it's exported by diagrams/__init__
     format_class_diagram_prompt,
     format_package_diagram_prompt,
     format_relationship_flowchart_prompt,
     format_sequence_diagram_prompt,
+    generate_file_structure_mermaid,  # Added this as it's exported by diagrams/__init__
 )
 from sourcelens.prompts.scenario_prompts import ScenarioPrompts
+from sourcelens.prompts.source_index_prompts import SourceIndexPrompts
 
 __all__: list[str] = [
     # Dataclasses
@@ -71,14 +73,17 @@ __all__: list[str] = [
     "CODE_BLOCK_MAX_LINES",
     "DEFAULT_RELATIONSHIP_LABEL",
     "MAX_FLOWCHART_LABEL_LEN",
+    "INLINE_MERMAID_DIAGRAM_GUIDELINES_TEXT",  # Added to __all__
     # Prompt Classes/Functions
     "AbstractionPrompts",
     "ChapterPrompts",
     "ScenarioPrompts",
+    "SourceIndexPrompts",  # Added to __all__
     "format_class_diagram_prompt",
     "format_package_diagram_prompt",
     "format_relationship_flowchart_prompt",
     "format_sequence_diagram_prompt",
+    "generate_file_structure_mermaid",  # Added to __all__
 ]
 
 # End of src/sourcelens/prompts/__init__.py

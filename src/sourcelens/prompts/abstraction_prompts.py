@@ -1,4 +1,4 @@
-# Copyright (C) 2025 Jozef Darida (Find me on LinkedIn/Xing)
+# Copyright (C) 2025 Jozef Darida (LinkedIn/Xing)
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -45,28 +45,29 @@ class AbstractionPrompts:
             desc_lang_hint = f" (in {lang_cap})"
 
         file_indices_instruction = (
-            "3. Relevant `file_indices`: List integer indices of related files. "
-            "Format 'index # path/comment' allowed, only leading integer matters. "
-            "Use ONLY indices from 'Available File Indices/Paths' below."
+            "3. `file_indices`: List of integer indices of related files. "  # Simpler instruction
+            "Use ONLY indices from 'Available File Indices/Paths' below. "
+            "Example: `[0, 3]` or `[6]`."  # Show simple list format
         )
+        # More explicit instruction for name and description to be simple strings
         name_instruction = (
-            f"1. Concise `name`{name_lang_hint}: A short, descriptive name. "
-            f"**MUST be a single-line string enclosed in double quotes** "
-            f'(e.g., "User Authentication").'
+            f"1. `name`{name_lang_hint}: A short, descriptive name for the abstraction. "
+            f'**This MUST be a simple YAML string value, e.g., `name: "User Authentication"`.**'
         )
         description_instruction = (
-            f"2. Beginner-friendly `description`{desc_lang_hint}: Clear explanation "
-            f"(50-100 words). **MUST be a single-line string enclosed in double quotes.** "
-            f"Newlines are NOT allowed in the description string itself."
+            f"2. `description`{desc_lang_hint}: Clear explanation (50-100 words). "
+            f'**This MUST be a simple YAML string value, e.g., `description: "Handles user login..."`.** '
+            f"Ensure it's a single line in the YAML output, even if the description is long "
+            f"(use YAML's folded `>` or literal `|` block scalar if needed for multi-line text in source, "
+            f"but the YAML parser should still see it as a single string value for the key)."
         )
+        # Updated example to reinforce simple string for name and description
         example_yaml = f"""```yaml
-- name: "Query Processing Module{name_lang_hint}"
-  description: "This component receives queries, parses them, and directs them. Like a mail dispatcher.{desc_lang_hint}"
-  file_indices:
-    - 0 # path/to/file.py
-    - "3 # another/file.py"
-- name: "Data Model Definitions{name_lang_hint}"
-  description: "Defines core data structures, specifying fields and relationships.{desc_lang_hint}"
+- name: "Query Processing Module{name_lang_hint}" # Simple string
+  description: "This component receives queries, parses them, and directs them. Like a mail dispatcher.{desc_lang_hint}" # Simple string
+  file_indices: [0, 3] # Simple list of integers
+- name: "Data Model Definitions{name_lang_hint}" # Simple string
+  description: "Defines core data structures, specifying fields and relationships.{desc_lang_hint}" # Simple string
   file_indices: [6, 7]
 # ... up to 10 abstractions ...
 ```"""
@@ -77,14 +78,14 @@ class AbstractionPrompts:
             context,
             "```",
             f"\n{language_instruction}Instructions:",
-            "For each core abstraction, provide:",
+            "For each core abstraction, provide a YAML dictionary with the following keys:",
             name_instruction,
             description_instruction,
             file_indices_instruction,
             "\nAvailable File Indices/Paths:",
             file_listing,
             "\nOutput Format:",
-            "Format response STRICTLY as a YAML list of dictionaries, enclosed in a single ```yaml code block.",
+            "Format response STRICTLY as a YAML list of these dictionaries, enclosed in a single ```yaml code block.",
             "Each dictionary represents one abstraction.",
             "\nExample:",
             example_yaml,
@@ -120,7 +121,7 @@ class AbstractionPrompts:
             list_lang_note = f" (Names/Indices correspond to list below, expected in {lang_cap})"
 
         max_index = max(0, num_abstractions - 1)
-        min_expected_rels = min(3, max(0, num_abstractions - 1))  # Ensure non-negative
+        min_expected_rels = min(3, max(0, num_abstractions - 1))
         coverage_instr = ""
         if num_abstractions > 1:
             coverage_instr = (
@@ -134,8 +135,8 @@ class AbstractionPrompts:
             f"Use **bold** or *italic* for emphasis."
         )
         rel_header = "2. `relationships`: A list detailing key interactions between abstractions:"
-        from_instr = f"    - `from_abstraction`: Integer index (0 to {max_index}) of source (or 'index # Name' format)."
-        to_instr = f"    - `to_abstraction`: Integer index (0 to {max_index}) of target (or 'index # Name' format)."
+        from_instr = f"    - `from_abstraction`: Integer index (0 to {max_index}) of source."  # Simplified
+        to_instr = f"    - `to_abstraction`: Integer index (0 to {max_index}) of target."  # Simplified
         label_instr = (
             f"    - `label`: Brief, descriptive verb phrase{lang_hint} for interaction "
             f'(e.g., "Sends data to", "Depends on"). Keep labels concise.'
@@ -150,10 +151,10 @@ summary: |
   then fetching data using *Data Access Layer*, and finally generating a response
   via the **Response Formatter**.{lang_hint}
 relationships:
-  - from_abstraction: 0 # Request Validator
-    to_abstraction: 2 # Data Access Layer
+  - from_abstraction: 0
+    to_abstraction: 2
     label: "Passes validated request to"{lang_hint}
-  - from_abstraction: "3 # Configuration Loader"
+  - from_abstraction: 3
     to_abstraction: 2
     label: "Configures database for"{lang_hint}
   # ... other key relationships ...
@@ -163,8 +164,7 @@ relationships:
             f"analyze how components interact.",
             f"\nIdentified Abstractions List{list_lang_note}:",
             abstraction_listing,
-            "\nContext (Abstraction Details & Relevant Code Snippets):",
-            "```",
+            "\nContext (Abstraction Details & Relevant Code Snippets):\n```",
             context,
             "```",
             f"\n{language_instruction}Instructions:",

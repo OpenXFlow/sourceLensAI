@@ -13,21 +13,20 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-"""SourceLens Package.
+"""Formatters for generating the source code index content.
 
-An AI-powered tool to generate tutorials from codebases by analyzing
-source code and leveraging Large Language Models.
+This package contains modules responsible for parsing source files (either via
+AST for Python or using an LLM for various languages) and formatting
+the extracted structural information into a Markdown representation for the
+code inventory.
 """
 
-# Optionally import key classes/functions for easier top-level access
-# from .main import main
-# from .flow import create_tutorial_flow
+from ._ast_python_formatter import format_python_index_from_ast
+from ._llm_default_formatter import format_index_from_llm
 
-# Define package version
-__version__ = "0.1.1"
+__all__: list[str] = [
+    "format_python_index_from_ast",
+    "format_index_from_llm",
+]
 
-# (Removed the incorrect import: from .github import ...)
-# Imports should generally happen within the modules that use them,
-# or explicitly re-exported here if intended as part of the package's public API.
-
-# End of src/sourcelens/__init__.py
+# End of src/sourcelens/nodes/index_formatters/__init__.py

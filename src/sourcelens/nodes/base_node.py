@@ -1,4 +1,4 @@
-# Copyright (C) 2025 Jozef Darida (Find me on LinkedIn/Xing)
+# Copyright (C) 2025 Jozef Darida (LinkedIn/Xing)
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
