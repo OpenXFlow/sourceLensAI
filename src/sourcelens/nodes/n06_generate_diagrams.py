@@ -16,11 +16,19 @@
 """Node responsible for generating architectural diagrams using an LLM."""
 
 import logging
+import re  # Import re module for regex operations
 from typing import Any, Final, Optional, Union
 
 from typing_extensions import TypeAlias
 
-from sourcelens.prompts import DiagramPrompts, SequenceDiagramContext
+# Updated imports for diagram prompts
+from sourcelens.prompts._common import SequenceDiagramContext
+from sourcelens.prompts.diagrams import (
+    format_class_diagram_prompt,
+    format_package_diagram_prompt,
+    format_relationship_flowchart_prompt,
+    format_sequence_diagram_prompt,
+)
 from sourcelens.utils.llm_api import LlmApiError, call_llm
 
 from .base_node import BaseNode, SLSharedState
@@ -61,6 +69,8 @@ MAX_FILES_FOR_STRUCTURE_CONTEXT: Final[int] = 50
 SCENARIO_NAME_MAX_WORDS: Final[int] = 5
 DEFAULT_DIAGRAM_FORMAT: Final[str] = "mermaid"
 EXPECTED_FILE_DATA_TUPLE_LENGTH: Final[int] = 2
+# Regex to find code block fences (``` optionally followed by language)
+CODE_FENCE_REGEX: Final[re.Pattern[str]] = re.compile(r"^\s*```(?:\w+)?\s*\n|\n\s*```\s*$", re.MULTILINE)
 
 
 class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagramsExecResult]):
@@ -71,17 +81,6 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
     analyzed context and configuration settings. The generated diagram markups
     are then stored in the shared state.
     """
-
-    def _escape_mermaid_quotes(self, text: Union[str, int, float]) -> str:
-        """Convert input to string and escape double quotes for Mermaid.
-
-        Args:
-            text: The input text, number, or float to be escaped.
-
-        Returns:
-            A string with double quotes replaced by the Mermaid escape sequence.
-        """
-        return str(text).replace('"', "#quot;")
 
     def _get_structure_context(self, files_data: Optional[FilesDataList]) -> str:
         """Prepare a string summarizing the project file structure.
@@ -238,12 +237,24 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
                 self._log_info("All diagram types are disabled. Skipping diagram generation.")
                 return None
             return self._gather_diagram_context_data(shared, flags_and_configs)
-        except ValueError as e_val:  # From _get_required_shared
+        except ValueError as e_val:
             self._log_error("Error preparing diagram context (missing shared data): %s", e_val, exc_info=True)
             raise
         except Exception as e_prep:  # noqa: BLE001
             self._log_error("Unexpected error during diagram preparation: %s", e_prep, exc_info=True)
             return None
+
+    def _clean_llm_diagram_output(self, raw_markup: str) -> str:
+        """Clean the raw markup from LLM, removing potential code fences.
+
+        Args:
+            raw_markup: The raw string output from the LLM.
+
+        Returns:
+            Cleaned markup string, with leading/trailing fences removed and stripped.
+        """
+        # Remove common code block fences like ```mermaid ... ``` or ``` ... ```
+        return CODE_FENCE_REGEX.sub("", raw_markup).strip()
 
     def _call_llm_for_diagram(
         self,
@@ -268,19 +279,22 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
         markup: DiagramMarkup = None
         try:
             markup_raw: str = call_llm(prompt, llm_config, cache_config)
-            markup = str(markup_raw or "").strip()
+            # Clean the markup to remove potential code fences
+            markup = self._clean_llm_diagram_output(markup_raw)
 
-            if not markup:
+            if not markup:  # Check after cleaning and stripping
                 self._log_warning("LLM returned empty response for %s diagram.", diagram_type)
                 return None
 
             if expected_keywords and not any(markup.startswith(kw) for kw in expected_keywords):
                 log_msg = (
                     f"LLM {diagram_type} diagram markup missing expected start. "
-                    f"Expected one of: {expected_keywords}. Received: '{markup[:50]}...'"
+                    f"Expected one of: {expected_keywords}. Received: '{markup[:70]}...'"
                 )
                 self._log_warning(log_msg)
-                return None
+                # Do not return None here if markup is otherwise present,
+                # as the combine step might still be able to use it or log the issue.
+                # The main check is if markup is empty. Starting keyword is a strong hint.
 
             self._log_info("Successfully generated %s diagram markup.", diagram_type)
             return markup
@@ -307,17 +321,25 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
         """
         abstractions_any: Any = prep_res_context.get("abstractions", [])
         relationships_any: Any = prep_res_context.get("relationships", {})
+        structure_context_any: Any = prep_res_context.get("structure_context")
+
         abstractions: AbstractionsList = abstractions_any if isinstance(abstractions_any, list) else []
         relationships: RelationshipsDict = relationships_any if isinstance(relationships_any, dict) else {}
+        structure_context: Optional[str] = (
+            str(structure_context_any) if isinstance(structure_context_any, str) else None
+        )
+
         llm_cfg: LlmConfigDict = prep_res_context.get("llm_config", {})
         cache_cfg: CacheConfigDict = prep_res_context.get("cache_config", {})
+        diagram_format_str: str = str(prep_res_context.get("diagram_format", DEFAULT_DIAGRAM_FORMAT))
 
         return self._call_llm_for_diagram(
-            prompt=DiagramPrompts.format_relationship_flowchart_prompt(
+            prompt=format_relationship_flowchart_prompt(
                 project_name=str(prep_res_context.get("project_name")),
                 abstractions=abstractions,
                 relationships=relationships,
-                diagram_format=str(prep_res_context.get("diagram_format")),
+                diagram_format=diagram_format_str,
+                structure_context=structure_context,
             ),
             llm_config=llm_cfg,
             cache_config=cache_cfg,
@@ -339,12 +361,13 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
             self._log_warning("No proper code/structure context for class diagram. Diagram might be suboptimal.")
         llm_cfg: LlmConfigDict = prep_res_context.get("llm_config", {})
         cache_cfg: CacheConfigDict = prep_res_context.get("cache_config", {})
+        diagram_format_str: str = str(prep_res_context.get("diagram_format", DEFAULT_DIAGRAM_FORMAT))
 
         return self._call_llm_for_diagram(
-            prompt=DiagramPrompts.format_class_diagram_prompt(
+            prompt=format_class_diagram_prompt(
                 project_name=str(prep_res_context.get("project_name")),
                 code_context=code_context_str,
-                diagram_format=str(prep_res_context.get("diagram_format")),
+                diagram_format=diagram_format_str,
             ),
             llm_config=llm_cfg,
             cache_config=cache_cfg,
@@ -370,12 +393,13 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
             return None
         llm_cfg: LlmConfigDict = prep_res_context.get("llm_config", {})
         cache_cfg: CacheConfigDict = prep_res_context.get("cache_config", {})
+        diagram_format_str: str = str(prep_res_context.get("diagram_format", DEFAULT_DIAGRAM_FORMAT))
 
         return self._call_llm_for_diagram(
-            prompt=DiagramPrompts.format_package_diagram_prompt(
+            prompt=format_package_diagram_prompt(
                 project_name=str(prep_res_context.get("project_name")),
                 structure_context=structure_context_str,
-                diagram_format=str(prep_res_context.get("diagram_format")),
+                diagram_format=diagram_format_str,
             ),
             llm_config=llm_cfg,
             cache_config=cache_cfg,
@@ -431,7 +455,7 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
                 diagram_format=diagram_format,
             )
             markup: DiagramMarkup = self._call_llm_for_diagram(
-                prompt=DiagramPrompts.format_sequence_diagram_prompt(sequence_context_obj),
+                prompt=format_sequence_diagram_prompt(sequence_context_obj),
                 llm_config=llm_cfg,
                 cache_config=cache_cfg,
                 diagram_type=f"sequence (scenario: {scenario_name_short})",
