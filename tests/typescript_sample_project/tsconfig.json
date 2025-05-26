@@ -1,0 +1,51 @@
+{
+  "compilerOptions": {
+    /* Language and Environment */
+    "target": "ES2020", // Target JavaScript version (ES2020 has good support)
+    "lib": ["ES2020", "DOM"], // Libraries available at runtime (DOM for potential browser use)
+    "experimentalDecorators": true, // Enable if using decorators (e.g., for classes)
+    "emitDecoratorMetadata": true, // For reflection with decorators
+
+    /* Modules */
+    "module": "ESNext", // Use modern ES modules
+    "moduleResolution": "node", // How modules are resolved (Node.js style)
+    "baseUrl": "./", // Base directory for non-relative imports (could be src)
+    "paths": { // Import aliases (optional)
+      // "@/*": ["src/*"]
+    },
+    "resolveJsonModule": true, // Allows importing .json files as modules
+    "esModuleInterop": true, // Improves interoperability between CommonJS and ES modules
+    "forceConsistentCasingInFileNames": true, // Important for case-sensitive systems
+
+    /* JavaScript Support */
+    // "allowJs": true, // If you want to allow .js files in the project
+    // "checkJs": true, // If you want to type-check .js files as well
+
+    /* Emit */
+    "declaration": true, // Generate .d.ts files (type definitions)
+    "declarationMap": true, // Generate sourcemaps for .d.ts files
+    "sourceMap": true, // Generate .map files for debugging
+    "outDir": "./dist", // Output directory for compiled JavaScript
+    // "rootDir": "./src", // If source files were in src/
+
+    /* Type Checking */
+    "strict": true, // Enable all strict type-checking options (recommended)
+    // "noImplicitAny": true, // Require explicit types (part of strict)
+    // "strictNullChecks": true, // Strict null and undefined checks (part of strict)
+    // "strictFunctionTypes": true, // Strict function type checking (part of strict)
+    // "strictPropertyInitialization": true, // Requires class properties to be initialized in the constructor (part of strict)
+    "noUnusedLocals": true, // Report unused local variables
+    "noUnusedParameters": true, // Report unused function parameters
+    "noImplicitReturns": true, // Require all paths in a function to return a value (if the function returns a value)
+    "noFallthroughCasesInSwitch": true, // Prevent fallthrough in switch statements
+    "skipLibCheck": true // Skip type checking of declaration files (.d.ts) from libraries
+  },
+  "include": [
+    "./**/*.ts" // Which files the compiler should process
+  ],
+  "exclude": [
+    "node_modules", // Which directories to ignore
+    "dist"
+  ]
+}
+// End of typescript_sample_project/tsconfig.json

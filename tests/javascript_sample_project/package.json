@@ -1,0 +1,21 @@
+{
+  "name": "javascript-sample-project",
+  "version": "1.0.0",
+  "description": "JavaScript equivalent of the Python sample project for SourceLens.",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "start": "node main.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "sample",
+    "javascript",
+    "es6",
+    "modules"
+  ],
+  "author": "SourceLens AI Generator",
+  "license": "GPL-3.0-or-later",
+  "private": true
+}
+// End of javascript_sample_project/package.json
