@@ -40,10 +40,11 @@ from sourcelens.config import ConfigError, load_config
 from sourcelens.flow import create_tutorial_flow
 
 if TYPE_CHECKING:
+    # Assuming Flow from flow_engine_sync is the one used for SourceLensFlow
     from sourcelens.core.flow_engine_sync import Flow as SourceLensFlow
 
 
-SharedStateDict: TypeAlias = dict[str, Any]
+SharedContextDict: TypeAlias = dict[str, Any]  # Renamed from SharedStateDict
 ConfigDict: TypeAlias = dict[str, Any]
 
 DEFAULT_LOG_DIR_MAIN: str = "logs"
@@ -59,7 +60,7 @@ def setup_logging(log_config: dict[str, Any]) -> None:
     """
     log_dir_str: str = str(log_config.get("log_dir", DEFAULT_LOG_DIR_MAIN))
     log_level_str: str = str(log_config.get("log_level", "INFO")).upper()
-    log_level: int = getattr(logging, log_level_str, logging.INFO)  # Default to INFO if invalid
+    log_level: int = getattr(logging, log_level_str, logging.INFO)
     log_dir: Path = Path(log_dir_str)
     log_file: Optional[Path] = None
 
@@ -75,15 +76,16 @@ def setup_logging(log_config: dict[str, Any]) -> None:
             level=log_level,
             format=DEFAULT_LOG_FORMAT,
             handlers=[file_handler, stream_handler],
-            force=True,  # Override any existing basicConfig
+            force=True,
         )
         logging.getLogger().info("Logging initialized. Log file: %s", log_file.resolve() if log_file else "N/A")
     except OSError as e:
+        # BasicConfig to stdout if file logging fails
         print(f"ERROR: Failed create log dir/file '{log_file or log_dir}': {e}", file=sys.stderr)
         logging.basicConfig(
             level=log_level,
             format=DEFAULT_LOG_FORMAT,
-            handlers=[logging.StreamHandler(sys.stdout)],  # Fallback to stdout
+            handlers=[logging.StreamHandler(sys.stdout)],
             force=True,
         )
         logging.getLogger().error("File logging disabled due to setup error. Logging to stdout only.")
@@ -136,15 +138,15 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _prepare_initial_state(args: argparse.Namespace, config: ConfigDict) -> SharedStateDict:
-    """Prepare the initial shared state dictionary based on args and config.
+def _prepare_initial_context(args: argparse.Namespace, config: ConfigDict) -> SharedContextDict:  # Renamed
+    """Prepare the initial shared context dictionary based on args and config.
 
     Args:
         args: Parsed command-line arguments.
         config: Loaded application configuration dictionary.
 
     Returns:
-        The initial shared state dictionary for the processing flow.
+        The initial shared context dictionary for the processing flow.
     """
     source_cfg_any: Any = config.get("source", {})
     output_cfg_any: Any = config.get("output", {})
@@ -161,9 +163,8 @@ def _prepare_initial_state(args: argparse.Namespace, config: ConfigDict) -> Shar
     cache_cfg: dict[str, Any] = cache_cfg_any if isinstance(cache_cfg_any, dict) else {}
 
     project_name_arg: Optional[str] = args.name if isinstance(args.name, str) else None
-    project_name_cfg: Optional[str] = (
-        project_cfg.get("default_name") if isinstance(project_cfg.get("default_name"), str) else None
-    )
+    project_name_cfg_val: Any = project_cfg.get("default_name")
+    project_name_cfg: Optional[str] = str(project_name_cfg_val) if isinstance(project_name_cfg_val, str) else None
     project_name: Optional[str] = project_name_arg or project_name_cfg
 
     include_patterns_raw_any: Any = args.include or source_cfg.get("default_include_patterns", [])
@@ -178,7 +179,11 @@ def _prepare_initial_state(args: argparse.Namespace, config: ConfigDict) -> Shar
     max_size_arg: Optional[int] = (
         args.max_size
         if args.max_size is not None
-        else (max_size_cfg_any if isinstance(max_size_cfg_any, int) else None)
+        else (
+            int(max_size_cfg_any)
+            if isinstance(max_size_cfg_any, (int, float)) and float(max_size_cfg_any).is_integer()
+            else None
+        )
     )
 
     output_dir_cfg_any: Any = output_cfg.get("base_dir", "output")
@@ -193,20 +198,20 @@ def _prepare_initial_state(args: argparse.Namespace, config: ConfigDict) -> Shar
     if args.dir and isinstance(args.dir, str):
         local_dir_path = Path(args.dir)
         local_dir_display_root = str(local_dir_path.as_posix())
-        if local_dir_display_root == ".":
+        if local_dir_display_root == ".":  # Normalize "." to "./" for display consistency
             local_dir_display_root = "./"
         elif not local_dir_display_root.endswith("/"):
             local_dir_display_root += "/"
 
-    initial_state: SharedStateDict = {
+    initial_context: SharedContextDict = {  # Renamed
         "repo_url": args.repo if isinstance(args.repo, str) else None,
         "local_dir": args.dir if isinstance(args.dir, str) else None,
         "local_dir_display_root": local_dir_display_root,
         "project_name": project_name,
-        "config": config,
+        "config": config,  # Full config available to nodes
         "llm_config": llm_cfg,
         "cache_config": cache_cfg,
-        "source_config": source_cfg,
+        "source_config": source_cfg,  # Active source profile
         "github_token": str(github_cfg.get("token")) if github_cfg.get("token") else None,
         "output_dir": output_dir_str,
         "language": language_str,
@@ -214,6 +219,7 @@ def _prepare_initial_state(args: argparse.Namespace, config: ConfigDict) -> Shar
         "exclude_patterns": exclude_patterns,
         "max_file_size": max_size_arg,
         "use_relative_paths": bool(source_cfg.get("use_relative_paths", True)),
+        # Initial empty states for data passed between nodes
         "files": [],
         "abstractions": [],
         "relationships": {},
@@ -221,14 +227,15 @@ def _prepare_initial_state(args: argparse.Namespace, config: ConfigDict) -> Shar
         "identified_scenarios": [],
         "chapters": [],
         "source_index_content": None,
+        "project_review_content": None,  # Added for new feature
         "final_output_dir": None,
         "relationship_flowchart_markup": None,
         "class_diagram_markup": None,
         "package_diagram_markup": None,
         "sequence_diagrams_markup": [],
     }
-    logging.getLogger(__name__).debug("Initial state prepared. local_dir_display_root: '%s'", local_dir_display_root)
-    return initial_state
+    logging.getLogger(__name__).debug("Initial context prepared. local_dir_display_root: '%s'", local_dir_display_root)
+    return initial_context
 
 
 def _initialize_app(args: argparse.Namespace) -> ConfigDict:
@@ -245,6 +252,7 @@ def _initialize_app(args: argparse.Namespace) -> ConfigDict:
     """
     logger_init = logging.getLogger(__name__)
     config_data: ConfigDict = {}
+    # Define specific validation exception types to catch
     validation_exceptions: tuple[type[Exception], ...] = (ConfigError,)
     if (
         JSONSCHEMA_AVAILABLE
@@ -262,6 +270,7 @@ def _initialize_app(args: argparse.Namespace) -> ConfigDict:
         setup_logging(logging_config)
 
         logger_init.info("Config loaded successfully from %s", config_path_str)
+        # Log snippets of effective configs for easier debugging
         logger_init.debug("Effective LLM Config: %s", config_data.get("llm"))
         logger_init.debug("Effective Source Config: %s", config_data.get("source"))
         logger_init.debug("Effective Output Config: %s", config_data.get("output"))
@@ -270,51 +279,50 @@ def _initialize_app(args: argparse.Namespace) -> ConfigDict:
         logging.critical("Configuration file not found: %s", e)
         print(f"\n❌ ERROR: Configuration file not found: {e!s}", file=sys.stderr)
         sys.exit(1)
-    except validation_exceptions as e:  # type: ignore[misc]
-        logging.critical("Configuration loading/validation failed: %s", e, exc_info=True)
-        print(f"\n❌ ERROR: Configuration loading/validation failed: {e!s}", file=sys.stderr)
+    except validation_exceptions as e_val:  # type: ignore[misc] # Catches ConfigError and ValidationError
+        logging.critical("Configuration loading/validation failed: %s", e_val, exc_info=True)
+        print(f"\n❌ ERROR: Configuration loading/validation failed: {e_val!s}", file=sys.stderr)
         sys.exit(1)
-    except ImportError as e:
-        logging.critical("Missing required library for configuration: %s", e)
+    except ImportError as e_imp:  # For missing jsonschema
+        logging.critical("Missing required library for configuration: %s", e_imp)
         print(
-            f"\n❌ ERROR: Missing required library for configuration: {e!s}. Please install dependencies.",
+            f"\n❌ ERROR: Missing required library for configuration: {e_imp!s}. Please install dependencies.",
             file=sys.stderr,
         )
         sys.exit(1)
-    except OSError as e:
-        logging.critical("File system error during config loading: %s", e, exc_info=True)
-        print(f"\n❌ ERROR: File system error during config loading: {e!s}", file=sys.stderr)
+    except OSError as e_os:  # For file system issues during load_config (e.g., permissions)
+        logging.critical("File system error during config loading: %s", e_os, exc_info=True)
+        print(f"\n❌ ERROR: File system error during config loading: {e_os!s}", file=sys.stderr)
         sys.exit(1)
-    except (RuntimeError, ValueError, KeyError) as e:  # Specific errors from load_config or its internals
-        logging.critical("Unexpected error during config processing: %s", e, exc_info=True)
-        print(f"\n❌ ERROR: Unexpected error during config processing: {e!s}", file=sys.stderr)
+    # Catch specific programming errors from load_config that are not ConfigError or FileNotFoundError
+    except (RuntimeError, ValueError, KeyError, TypeError) as e_prog:
+        logging.critical("Unexpected error during config processing: %s", e_prog, exc_info=True)
+        print(f"\n❌ ERROR: Unexpected error during config processing: {e_prog!s}", file=sys.stderr)
         sys.exit(1)
-    # No BLE001 here, as specific common exceptions are caught. If others occur, they are truly unexpected.
-    # and should terminate with a stack trace for debugging.
 
 
-def _run_flow(initial_state: SharedStateDict) -> None:
+def _run_flow(initial_context: SharedContextDict) -> None:  # Renamed
     """Create and run the tutorial generation flow.
 
     Args:
-        initial_state: The initial shared state for the flow.
+        initial_context: The initial shared context for the flow.
 
     Raises:
         SystemExit: If flow execution fails critically.
     """
     logger_run_flow = logging.getLogger(__name__)
-    source_desc_any: Any = initial_state.get("repo_url") or initial_state.get("local_dir")
+    source_desc_any: Any = initial_context.get("repo_url") or initial_context.get("local_dir")
     source_desc: str = str(source_desc_any) if source_desc_any else "Unknown source"
 
     logger_run_flow.info("Starting tutorial generation for: %s", source_desc)
-    logger_run_flow.info("Output Language: %s", initial_state.get("language"))
-    logger_run_flow.info("Output Directory Base: %s", initial_state.get("output_dir"))
+    logger_run_flow.info("Output Language: %s", initial_context.get("language"))
+    logger_run_flow.info("Output Directory Base: %s", initial_context.get("output_dir"))
 
-    source_config_val_any: Any = initial_state.get("source_config", {})
+    source_config_val_any: Any = initial_context.get("source_config", {})
     source_config_val: dict[str, Any] = source_config_val_any if isinstance(source_config_val_any, dict) else {}
     logger_run_flow.info("Active Source Profile: %s", source_config_val.get("language"))
 
-    llm_cfg_for_log_any: Any = initial_state.get("llm_config", {})
+    llm_cfg_for_log_any: Any = initial_context.get("llm_config", {})
     llm_cfg_for_log: dict[str, Any] = llm_cfg_for_log_any if isinstance(llm_cfg_for_log_any, dict) else {}
 
     logger_run_flow.info(
@@ -325,56 +333,56 @@ def _run_flow(initial_state: SharedStateDict) -> None:
     logger_run_flow.info("Active LLM Model: %s", llm_cfg_for_log.get("model"))
 
     try:
-        llm_config_param_any: Any = initial_state.get("llm_config", {})
-        cache_config_param_any: Any = initial_state.get("cache_config", {})
+        llm_config_param_any: Any = initial_context.get("llm_config", {})
+        cache_config_param_any: Any = initial_context.get("cache_config", {})
 
         if not isinstance(llm_config_param_any, dict) or not isinstance(cache_config_param_any, dict):
-            raise TypeError("llm_config or cache_config is not a dictionary in shared state.")
+            raise TypeError("llm_config or cache_config is not a dictionary in shared context.")
 
         llm_config_param: dict[str, Any] = llm_config_param_any
         cache_config_param: dict[str, Any] = cache_config_param_any
 
-        # Ensure SourceLensFlow is correctly typed or handled if None (from TYPE_CHECKING else block)
         if TYPE_CHECKING:
             from sourcelens.core.flow_engine_sync import Flow as RuntimeSourceLensFlow
         else:
             from sourcelens.core.flow_engine_sync import Flow as RuntimeSourceLensFlow
 
-        if RuntimeSourceLensFlow is None:  # Should not happen if import is correct
+        if RuntimeSourceLensFlow is None:  # Should ideally not happen
             raise RuntimeError("SourceLensFlow type could not be resolved at runtime.")
 
-        tutorial_flow: SourceLensFlow = create_tutorial_flow(llm_config_param, cache_config_param)
-        tutorial_flow.run(initial_state)
+        tutorial_flow: "SourceLensFlow" = create_tutorial_flow(llm_config_param, cache_config_param)
+        tutorial_flow.run_standalone(initial_context)  # Changed from .run() to .run_standalone()
 
-        final_dir_any: Any = initial_state.get("final_output_dir")
+        final_dir_any: Any = initial_context.get("final_output_dir")
         if final_dir_any and isinstance(final_dir_any, str):
             final_dir: str = final_dir_any
             logger_run_flow.info("Tutorial generation completed successfully.")
             print(f"\n✅ Tutorial generation complete! Files are in: {final_dir}")
         else:
-            log_msg = "Flow finished, but 'final_output_dir' not set correctly in shared state."
+            log_msg = "Flow finished, but 'final_output_dir' not set correctly in shared context."
             logger_run_flow.error(log_msg)
             print_msg = "\n⚠️ ERROR: Flow finished, but final output directory was not set."
             print(print_msg, file=sys.stderr)
             sys.exit(1)
 
-    except ImportError as e:
-        logging.critical("Failed to import a required module during flow execution: %s", e)
-        print(f"\n❌ ERROR: Module import missing or failed during flow: {e!s}", file=sys.stderr)
+    except ImportError as e_imp_flow:  # For imports within create_tutorial_flow or run_standalone
+        logging.critical("Failed to import a required module during flow execution: %s", e_imp_flow)
+        print(f"\n❌ ERROR: Module import missing or failed during flow: {e_imp_flow!s}", file=sys.stderr)
         sys.exit(1)
-    except (TypeError, RuntimeError, ConfigError, ValueError, KeyError) as e_flow:  # More specific errors
+    # Catch specific, common errors that might occur during node execution or flow logic
+    except (TypeError, RuntimeError, ConfigError, ValueError, KeyError, AttributeError) as e_flow:
         logging.exception("ERROR: Tutorial generation failed during flow execution: %s", e_flow)
         print(f"\n❌ ERROR: Tutorial generation failed: {e_flow!s}", file=sys.stderr)
         sys.exit(1)
-    # No broad Exception to avoid BLE001 unless truly necessary for unknown third-party errors.
 
 
 def main() -> None:
     """Run the main entry point for the sourceLens application."""
     args: argparse.Namespace = parse_arguments()
     config_data_main: ConfigDict = _initialize_app(args)
-    shared_initial_state: SharedStateDict = _prepare_initial_state(args, config_data_main)
-    _run_flow(shared_initial_state)
+    # Renamed shared_initial_state to initial_shared_context
+    initial_shared_context: SharedContextDict = _prepare_initial_context(args, config_data_main)
+    _run_flow(initial_shared_context)
 
 
 if __name__ == "__main__":

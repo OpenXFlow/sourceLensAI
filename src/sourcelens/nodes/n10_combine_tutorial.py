@@ -15,46 +15,45 @@
 
 """Node responsible for combining generated tutorial components into final files."""
 
+import contextlib
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Final, Literal, Optional, Union, get_args
+from typing import Any, Final, Literal, Optional, Union
 
 from typing_extensions import TypeAlias
 
-from sourcelens.utils._exceptions import LlmApiError  # Assuming LlmApiError can be raised indirectly
+from sourcelens.utils._exceptions import LlmApiError
 from sourcelens.utils.helpers import sanitize_filename
 
-from .base_node import BaseNode, SLSharedState
+from .base_node import BaseNode, SLSharedContext
 
-CombinePrepResult: TypeAlias = bool
-CombineExecResult: TypeAlias = None
+CombinePreparedInputs: TypeAlias = bool
+CombineExecutionResult: TypeAlias = None
 
-AbstractionItem: TypeAlias = dict[str, Any]
-AbstractionsList: TypeAlias = list[AbstractionItem]
+AbstractionItemInternal: TypeAlias = dict[str, Any]
+AbstractionsListInternal: TypeAlias = list[AbstractionItemInternal]
+RelationshipDetailInternal: TypeAlias = dict[str, Any]
+RelationshipsDictInternal: TypeAlias = dict[str, Union[str, list[RelationshipDetailInternal]]]
+ChapterOrderListInternal: TypeAlias = list[int]
+ChapterContentListInternal: TypeAlias = list[str]
 
-RelationshipDetail: TypeAlias = dict[str, Any]
-RelationshipsDict: TypeAlias = dict[str, Union[str, list[RelationshipDetail]]]
-
-ChapterOrderList: TypeAlias = list[int]
-ChapterContentList: TypeAlias = list[str]
 ChapterTypeLiteral: TypeAlias = Literal["standard", "diagrams", "source_index", "project_review"]
+ChapterFileDataInternal: TypeAlias = dict[str, Any]
+AllChaptersDataListInternal: TypeAlias = list[ChapterFileDataInternal]
 
-ChapterFileData: TypeAlias = dict[str, Any]
-AllChaptersDataList: TypeAlias = list[ChapterFileData]
+DiagramMarkupInternal: TypeAlias = Optional[str]
+SequenceDiagramsListInternal: TypeAlias = list[DiagramMarkupInternal]
+DiagramConfigDictInternal: TypeAlias = dict[str, Any]
+SequenceDiagramConfigDictInternal: TypeAlias = dict[str, Any]
+IdentifiedScenarioListInternal: TypeAlias = list[str]
 
-DiagramMarkup: TypeAlias = Optional[str]
-SequenceDiagramsList: TypeAlias = list[DiagramMarkup]
-DiagramConfigDict: TypeAlias = dict[str, Any]
-SequenceDiagramConfigDict: TypeAlias = dict[str, Any]
-IdentifiedScenarioList: TypeAlias = list[str]
-
-ConfigDict: TypeAlias = dict[str, Any]
-LlmConfigDict: TypeAlias = dict[str, Any]
-SourceConfigDict: TypeAlias = dict[str, Any]
-OutputConfigDict: TypeAlias = dict[str, Any]
-
-SharedDataForCombine: TypeAlias = dict[str, Any]
+ConfigDictInternal: TypeAlias = dict[str, Any]
+LlmConfigDictInternal: TypeAlias = dict[str, Any]
+SourceConfigDictInternal: TypeAlias = dict[str, Any]
+OutputConfigDictInternal: TypeAlias = dict[str, Any]
+SharedDataForCombineInternal: TypeAlias = dict[str, Any]
 
 
 DIAGRAMS_CHAPTER_TITLE: Final[str] = "Architecture Diagrams"
@@ -82,6 +81,7 @@ FOOTER_MODEL_DEFAULT: Final[str] = "N/A"
 FOOTER_SOURCE_LANG_DEFAULT: Final[str] = "N/A"
 FILENAME_CHAPTER_PREFIX_WIDTH_COMBINE: Final[int] = 2
 LOG_MARKUP_SNIPPET_LEN_COMBINE: Final[int] = 200
+MAX_INT_FOR_SORTING: Final[int] = sys.maxsize
 
 
 @dataclass(frozen=True)
@@ -94,11 +94,7 @@ class FooterInfo:
     source_language: str
 
     def format_footer(self) -> str:
-        """Generate the formatted footer string.
-
-        Returns:
-            A string representing the standard tutorial footer.
-        """
+        """Generate the formatted footer string."""
         location: str = "(local)" if self.is_local else "(cloud)"
         repo_link: str = "https://github.com/darijo2yahoocom/sourceLensAI"
         part1: str = f"{FOOTER_SEPARATOR} [SourceLens AI]({repo_link}) "
@@ -112,13 +108,13 @@ class IndexContext:
     """Encapsulate context needed to prepare the index.md file content."""
 
     project_name: str
-    relationships_data: RelationshipsDict
+    relationships_data: RelationshipsDictInternal
     footer_info: FooterInfo
     repo_url: Optional[str] = None
     local_dir: Optional[str] = None
-    relationship_flowchart_markup: DiagramMarkup = None
-    chapter_files_data: AllChaptersDataList = field(default_factory=list)
-    diagram_config: DiagramConfigDict = field(default_factory=dict)
+    relationship_flowchart_markup: DiagramMarkupInternal = None
+    chapter_files_data: AllChaptersDataListInternal = field(default_factory=list)
+    diagram_config: DiagramConfigDictInternal = field(default_factory=dict)
     include_rel_flowchart: bool = field(init=False)
 
     def __post_init__(self) -> None:
@@ -133,25 +129,36 @@ class DiagramMarkupContext:
     """Context for adding diagram markup to a content list."""
 
     content_parts: list[str]
-    markup: DiagramMarkup
+    markup: DiagramMarkupInternal
     diagram_title: str
     diagram_description: str
     diagram_format: str
     log_message: str
 
 
-class CombineTutorial(BaseNode[CombinePrepResult, CombineExecResult]):
+class CombineTutorial(BaseNode[CombinePreparedInputs, CombineExecutionResult]):
     """Combine generated tutorial components into final Markdown files."""
 
-    def _add_diagram_markup(self, ctx: DiagramMarkupContext) -> bool:
-        """Add a diagram's markup and description to content parts.
+    def _get_special_chapter_base_name(self, chapter_type: ChapterTypeLiteral) -> str:
+        """Return the base filename for a special chapter type.
 
         Args:
-            ctx: Context object containing diagram details and content list.
+            chapter_type: The type of the special chapter.
 
         Returns:
-            True if markup was added, False otherwise.
+            The base filename string for that chapter type.
         """
+        if chapter_type == "diagrams":
+            return DIAGRAMS_FILENAME_BASE
+        if chapter_type == "source_index":
+            return SOURCE_INDEX_FILENAME_BASE
+        if chapter_type == "project_review":
+            return PROJECT_REVIEW_FILENAME_BASE
+        self._log_warning("Unknown special chapter type '%s' for filename base generation.", chapter_type)
+        return "special_chapter"
+
+    def _add_diagram_markup(self, ctx: DiagramMarkupContext) -> bool:
+        """Add a diagram's markup and description to content parts."""
         if ctx.markup and ctx.markup.strip():
             ctx.content_parts.append(f"## {ctx.diagram_title}\n")
             ctx.content_parts.append(f"{ctx.diagram_description}\n")
@@ -164,21 +171,11 @@ class CombineTutorial(BaseNode[CombinePrepResult, CombineExecResult]):
     def _add_sequence_diagrams_markup(
         self,
         content_parts: list[str],
-        seq_diag_markups: SequenceDiagramsList,
-        identified_scenarios: IdentifiedScenarioList,
+        seq_diag_markups: SequenceDiagramsListInternal,
+        identified_scenarios: IdentifiedScenarioListInternal,
         diagram_format: str,
     ) -> bool:
-        """Add multiple sequence diagrams with descriptions to content parts list.
-
-        Args:
-            content_parts: The list of strings to append diagram markups to.
-            seq_diag_markups: A list of Mermaid markup strings for sequence diagrams.
-            identified_scenarios: A list of scenario descriptions.
-            diagram_format: The format of the diagram (e.g., "mermaid").
-
-        Returns:
-            True if any valid sequence diagram markup was added, False otherwise.
-        """
+        """Add multiple sequence diagrams with descriptions to content parts list."""
         valid_markups_with_scenarios: list[tuple[str, str]] = []
         for i, markup_item in enumerate(seq_diag_markups):
             if markup_item and markup_item.strip():
@@ -193,10 +190,11 @@ class CombineTutorial(BaseNode[CombinePrepResult, CombineExecResult]):
 
         if not any("## Sequence Diagrams" in part for part in content_parts if part.startswith("## ")):
             content_parts.append("## Sequence Diagrams\n")
-            content_parts.append(
-                "These diagrams illustrate various interaction scenarios within the application, "
+            desc_text_l1 = "These diagrams illustrate various interaction scenarios within the application, "
+            desc_text_l2 = (
                 "showcasing the sequence of operations between different components for specific use cases.\n"
             )
+            content_parts.append(desc_text_l1 + desc_text_l2)
 
         for scenario_desc, seq_markup in valid_markups_with_scenarios:
             content_parts.append(f"### {scenario_desc}\n")
@@ -205,13 +203,8 @@ class CombineTutorial(BaseNode[CombinePrepResult, CombineExecResult]):
         self._log_info("Adding %d Sequence Diagram(s) markup.", len(valid_markups_with_scenarios))
         return True
 
-    def _add_prev_link(self, chapter_data: ChapterFileData, prev_link_text: Optional[str]) -> None:
-        """Ensure the 'Previously...' navigation link exists once before H1 heading.
-
-        Args:
-            chapter_data: Dictionary containing chapter content and metadata.
-            prev_link_text: The Markdown text for the previous link.
-        """
+    def _add_prev_link(self, chapter_data: ChapterFileDataInternal, prev_link_text: Optional[str]) -> None:
+        """Ensure the 'Previously...' navigation link exists once before H1 heading."""
         if not prev_link_text or not prev_link_text.strip():
             return
         content: str = str(chapter_data.get("content", "") or "")
@@ -225,19 +218,20 @@ class CombineTutorial(BaseNode[CombinePrepResult, CombineExecResult]):
         if h1_match:
             start_index = h1_match.start()
             prefix_newline = "\n" if start_index > 0 and not content[:start_index].isspace() else ""
-            content = f"{content[:start_index].rstrip()}{prefix_newline}\n\n{prev_link_text}\n\n{content[start_index:]}"
+            new_content_parts = [
+                content[:start_index].rstrip(),
+                prefix_newline,
+                f"\n\n{prev_link_text}\n\n",
+                content[start_index:],
+            ]
+            content = "".join(filter(None, new_content_parts))
         else:
             content = f"{prev_link_text}\n\n{content}"
             self._log_warning("No H1 in ch %s. Added 'Previously...' link at start.", chapter_num_str)
         chapter_data["content"] = content.strip()
 
-    def _add_next_link(self, chapter_data: ChapterFileData, next_link_text: Optional[str]) -> None:
-        """Ensure the 'Next...' navigation link exists once at the end of chapter content.
-
-        Args:
-            chapter_data: Dictionary containing chapter content and metadata.
-            next_link_text: The Markdown text for the next link.
-        """
+    def _add_next_link(self, chapter_data: ChapterFileDataInternal, next_link_text: Optional[str]) -> None:
+        """Ensure the 'Next...' navigation link exists once at the end of chapter content."""
         if not next_link_text or not next_link_text.strip():
             return
         content: str = str(chapter_data.get("content", "") or "")
@@ -249,13 +243,8 @@ class CombineTutorial(BaseNode[CombinePrepResult, CombineExecResult]):
         content += f"\n\n{next_link_text}" if content else next_link_text
         chapter_data["content"] = content.strip()
 
-    def _add_navigation_links(self, all_chapters_data: AllChaptersDataList, index_filename: str) -> None:
-        """Add or update 'Previously...' and 'Next...' links in all chapters.
-
-        Args:
-            all_chapters_data: List of dictionaries, each representing a chapter.
-            index_filename: The filename for the main index page (e.g., "index.md").
-        """
+    def _add_navigation_links(self, all_chapters_data: AllChaptersDataListInternal, index_filename: str) -> None:
+        """Add or update 'Previously...' and 'Next...' links in all chapters."""
         num_all_chapters = len(all_chapters_data)
         if num_all_chapters == 0:
             self._log_warning("No chapters found to add navigation links.")
@@ -266,41 +255,37 @@ class CombineTutorial(BaseNode[CombinePrepResult, CombineExecResult]):
                 prev_link_text = f"Previously, we looked at the [Project Overview]({index_filename})."
             elif i > 0:
                 prev_ch = all_chapters_data[i - 1]
+                p_name_any, p_file_any = prev_ch.get("name"), prev_ch.get("filename")
                 if (
-                    (p_name := prev_ch.get("name"))
-                    and isinstance(p_name, str)
-                    and p_name.strip()
-                    and (p_file := prev_ch.get("filename"))
-                    and isinstance(p_file, str)
-                    and p_file.strip()
+                    isinstance(p_name_any, str)
+                    and p_name_any.strip()
+                    and isinstance(p_file_any, str)
+                    and p_file_any.strip()
                 ):
-                    prev_link_text = f"Previously, we looked at [{p_name.strip()}]({p_file.strip()})."
+                    prev_link_text = f"Previously, we looked at [{p_name_any.strip()}]({p_file_any.strip()})."
                 else:
-                    self._log_warning("Could not create 'previous' link for ch %s.", chapter_data.get("num", i + 1))
+                    log_msg = f"Could not create 'previous' link for ch {chapter_data.get('num', i + 1)}."
+                    self._log_warning(log_msg)
             self._add_prev_link(chapter_data, prev_link_text)
+
             next_link_text: Optional[str] = None
             if i < num_all_chapters - 1:
                 next_ch = all_chapters_data[i + 1]
+                n_name_any, n_file_any = next_ch.get("name"), next_ch.get("filename")
                 if (
-                    (n_name := next_ch.get("name"))
-                    and isinstance(n_name, str)
-                    and n_name.strip()
-                    and (n_file := next_ch.get("filename"))
-                    and isinstance(n_file, str)
-                    and n_file.strip()
+                    isinstance(n_name_any, str)
+                    and n_name_any.strip()
+                    and isinstance(n_file_any, str)
+                    and n_file_any.strip()
                 ):
-                    next_link_text = f"Next, we will examine [{n_name.strip()}]({n_file.strip()})."
+                    next_link_text = f"Next, we will examine [{n_name_any.strip()}]({n_file_any.strip()})."
                 else:
-                    self._log_warning("Could not create 'next' link for ch %s.", chapter_data.get("num", i + 1))
+                    log_msg = f"Could not create 'next' link for ch {chapter_data.get('num', i + 1)}."
+                    self._log_warning(log_msg)
             self._add_next_link(chapter_data, next_link_text)
 
-    def _add_footers(self, all_chapters_data: AllChaptersDataList, footer_text: str) -> None:
-        """Append the standard footer to all chapter contents.
-
-        Args:
-            all_chapters_data: List of chapter data dictionaries.
-            footer_text: The formatted footer string.
-        """
+    def _add_footers(self, all_chapters_data: AllChaptersDataListInternal, footer_text: str) -> None:
+        """Append the standard footer to all chapter contents."""
         clean_footer_text: str = footer_text.strip()
         if not clean_footer_text:
             self._log_warning("Footer text is empty, not adding footers.")
@@ -313,14 +298,7 @@ class CombineTutorial(BaseNode[CombinePrepResult, CombineExecResult]):
             chapter_data["content"] = f"{current_content}\n{footer_text}" if current_content else footer_text.lstrip()
 
     def _prepare_index_header(self, context: IndexContext) -> list[str]:
-        """Prepare the header section of the index.md.
-
-        Args:
-            context: An IndexContext object containing project and relationship data.
-
-        Returns:
-            A list of strings, each representing a line for the index header.
-        """
+        """Prepare the header section of the index.md."""
         summary_raw: Any = context.relationships_data.get("summary", f"Tutorial for {context.project_name}.")
         summary: str = str(summary_raw or f"Tutorial for {context.project_name}.")
         header_parts: list[str] = [f"# Tutorial: {context.project_name}\n\n{summary}\n"]
@@ -339,31 +317,22 @@ class CombineTutorial(BaseNode[CombinePrepResult, CombineExecResult]):
         return header_parts
 
     def _prepare_index_diagram(self, context: IndexContext) -> list[str]:
-        """Prepare the relationship diagram section of the index.md.
-
-        Args:
-            context: An IndexContext object.
-
-        Returns:
-            A list of strings for the diagram section, or an empty list if no diagram.
-        """
+        """Prepare the relationship diagram section of the index.md."""
         diagram_parts: list[str] = []
         diagram_format = str(context.diagram_config.get("format", "mermaid"))
-        markup_for_log = (
-            str(context.relationship_flowchart_markup)[:LOG_MARKUP_SNIPPET_LEN_COMBINE] + "..."
-            if context.relationship_flowchart_markup
-            and len(context.relationship_flowchart_markup) > LOG_MARKUP_SNIPPET_LEN_COMBINE
-            else str(context.relationship_flowchart_markup)
-            if context.relationship_flowchart_markup
-            else "None"
-        )
+        markup_log_snippet = "None"
+        if context.relationship_flowchart_markup:
+            markup_str = str(context.relationship_flowchart_markup)
+            markup_log_snippet = markup_str[:LOG_MARKUP_SNIPPET_LEN_COMBINE]
+            if len(markup_str) > LOG_MARKUP_SNIPPET_LEN_COMBINE:
+                markup_log_snippet += "..."
 
         self._logger.debug(
             "_prepare_index_diagram: include_rel_flowchart=%s, markup snippet='%s', type=%s, is_truthy=%s",
             context.include_rel_flowchart,
-            markup_for_log,
+            markup_log_snippet,
             type(context.relationship_flowchart_markup).__name__,
-            bool(context.relationship_flowchart_markup and context.relationship_flowchart_markup.strip()),
+            bool(context.relationship_flowchart_markup and str(context.relationship_flowchart_markup).strip()),
         )
         if context.include_rel_flowchart and context.relationship_flowchart_markup:
             markup = str(context.relationship_flowchart_markup).strip()
@@ -373,32 +342,49 @@ class CombineTutorial(BaseNode[CombinePrepResult, CombineExecResult]):
             else:
                 self._log_warning("Rel flowchart enabled for index.md, but markup was empty string after strip().")
         elif context.include_rel_flowchart:
-            self._log_warning("Rel flowchart enabled for index.md, but no markup provided (was None or False-like).")
+            self._log_warning("Rel flowchart enabled for index.md, but no markup provided.")
         return diagram_parts
 
+    def _get_chapter_sort_key(self, ch_data: ChapterFileDataInternal) -> tuple[int, int, str]:
+        """Provide a sort key for chapters."""
+        ch_type: ChapterTypeLiteral = ch_data.get("chapter_type", "standard")  # type: ignore[assignment]
+        abs_index_any: Any = ch_data.get("abstraction_index")
+
+        final_num_any: Any = ch_data.get("num")
+        final_num = int(final_num_any) if isinstance(final_num_any, int) and final_num_any > 0 else MAX_INT_FOR_SORTING
+
+        if final_num != MAX_INT_FOR_SORTING:
+            return 0, final_num, str(ch_data.get("name", ""))
+
+        primary_sort_key: int
+        if ch_type == "standard" and isinstance(abs_index_any, int) and abs_index_any >= 0:
+            primary_sort_key = abs_index_any
+        else:
+            primary_sort_key = MAX_INT_FOR_SORTING
+
+        special_order: dict[ChapterTypeLiteral, int] = {
+            "diagrams": 10001,
+            "source_index": 10002,
+            "project_review": 10003,
+        }
+        secondary_sort_key = 0 if ch_type == "standard" else special_order.get(ch_type, 19999)
+
+        return secondary_sort_key, primary_sort_key, str(ch_data.get("name", ""))
+
     def _prepare_index_chapters(self, context: IndexContext) -> list[str]:
-        """Prepare the chapters listing section of the index.md.
-
-        Args:
-            context: An IndexContext object.
-
-        Returns:
-            A list of strings for the chapters section.
-        """
+        """Prepare the chapters listing section of the index.md."""
         chapter_parts: list[str] = ["## Chapters\n"]
-        sorted_chapters: AllChaptersDataList = context.chapter_files_data
+        sorted_chapters_for_index: AllChaptersDataListInternal
         try:
-            sorted_chapters = sorted(
-                context.chapter_files_data,
-                key=lambda x: (
-                    x.get("num", float("inf")) if isinstance(x.get("num"), int) else float("inf"),
-                    str(x.get("name", "")),
-                ),
+            sorted_chapters_for_index = sorted(
+                context.chapter_files_data, key=lambda x: x.get("num", MAX_INT_FOR_SORTING)
             )
         except (TypeError, ValueError) as e_sort:
-            self._log_warning("Cannot sort chapters by 'num'; using original order. Error: %s", e_sort)
+            self._log_warning("Cannot sort chapters by final 'num' for index; using provided order. Error: %s", e_sort)
+            sorted_chapters_for_index = context.chapter_files_data
+
         chapter_links: list[str] = []
-        for ch_data in sorted_chapters:
+        for ch_data in sorted_chapters_for_index:
             num_val, name_val, fname_val = (ch_data.get("num"), ch_data.get("name"), ch_data.get("filename"))
             if (
                 isinstance(num_val, int)
@@ -415,52 +401,21 @@ class CombineTutorial(BaseNode[CombinePrepResult, CombineExecResult]):
         return chapter_parts
 
     def _prepare_index_content(self, context: IndexContext) -> str:
-        """Prepare the full Markdown content for the index.md file.
-
-        Args:
-            context: An IndexContext object with all necessary data.
-
-        Returns:
-            A string containing the full Markdown content for the index.md file.
-        """
+        """Prepare the full Markdown content for the index.md file."""
         self._log_info("Preparing index.md content for project '%s'...", context.project_name)
-        content_parts: list[str] = []
-        content_parts.extend(self._prepare_index_header(context))
-
-        index_diagram_parts = self._prepare_index_diagram(context)
-        self._logger.debug("_prepare_index_content: index_diagram_parts returned: %s", index_diagram_parts)
-        if index_diagram_parts:
-            self._logger.debug(
-                "Adding %d parts from _prepare_index_diagram to index content.", len(index_diagram_parts)
-            )
-            content_parts.extend(index_diagram_parts)
-        else:
-            self._logger.debug("_prepare_index_diagram returned no parts to add to index content.")
-
+        content_parts: list[str] = self._prepare_index_header(context)
+        content_parts.extend(self._prepare_index_diagram(context))
         content_parts.extend(self._prepare_index_chapters(context))
-        self._logger.debug("Final index.md content_parts before join (first 3 items): %s", content_parts[:3])
         return "\n".join(content_parts)
 
     def _prepare_standard_chapters_data(
-        self, abstractions: AbstractionsList, chapter_order: ChapterOrderList, chapters_content: ChapterContentList
-    ) -> AllChaptersDataList:
-        """Prepare initial data structure for standard chapter files.
-
-        Args:
-            abstractions: List of all identified abstraction dictionaries.
-            chapter_order: Ordered list of abstraction indices for chapters.
-            chapters_content: List of Markdown content strings for each chapter.
-
-        Returns:
-            A list of `ChapterFileData` dictionaries for standard chapters.
-        """
-        self._logger.debug(
-            "_prepare_standard_chapters_data: Abstractions count: %d, Order count: %d, Content count: %d",
-            len(abstractions),
-            len(chapter_order),
-            len(chapters_content),
-        )
-        standard_chapters_data: AllChaptersDataList = []
+        self,
+        abstractions: AbstractionsListInternal,
+        chapter_order: ChapterOrderListInternal,
+        chapters_content: ChapterContentListInternal,
+    ) -> AllChaptersDataListInternal:
+        """Prepare initial data structure for standard chapter files."""
+        std_chapters_data: AllChaptersDataListInternal = []
         num_abstractions = len(abstractions)
         effective_count = min(len(chapter_order), len(chapters_content))
 
@@ -471,308 +426,281 @@ class CombineTutorial(BaseNode[CombinePrepResult, CombineExecResult]):
                 len(chapters_content),
                 effective_count,
             )
-        if not chapter_order:
-            self._log_warning("Chapter order is empty.")
-        if not chapters_content:
-            self._log_warning("Chapters content is empty.")
-        if not abstractions:
-            self._log_warning("Abstractions list is empty.")
+
+        abs_idx_to_order_pos = {abs_idx: i for i, abs_idx in enumerate(chapter_order)}
 
         for i in range(effective_count):
             abs_idx = chapter_order[i]
             if not (0 <= abs_idx < num_abstractions):
                 self._log_warning("Invalid abs_idx %d at order pos %d. Skipping.", abs_idx, i)
                 continue
-            abs_item: AbstractionItem = abstractions[abs_idx]
+            abs_item: AbstractionItemInternal = abstractions[abs_idx]
             name_raw: Any = abs_item.get("name", f"Concept {i + 1}")
             name: str = str(name_raw).strip() if isinstance(name_raw, str) and name_raw.strip() else f"Concept {i + 1}"
-            standard_chapters_data.append(
+            pedagogical_order_num = abs_idx_to_order_pos.get(abs_idx, MAX_INT_FOR_SORTING - 1) + 1
+
+            std_chapters_data.append(
                 {
-                    "filename": "",
                     "content": str(chapters_content[i] or ""),
                     "name": name,
                     "abstraction_index": abs_idx,
-                    "num": -1,  # Placeholder, will be assigned in _assemble_chapters
                     "chapter_type": "standard",
+                    "filename": "",
+                    "num": pedagogical_order_num,
                 }
             )
-        self._log_info("Prepared data for %d standard chapters.", len(standard_chapters_data))
-        return standard_chapters_data
+        self._log_info("Prepared data for %d standard chapters.", len(std_chapters_data))
+        std_chapters_data.sort(key=lambda x: x.get("num", MAX_INT_FOR_SORTING))
+        return std_chapters_data
 
-    def _prepare_diagrams_chapter_data(
-        self, shared: SLSharedState, diagram_config: DiagramConfigDict
-    ) -> Optional[ChapterFileData]:
-        """Prepare data for the dedicated diagrams chapter.
+    def _prepare_special_chapter_data(
+        self,
+        content_key_or_direct_content: str,
+        title: str,
+        chapter_type: ChapterTypeLiteral,
+        *,
+        shared_context: Optional[SLSharedContext] = None,
+        is_direct_content: bool = False,
+    ) -> Optional[ChapterFileDataInternal]:
+        """Prepare data structure for a special chapter.
+
+        Content can be a key to shared_context or direct markdown string.
 
         Args:
-            shared: The shared state dictionary.
-            diagram_config: Configuration for diagram generation.
+            content_key_or_direct_content: Key in shared_context or direct content.
+            title: The title of this special chapter.
+            chapter_type: The type of the special chapter.
+            shared_context: The shared context dictionary (needed if not direct_content).
+            is_direct_content: If True, content_key_or_direct_content is the content itself.
 
         Returns:
-            A `ChapterFileData` dictionary if diagrams are to be included, else None.
+            A ChapterFileDataInternal dictionary if content is found, else None.
         """
+        content_val_str: Optional[str] = None
+        if is_direct_content:
+            content_val_str = content_key_or_direct_content
+        elif shared_context:
+            content_val_any: Any = shared_context.get(content_key_or_direct_content)
+            if isinstance(content_val_any, str):
+                content_val_str = content_val_any
+
+        log_prefix = f"_prepare_special_chapter_data ({chapter_type})"
+        content_snippet = content_key_or_direct_content[:50]
+        self._logger.debug(
+            "%s: key/content='%.50s...', type: %s, empty: %s",
+            log_prefix,
+            content_snippet,
+            type(content_val_str).__name__,
+            not bool(content_val_str and content_val_str.strip()),
+        )
+        if not (content_val_str and content_val_str.strip()):
+            self._log_info(
+                "No valid content for '%s' chapter (key/content: '%.50s...').", chapter_type, content_snippet
+            )
+            return None
+        self._log_info("'%s' chapter data prepared (len: %d).", chapter_type.capitalize(), len(content_val_str))
+
+        special_indices_map: dict[ChapterTypeLiteral, int] = {
+            "diagrams": -2000,
+            "source_index": -3000,
+            "project_review": -4000,
+        }
+        return {
+            "filename": "",
+            "content": content_val_str,
+            "name": title,
+            "num": -1,
+            "abstraction_index": special_indices_map.get(chapter_type, -5000),
+            "chapter_type": chapter_type,
+        }
+
+    def _add_and_assign_numbers_to_special_chapters(
+        self,
+        all_chapters_list: AllChaptersDataListInternal,
+        shared_context: SLSharedContext,
+        output_config: OutputConfigDictInternal,
+        diagram_config: DiagramConfigDictInternal,
+        starting_chapter_number: int,
+    ) -> int:
+        """Add special chapters and assign their chapter numbers sequentially."""
+        current_num = starting_chapter_number
+
+        if any(
+            diagram_config.get(f"include_{d_type}", False)
+            for d_type in ["relationship_flowchart", "class_diagram", "package_diagram"]
+        ) or (
+            isinstance(diagram_config.get("include_sequence_diagrams"), dict)
+            and diagram_config["include_sequence_diagrams"].get("enabled")
+        ):
+            diagram_content_str = self._create_diagrams_chapter_content(shared_context, diagram_config)
+            if diagram_content_str:
+                # Pass content directly
+                diagram_chapter_data = self._prepare_special_chapter_data(
+                    diagram_content_str, DIAGRAMS_CHAPTER_TITLE, "diagrams", is_direct_content=True
+                )
+                if diagram_chapter_data:
+                    diagram_chapter_data["num"] = current_num
+                    all_chapters_list.append(diagram_chapter_data)
+                    current_num += 1
+            else:
+                self._log_info("Diagrams chapter content was empty, not adding chapter.")
+
+        if bool(output_config.get("include_source_index", False)):
+            src_idx_chapter = self._prepare_special_chapter_data(
+                "source_index_content", SOURCE_INDEX_CHAPTER_TITLE, "source_index", shared_context=shared_context
+            )
+            if src_idx_chapter:
+                src_idx_chapter["num"] = current_num
+                all_chapters_list.append(src_idx_chapter)
+                current_num += 1
+
+        if bool(output_config.get("include_project_review", False)):
+            proj_rev_chapter = self._prepare_special_chapter_data(
+                "project_review_content", PROJECT_REVIEW_CHAPTER_TITLE, "project_review", shared_context=shared_context
+            )
+            if proj_rev_chapter:
+                proj_rev_chapter["num"] = current_num
+                all_chapters_list.append(proj_rev_chapter)
+                current_num += 1
+        return current_num
+
+    def _assemble_chapters(
+        self, shared_context: SLSharedContext, data: SharedDataForCombineInternal
+    ) -> AllChaptersDataListInternal:
+        """Assemble all chapter types, sort them, and assign final numbers/filenames."""
+        self._log_info("Assembling all chapter data...")
+        cfg: ConfigDictInternal = data.get("config", {})  # type: ignore[assignment]
+        out_cfg: OutputConfigDictInternal = cfg.get("output", {})  # type: ignore[assignment]
+        diag_cfg: DiagramConfigDictInternal = out_cfg.get("diagram_generation", {})  # type: ignore[assignment]
+
+        abstractions: AbstractionsListInternal = data.get("abstractions", [])  # type: ignore[assignment]
+        chapter_order: ChapterOrderListInternal = data.get("chapter_order", [])  # type: ignore[assignment]
+        chapters_content: ChapterContentListInternal = data.get("chapters_content", [])  # type: ignore[assignment]
+
+        all_assembled_chapters = self._prepare_standard_chapters_data(abstractions, chapter_order, chapters_content)
+
+        for i, chap_data in enumerate(
+            all_assembled_chapters
+        ):  # Standard chapters are already sorted by pedagogical order
+            chap_data["num"] = i + 1
+
+        next_available_chapter_num = len(all_assembled_chapters) + 1
+        self._add_and_assign_numbers_to_special_chapters(
+            all_assembled_chapters, shared_context, out_cfg, diag_cfg, next_available_chapter_num
+        )
+
+        all_assembled_chapters.sort(key=lambda x: x.get("num", MAX_INT_FOR_SORTING))
+
+        for chapter_info in all_assembled_chapters:  # Filenames based on final sorted 'num'
+            name_raw: str = str(chapter_info.get("name", f"chapter-{chapter_info['num']}"))
+            ch_type: ChapterTypeLiteral = chapter_info.get("chapter_type", "standard")  # type: ignore[assignment]
+
+            name_base = (
+                self._get_special_chapter_base_name(ch_type)
+                if ch_type in ["diagrams", "source_index", "project_review"]
+                else (sanitize_filename(name_raw) or f"chapter-{chapter_info['num']}")
+            )
+
+            num_val = chapter_info["num"]
+            chapter_info["filename"] = f"{num_val:0{FILENAME_CHAPTER_PREFIX_WIDTH_COMBINE}d}_{name_base}.md"
+
+        self._log_info("Assembled and numbered %d chapters for final output.", len(all_assembled_chapters))
+        return all_assembled_chapters
+
+    def _create_diagrams_chapter_content(
+        self, shared_context: SLSharedContext, diagram_config: DiagramConfigDictInternal
+    ) -> Optional[str]:
+        """Create the content for the diagrams chapter by combining individual diagram markups."""
         content_parts: list[str] = [f"# {DIAGRAMS_CHAPTER_TITLE}\n"]
         fmt = str(diagram_config.get("format", "mermaid"))
-        proj: str = str(shared.get("project_name", DEFAULT_PROJECT_NAME_COMBINE))
-        has_content = False
-
-        class_diag_markup_val = shared.get("class_diagram_markup")
-        pkg_diag_markup_val = shared.get("package_diagram_markup")
-        seq_diag_markups_val = shared.get("sequence_diagrams_markup", [])
-
-        self._logger.debug(
-            "_prepare_diagrams_chapter_data: class_diagram_markup type: %s, empty: %s",
-            type(class_diag_markup_val).__name__,
-            not bool(str(class_diag_markup_val).strip() if class_diag_markup_val else False),
-        )
-        self._logger.debug(
-            "_prepare_diagrams_chapter_data: package_diagram_markup type: %s, empty: %s",
-            type(pkg_diag_markup_val).__name__,
-            not bool(str(pkg_diag_markup_val).strip() if pkg_diag_markup_val else False),
-        )
-        self._logger.debug(
-            "_prepare_diagrams_chapter_data: sequence_diagrams_markup type: %s, count: %s",
-            type(seq_diag_markups_val).__name__,
-            len(seq_diag_markups_val) if isinstance(seq_diag_markups_val, list) else "N/A",
-        )
+        proj: str = str(shared_context.get("project_name", DEFAULT_PROJECT_NAME_COMBINE))
+        has_any_diagram_content = False
 
         if bool(diagram_config.get("include_class_diagram", False)):
-            markup: DiagramMarkup = str(class_diag_markup_val) if isinstance(class_diag_markup_val, str) else None
+            markup_val = shared_context.get("class_diagram_markup")
+            markup: DiagramMarkupInternal = str(markup_val) if isinstance(markup_val, str) else None
+            desc_class = f"Key classes and their relationships in **{proj}**."
             if self._add_diagram_markup(
                 DiagramMarkupContext(
-                    content_parts, markup, "Class Diagram", f"Key classes in **{proj}**.", fmt, "Adding Class Diagram."
+                    content_parts, markup, "Class Diagram", desc_class, fmt, "Adding Class Diagram to diagrams chapter."
                 )
             ):
-                has_content = True
+                has_any_diagram_content = True
+
         if bool(diagram_config.get("include_package_diagram", False)):
-            markup_pkg: DiagramMarkup = str(pkg_diag_markup_val) if isinstance(pkg_diag_markup_val, str) else None
+            markup_val = shared_context.get("package_diagram_markup")
+            markup_pkg: DiagramMarkupInternal = str(markup_val) if isinstance(markup_val, str) else None
+            desc_pkg = f"High-level module and package structure of **{proj}**."
             if self._add_diagram_markup(
                 DiagramMarkupContext(
                     content_parts,
                     markup_pkg,
                     "Package Dependencies",
-                    f"Modular structure of **{proj}**.",
+                    desc_pkg,
                     fmt,
-                    "Adding Package Diagram.",
+                    "Adding Package Diagram to diagrams chapter.",
                 )
             ):
-                has_content = True
-        seq_cfg_raw: Any = diagram_config.get("include_sequence_diagrams", {})
-        seq_cfg: SequenceDiagramConfigDict = seq_cfg_raw if isinstance(seq_cfg_raw, dict) else {}
+                has_any_diagram_content = True
+
+        seq_cfg_any: Any = diagram_config.get("include_sequence_diagrams", {})
+        seq_cfg: SequenceDiagramConfigDictInternal = seq_cfg_any if isinstance(seq_cfg_any, dict) else {}
         if bool(seq_cfg.get("enabled", False)):
-            scenarios_raw: Any = shared.get("identified_scenarios", [])
-            markups_list: SequenceDiagramsList = (
-                [str(m) if isinstance(m, str) else None for m in seq_diag_markups_val]
-                if isinstance(seq_diag_markups_val, list)
+            scenarios_raw: Any = shared_context.get("identified_scenarios", [])
+            markups_list_any: Any = shared_context.get("sequence_diagrams_markup", [])
+
+            markups_list: SequenceDiagramsListInternal = (
+                [str(m) if isinstance(m, str) else None for m in markups_list_any]
+                if isinstance(markups_list_any, list)
                 else []
             )
-            scenarios_list: IdentifiedScenarioList = (
+
+            scenarios_list: IdentifiedScenarioListInternal = (
                 [str(s) for s in scenarios_raw if isinstance(s, str) and s.strip()]
                 if isinstance(scenarios_raw, list)
                 else []
             )
+
             if self._add_sequence_diagrams_markup(content_parts, markups_list, scenarios_list, fmt):
-                has_content = True
+                has_any_diagram_content = True
 
-        self._logger.debug("_prepare_diagrams_chapter_data: has_content = %s", has_content)
-        return (
-            {
-                "filename": "",
-                "content": "\n".join(content_parts),
-                "name": DIAGRAMS_CHAPTER_TITLE,
-                "num": -1,
-                "abstraction_index": -1,  # Unique negative index for sorting/identification
-                "chapter_type": "diagrams",
-            }
-            if has_content
-            else None
-        )
-
-    def _prepare_source_index_chapter_data(self, shared: SLSharedState) -> Optional[ChapterFileData]:
-        """Prepare data for the source index chapter.
-
-        Args:
-            shared: The shared state dictionary.
-
-        Returns:
-            A `ChapterFileData` dictionary if source index is to be included, else None.
-        """
-        content_val: Any = shared.get("source_index_content")
-        self._logger.debug(
-            "_prepare_source_index_chapter_data: source_index_content type: %s, empty: %s",
-            type(content_val).__name__,
-            not bool(str(content_val).strip() if content_val else False),
-        )
-        if not (isinstance(content_val, str) and content_val.strip()):
-            self._log_info("No valid source index content for chapter.")
-            return None
-        self._log_info("Source index chapter data prepared (len: %d).", len(content_val))
-        return {
-            "filename": "",
-            "content": content_val,
-            "name": SOURCE_INDEX_CHAPTER_TITLE,
-            "num": -1,
-            "abstraction_index": -2,  # Unique negative index
-            "chapter_type": "source_index",
-        }
-
-    def _prepare_project_review_chapter_data(self, shared: SLSharedState) -> Optional[ChapterFileData]:
-        """Prepare data for the project review chapter.
-
-        Args:
-            shared: The shared state dictionary.
-
-        Returns:
-            A `ChapterFileData` dictionary if project review is to be included, else None.
-        """
-        content_val: Any = shared.get("project_review_content")
-        self._logger.debug(
-            "_prepare_project_review_chapter_data: project_review_content type: %s, empty: %s",
-            type(content_val).__name__,
-            not bool(str(content_val).strip() if content_val else False),
-        )
-        if not (isinstance(content_val, str) and content_val.strip()):
-            self._log_info("No valid project review content for chapter.")
-            return None
-        self._log_info("Project review chapter data prepared (len: %d).", len(content_val))
-        return {
-            "filename": "",
-            "content": content_val,
-            "name": PROJECT_REVIEW_CHAPTER_TITLE,
-            "num": -1,
-            "abstraction_index": -3,  # Unique negative index
-            "chapter_type": "project_review",
-        }
-
-    def _assemble_chapters(self, shared: SLSharedState, data: SharedDataForCombine) -> AllChaptersDataList:
-        """Assemble all chapter types and assign numbers/filenames.
-
-        Args:
-            shared: The shared state dictionary.
-            data: The combined data retrieved for this node.
-
-        Returns:
-            A list of `ChapterFileData` dictionaries, ordered and numbered.
-        """
-        self._log_info("Assembling all chapter data...")
-        cfg: ConfigDict = data.get("config", {}) if isinstance(data.get("config"), dict) else {}
-        out_cfg: OutputConfigDict = cfg.get("output", {}) if isinstance(cfg.get("output"), dict) else {}
-        inc_src_idx: bool = bool(out_cfg.get("include_source_index", False))
-        inc_proj_rev: bool = bool(out_cfg.get("include_project_review", False))
-
-        abstractions: AbstractionsList = (
-            data.get("abstractions", []) if isinstance(data.get("abstractions"), list) else []
-        )
-        chapter_order: ChapterOrderList = (
-            data.get("chapter_order", []) if isinstance(data.get("chapter_order"), list) else []
-        )
-        chapters_content: ChapterContentList = (
-            data.get("chapters_content", []) if isinstance(data.get("chapters_content"), list) else []
-        )
-
-        self._logger.debug(
-            "_assemble_chapters: Initial counts - Abstractions: %d, ChapterOrder: %d, ChaptersContent: %d",
-            len(abstractions),
-            len(chapter_order),
-            len(chapters_content),
-        )
-
-        std_chapters = self._prepare_standard_chapters_data(abstractions, chapter_order, chapters_content)
-        diag_cfg: DiagramConfigDict = (
-            out_cfg.get("diagram_generation", {}) if isinstance(out_cfg.get("diagram_generation"), dict) else {}
-        )
-        diag_chapter = self._prepare_diagrams_chapter_data(shared, diag_cfg)
-        src_idx_chapter = self._prepare_source_index_chapter_data(shared) if inc_src_idx else None
-        project_review_chapter = self._prepare_project_review_chapter_data(shared) if inc_proj_rev else None
-
-        self._logger.debug(
-            "_assemble_chapters:Standard chapters: %d, Diagram chapter: %s, SrcIdx chapter: %s, ProjReview chapter: %s",
-            len(std_chapters),
-            bool(diag_chapter),
-            bool(src_idx_chapter),
-            bool(project_review_chapter),
-        )
-
-        all_chapters: AllChaptersDataList = list(std_chapters)
-        if diag_chapter:
-            all_chapters.append(diag_chapter)
-        if src_idx_chapter:
-            all_chapters.append(src_idx_chapter)
-        if project_review_chapter:
-            all_chapters.append(project_review_chapter)
-
-        for i, chapter_info in enumerate(all_chapters):
-            chapter_info["num"] = i + 1
-            ch_type_val: Any = chapter_info.get("chapter_type", "standard")
-            ch_type: ChapterTypeLiteral = "standard"
-            if ch_type_val in get_args(ChapterTypeLiteral):
-                ch_type = ch_type_val  # type: ignore[assignment]
-            else:
-                self._log_warning("Unexpected chapter_type '%s'. Defaulting.", ch_type_val)
-
-            name_raw: str = str(chapter_info.get("name", f"chapter-{i + 1}"))
-            name_base: str
-            if ch_type == "diagrams":
-                name_base = DIAGRAMS_FILENAME_BASE
-            elif ch_type == "source_index":
-                name_base = SOURCE_INDEX_FILENAME_BASE
-            elif ch_type == "project_review":
-                name_base = PROJECT_REVIEW_FILENAME_BASE
-            else:  # standard
-                name_base = sanitize_filename(name_raw) or f"chapter-{i + 1}"
-
-            chapter_info["filename"] = f"{i + 1:0{FILENAME_CHAPTER_PREFIX_WIDTH_COMBINE}d}_{name_base}.md"
-        self._log_info("Assembled %d chapters.", len(all_chapters))
-        return all_chapters
+        return "\n".join(content_parts) if has_any_diagram_content else None
 
     def _process_and_write_tutorial_files(
-        self, shared: SLSharedState, data: SharedDataForCombine, footer_info: FooterInfo, output_path_obj: Path
+        self,
+        shared_context: SLSharedContext,
+        data: SharedDataForCombineInternal,
+        footer_info: FooterInfo,
+        output_path_obj: Path,
     ) -> bool:
-        """Orchestrate chapter assembly, formatting, and file writing.
+        """Orchestrate chapter assembly, formatting, and file writing."""
+        all_chapters = self._assemble_chapters(shared_context, data)
 
-        Args:
-            shared: The shared state dictionary.
-            data: Combined data for this node's operation.
-            footer_info: FooterInfo object for generating footers.
-            output_path_obj: Path object for the output directory.
-
-        Returns:
-            True if all files were written successfully, False otherwise.
-        """
-        markup_raw: Any = data.get("relationship_flowchart_markup")
-        self._logger.debug(
-            "_process_and_write: 'relationship_flowchart_markup' from data: '%.*s...' (type: %s)",
-            LOG_MARKUP_SNIPPET_LEN_COMBINE,
-            str(markup_raw) if markup_raw else "None",
-            type(markup_raw).__name__,
+        rel_flow_markup_val: Any = data.get("relationship_flowchart_markup")
+        rel_flow_markup: DiagramMarkupInternal = (
+            str(rel_flow_markup_val) if isinstance(rel_flow_markup_val, str) else None
         )
-        rel_flow_markup: DiagramMarkup = str(markup_raw) if isinstance(markup_raw, str) else None
-        all_chapters = self._assemble_chapters(shared, data)
+
         if not all_chapters and not (rel_flow_markup and rel_flow_markup.strip()):
-            self._log_warning("No content to combine. Skipping file writes.")
-            shared["final_output_dir"] = str(output_path_obj.resolve())
+            self._log_warning("No content to combine (no chapters and no main flowchart). Skipping file writes.")
+            shared_context["final_output_dir"] = str(output_path_obj.resolve())
             return True
+
         footer_str = footer_info.format_footer()
         self._add_navigation_links(all_chapters, INDEX_FILENAME)
         self._add_footers(all_chapters, footer_str)
-        cfg: ConfigDict = data.get("config", {}) if isinstance(data.get("config"), dict) else {}
-        out_cfg: OutputConfigDict = cfg.get("output", {}) if isinstance(cfg.get("output"), dict) else {}
-        diag_cfg: DiagramConfigDict = (
-            out_cfg.get("diagram_generation", {}) if isinstance(out_cfg.get("diagram_generation"), dict) else {}
-        )
 
-        self._logger.debug(
-            "_process_and_write: 'rel_flow_markup' before IndexContext: '%.*s...' (type: %s)",
-            LOG_MARKUP_SNIPPET_LEN_COMBINE,
-            str(rel_flow_markup) if rel_flow_markup else "None",
-            type(rel_flow_markup).__name__,
+        cfg_any: Any = data.get("config", {})
+        cfg: ConfigDictInternal = cfg_any if isinstance(cfg_any, dict) else {}
+        out_cfg_any: Any = cfg.get("output", {})
+        out_cfg: OutputConfigDictInternal = out_cfg_any if isinstance(out_cfg_any, dict) else {}
+        diag_cfg: DiagramConfigDictInternal = (
+            out_cfg.get("diagram_generation", {}) if isinstance(out_cfg.get("diagram_generation"), dict) else {}
         )
 
         idx_ctx = IndexContext(
             project_name=str(data.get("project_name", DEFAULT_PROJECT_NAME_COMBINE)),
-            relationships_data=data.get("relationships_data", {})
-            if isinstance(data.get("relationships_data"), dict)
-            else {},
+            relationships_data=data.get("relationships_data", {}),  # type: ignore[arg-type]
             footer_info=footer_info,
             repo_url=str(data.get("repo_url")) if isinstance(data.get("repo_url"), str) else None,
             local_dir=str(data.get("local_dir")) if isinstance(data.get("local_dir"), str) else None,
@@ -786,21 +714,9 @@ class CombineTutorial(BaseNode[CombinePrepResult, CombineExecResult]):
         return self._write_output_files(output_path_obj, index_md_content, all_chapters)
 
     def _write_output_files(
-        self, output_path: Path, index_content: str, all_chapter_files_data: AllChaptersDataList
+        self, output_path: Path, index_content: str, all_chapter_files_data: AllChaptersDataListInternal
     ) -> bool:
-        """Write the index.md and all generated chapter files to disk.
-
-        Args:
-            output_path: Path object representing the base output directory.
-            index_content: The Markdown content for the index.md file.
-            all_chapter_files_data: List of chapter data dictionaries.
-
-        Returns:
-            True if all writes were successful, False otherwise.
-
-        Raises:
-            OSError: If creating the output directory fails critically.
-        """
+        """Write the index.md and all generated chapter files to disk."""
         try:
             output_path.mkdir(parents=True, exist_ok=True)
             self._log_info("Ensured output directory exists: %s", output_path.resolve())
@@ -817,49 +733,47 @@ class CombineTutorial(BaseNode[CombinePrepResult, CombineExecResult]):
         all_writes_ok = True
         self._log_info("Attempting to write %d chapter files.", len(all_chapter_files_data))
         for ch_info in all_chapter_files_data:
-            fname_val, content_val, ch_name = (
-                str(ch_info.get("filename", "")),
-                str(ch_info.get("content", "")),
-                str(ch_info.get("name", "Unknown Chapter")),
-            )
-            if not (fname_val.strip() and content_val is not None):
-                self._log_warning("Skipping file write for ch '%s': invalid filename or missing content.", ch_name)
-                all_writes_ok = False
+            fname_val = str(ch_info.get("filename", ""))
+            content_val = str(ch_info.get("content", ""))
+            ch_name = str(ch_info.get("name", "Unknown Chapter"))
+
+            if not (fname_val.strip() and content_val.strip()):
+                self._log_warning("Skipping file write for ch '%s': invalid filename or empty content.", ch_name)
+                if not fname_val.strip():
+                    all_writes_ok = False
                 continue
             ch_filepath = output_path / fname_val
             try:
                 ch_filepath.write_text(content_val, encoding="utf-8")
                 self._log_info("Wrote chapter file: %s (Name: '%s')", ch_filepath, ch_name)
             except OSError as e_ch:
-                self._log_error(
-                    "Failed to write ch file %s (Name: '%s'): %s", ch_filepath, ch_name, e_ch, exc_info=True
-                )
+                log_err_msg = f"Failed to write ch file {ch_filepath} (Name: '{ch_name}'): {e_ch!s}"
+                self._log_error(log_err_msg, exc_info=True)
                 all_writes_ok = False
         if not all_writes_ok:
             self._log_warning("One or more chapter file writes failed. Please check logs.")
         return all_writes_ok
 
-    def _retrieve_shared_data(self, shared: SLSharedState) -> SharedDataForCombine:
-        """Retrieve all necessary data from shared state for combination logic.
-
-        Args:
-            shared: The shared state dictionary.
-
-        Returns:
-            A dictionary containing all data required by the combine logic.
-        """
-        self._logger.debug("--- Retrieving data from shared_state for CombineTutorial ---")
+    def _retrieve_shared_data(self, shared_context: SLSharedContext) -> SharedDataForCombineInternal:
+        """Retrieve all necessary data from shared context for combination logic."""
+        self._logger.debug("--- Retrieving data from shared_context for CombineTutorial ---")
         keys_to_log = [
             "abstractions",
             "chapter_order",
             "chapters",
             "relationship_flowchart_markup",
             "project_review_content",
+            "source_index_content",
         ]
         for key in keys_to_log:
-            value = shared.get(key)
+            value = shared_context.get(key)
             value_type = type(value).__name__
-            value_len = len(value) if hasattr(value, "__len__") else "N/A"
+            value_len_str = "N/A"
+            # SIM105: Use `contextlib.suppress` instead of `try-except-pass`
+            with contextlib.suppress(TypeError):  # Handles len(None) or non-sized types
+                if hasattr(value, "__len__"):
+                    value_len_str = str(len(value))  # type: ignore[arg-type]
+
             value_snippet = (
                 str(value)[:LOG_MARKUP_SNIPPET_LEN_COMBINE] + "..."
                 if value and len(str(value)) > LOG_MARKUP_SNIPPET_LEN_COMBINE
@@ -869,45 +783,43 @@ class CombineTutorial(BaseNode[CombinePrepResult, CombineExecResult]):
                 "Shared key '%s': type=%s, len=%s, snippet='%s'",
                 key,
                 value_type,
-                value_len,
+                value_len_str,
                 value_snippet if value is not None else "None",
             )
 
-        data: SharedDataForCombine = {
-            "project_name": str(self._get_required_shared(shared, "project_name")),
-            "output_base_dir": str(self._get_required_shared(shared, "output_dir")),
-            "relationships_data": self._get_required_shared(shared, "relationships"),
-            "chapter_order": self._get_required_shared(shared, "chapter_order"),
-            "abstractions": self._get_required_shared(shared, "abstractions"),
-            "chapters_content": self._get_required_shared(shared, "chapters"),
-            "llm_config": self._get_required_shared(shared, "llm_config"),
-            "source_config": self._get_required_shared(shared, "source_config"),
-            "config": self._get_required_shared(shared, "config"),
-            "repo_url": shared.get("repo_url"),
-            "local_dir": shared.get("local_dir"),
-            "relationship_flowchart_markup": shared.get("relationship_flowchart_markup"),
-            "class_diagram_markup": shared.get("class_diagram_markup"),
-            "package_diagram_markup": shared.get("package_diagram_markup"),
-            "sequence_diagrams_markup": shared.get("sequence_diagrams_markup", []),
-            "identified_scenarios": shared.get("identified_scenarios", []),
-            "source_index_content": shared.get("source_index_content"),
-            "project_review_content": shared.get("project_review_content"),  # Added
+        data: SharedDataForCombineInternal = {
+            "project_name": str(self._get_required_shared(shared_context, "project_name")),
+            "output_base_dir": str(self._get_required_shared(shared_context, "output_dir")),
+            "relationships_data": self._get_required_shared(shared_context, "relationships"),
+            "chapter_order": self._get_required_shared(shared_context, "chapter_order"),
+            "abstractions": self._get_required_shared(shared_context, "abstractions"),
+            "chapters_content": self._get_required_shared(shared_context, "chapters"),
+            "llm_config": self._get_required_shared(shared_context, "llm_config"),
+            "source_config": self._get_required_shared(shared_context, "source_config"),
+            "config": self._get_required_shared(shared_context, "config"),
+            "repo_url": shared_context.get("repo_url"),
+            "local_dir": shared_context.get("local_dir"),
+            "relationship_flowchart_markup": shared_context.get("relationship_flowchart_markup"),
+            "class_diagram_markup": shared_context.get("class_diagram_markup"),
+            "package_diagram_markup": shared_context.get("package_diagram_markup"),
+            "sequence_diagrams_markup": shared_context.get("sequence_diagrams_markup", []),
+            "identified_scenarios": shared_context.get("identified_scenarios", []),
+            "source_index_content": shared_context.get("source_index_content"),
+            "project_review_content": shared_context.get("project_review_content"),
         }
-        self._logger.debug("--- Finished retrieving data from shared_state ---")
+        self._logger.debug("--- Finished retrieving data from shared_context ---")
         return data
 
-    def _initialize_combine_data(self, shared: SLSharedState) -> tuple[SharedDataForCombine, FooterInfo, Path]:
-        """Initialize data structures needed for combining the tutorial.
+    def _initialize_combine_data(
+        self, shared_context: SLSharedContext
+    ) -> tuple[SharedDataForCombineInternal, FooterInfo, Path]:
+        """Initialize data structures needed for combining the tutorial."""
+        data = self._retrieve_shared_data(shared_context)
+        llm_cfg_any: Any = data.get("llm_config", {})
+        src_cfg_any: Any = data.get("source_config", {})
+        llm_cfg: LlmConfigDictInternal = llm_cfg_any if isinstance(llm_cfg_any, dict) else {}
+        src_cfg: SourceConfigDictInternal = src_cfg_any if isinstance(src_cfg_any, dict) else {}
 
-        Args:
-            shared: The shared state dictionary.
-
-        Returns:
-            A tuple containing the combined data, footer information, and output path.
-        """
-        data = self._retrieve_shared_data(shared)
-        llm_cfg: LlmConfigDict = data.get("llm_config", {}) if isinstance(data.get("llm_config"), dict) else {}
-        src_cfg: SourceConfigDict = data.get("source_config", {}) if isinstance(data.get("source_config"), dict) else {}
         footer_info = FooterInfo(
             provider_name=str(llm_cfg.get("provider", FOOTER_PROVIDER_DEFAULT)),
             model_name=str(llm_cfg.get("model", FOOTER_MODEL_DEFAULT)),
@@ -919,93 +831,68 @@ class CombineTutorial(BaseNode[CombinePrepResult, CombineExecResult]):
         if not safe_project_name or safe_project_name == ".":
             safe_project_name = DEFAULT_PROJECT_NAME_COMBINE
             self._log_warning("Project name sanitized to invalid. Using default: '%s'", safe_project_name)
+
         output_base_str = str(data.get("output_base_dir", DEFAULT_OUTPUT_DIR_COMBINE))
         output_path_obj = Path(output_base_str) / safe_project_name
         return data, footer_info, output_path_obj
 
-    def prep(self, shared: SLSharedState) -> CombinePrepResult:
-        """Prepare all tutorial content and write output files.
-
-        This is the main entry point for the node's processing logic.
-
-        Args:
-            shared: The shared state dictionary containing all previously
-                    generated data.
-
-        Returns:
-            True if file writing was successful, False otherwise.
-
-        Raises:
-            LlmApiError: If a critical error occurs during file operations
-                         that prevents tutorial generation.
-        """
-        self._log_info(">>> CombineTutorial.prep: Assembling and writing tutorial files. <<<")
+    def pre_execution(self, shared_context: SLSharedContext) -> CombinePreparedInputs:
+        """Prepare all tutorial content and write output files."""
+        self._log_info(">>> CombineTutorial.pre_execution: Assembling and writing tutorial files. <<<")
         write_success = False
         output_path: Optional[Path] = None
         try:
-            retrieved_data, footer_obj, output_path_obj = self._initialize_combine_data(shared)
+            retrieved_data, footer_obj, output_path_obj = self._initialize_combine_data(shared_context)
             output_path = output_path_obj
-            self._logger.debug("Initialized data for prep. Output path: %s", output_path_obj)
-            write_success = self._process_and_write_tutorial_files(shared, retrieved_data, footer_obj, output_path_obj)
-            shared["final_output_dir"] = str(output_path_obj.resolve()) if write_success else None
+            self._logger.debug("Initialized data for pre_execution. Output path: %s", output_path_obj)
+            write_success = self._process_and_write_tutorial_files(
+                shared_context, retrieved_data, footer_obj, output_path_obj
+            )
+            shared_context["final_output_dir"] = str(output_path_obj.resolve()) if write_success else None
             if not write_success:
-                self._log_error("Prep: File writing reported errors.")
+                self._log_error("Pre-execution: File writing reported errors.")
         except ValueError as e_val:
-            self._log_error("Prep: Critical data missing or invalid: %s", e_val, exc_info=True)
-            raise  # Re-raise as it's a critical shared state issue
+            self._log_error("Pre-execution: Critical data missing or invalid: %s", e_val, exc_info=True)
+            raise
         except OSError as e_os:
-            self._log_error("Prep: Critical filesystem error: %s", e_os, exc_info=True)
+            self._log_error("Pre-execution: Critical filesystem error: %s", e_os, exc_info=True)
             raise LlmApiError(f"Combine failed: critical filesystem error: {e_os!s}") from e_os
-        except (RuntimeError, TypeError) as e_runtime:
-            self._log_error("Prep: Unexpected runtime error: %s", e_runtime, exc_info=True)
-            # Convert to LlmApiError to ensure flow engine's retry/fallback might catch if this was an LLM related issue
-            # although this node itself doesn't call LLM. For now, let's assume it's a fatal processing error.
-            raise RuntimeError(f"Combine failed unexpectedly (runtime): {e_runtime!s}") from e_runtime
         finally:
             if not write_success:
                 log_msg_part1 = "Attempted to write to output directory: "
                 log_msg_part2 = str(output_path.resolve()) if output_path else "N/A"
                 self._log_warning(log_msg_part1 + log_msg_part2 + ". Check logs for specific file errors.")
-        self._log_info(">>> CombineTutorial.prep: Exit. Write successful: %s <<<", write_success)
+        self._log_info(">>> CombineTutorial.pre_execution: Exit. Write successful: %s <<<", write_success)
         return write_success
 
-    def exec(self, prep_res: CombinePrepResult) -> CombineExecResult:
-        """Execute step for CombineTutorial (no-op).
-
-        The main work is done in the `prep` phase.
-
-        Args:
-            prep_res: The boolean result from the `prep` method.
-
-        Returns:
-            None.
-        """
-        self._log_info("CombineTutorial.exec: No direct action (prep result: %s).", prep_res)
-        if not prep_res:
-            self._log_warning("Exec: Prep step indicated failure or no content was written.")
+    def execution(self, prepared_inputs: CombinePreparedInputs) -> CombineExecutionResult:
+        """Execute step for CombineTutorial (no-op)."""
+        self._log_info("CombineTutorial.execution: No direct action (pre_execution result: %s).", prepared_inputs)
+        if not prepared_inputs:
+            self._log_warning("Execution: pre_execution step indicated failure or no content was written.")
         return None
 
-    def post(self, shared: SLSharedState, prep_res: CombinePrepResult, exec_res: CombineExecResult) -> None:
-        """Post-execution step for CombineTutorial.
-
-        Logs the final status.
-
-        Args:
-            shared: The shared state dictionary.
-            prep_res: The boolean result from the `prep` method.
-            exec_res: The result from the `exec` method (None).
-        """
-        del exec_res
-        final_dir_val: Any = shared.get("final_output_dir")
+    def post_execution(
+        self,
+        shared_context: SLSharedContext,
+        prepared_inputs: CombinePreparedInputs,
+        execution_outputs: CombineExecutionResult,
+    ) -> None:
+        """Post-execution step for CombineTutorial."""
+        del execution_outputs
+        final_dir_val: Any = shared_context.get("final_output_dir")
         final_dir_str: str = str(final_dir_val) if final_dir_val else "Not set or N/A"
-        status_msg = (
-            "successfully"
-            if prep_res and final_dir_val
-            else "completed (possibly no content, or output path issue)"
-            if prep_res
-            else "with critical errors or no output generated"
-        )
-        self._log_info("CombineTutorial.post: Processing finished %s. Final output dir: %s", status_msg, final_dir_str)
+        status_msg: str
+        if prepared_inputs and final_dir_val:
+            status_msg = "successfully"
+        elif prepared_inputs:
+            status_msg = "completed (possibly no content to write, or output path issue)"
+        else:
+            status_msg = "with critical errors or no output generated"
+
+        log_msg_l1 = f"CombineTutorial.post_execution: Processing finished {status_msg}. "
+        log_msg_l2 = f"Final output dir: {final_dir_str}"
+        self._log_info(log_msg_l1 + log_msg_l2)
 
 
 # End of src/sourcelens/nodes/n10_combine_tutorial.py

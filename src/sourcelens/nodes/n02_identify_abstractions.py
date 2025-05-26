@@ -25,22 +25,26 @@ from sourcelens.prompts import AbstractionPrompts
 from sourcelens.utils.llm_api import LlmApiError, call_llm
 from sourcelens.utils.validation import ValidationFailure, validate_yaml_list
 
-from .base_node import BaseNode, SLSharedState
+from .base_node import BaseNode, SLSharedContext  # Updated import
 
 AbstractionItem: TypeAlias = dict[str, Union[str, list[int]]]
 """Type alias for a single identified abstraction after processing.
    Keys: 'name' (str), 'description' (str), 'files' (list[int] - validated indices).
 """
 AbstractionsList: TypeAlias = list[AbstractionItem]
-"""Type alias for the list of identified abstractions (execution result for IdentifyAbstractions)."""
+"""Type alias for the list of identified abstractions (execution result)."""
 
-IdentifyAbstractionsPrepResult: TypeAlias = dict[str, Any]
+# Renamed type aliases for consistency
+IdentifyAbstractionsPreparedInputs: TypeAlias = dict[str, Any]
 """Type alias for the preparation result of IdentifyAbstractions node.
    Contains keys like 'context_str', 'file_listing_str', 'file_count',
    'project_name', 'language', 'llm_config', 'cache_config', 'files_data_ref'.
 """
+IdentifyAbstractionsExecutionResult: TypeAlias = AbstractionsList
+"""Execution result is the list of identified abstractions."""
 
-FileDataList: TypeAlias = list[tuple[str, str]]
+
+FileDataListInternal: TypeAlias = list[tuple[str, str]]  # Kept as internal for clarity here
 PathToIndexMap: TypeAlias = dict[str, int]
 RawLLMIndexEntry: TypeAlias = Union[str, int, float, None]
 
@@ -60,13 +64,13 @@ ABSTRACTION_ITEM_SCHEMA: dict[str, Any] = {
 }
 
 
-class IdentifyAbstractions(BaseNode[IdentifyAbstractionsPrepResult, AbstractionsList]):
+class IdentifyAbstractions(BaseNode[IdentifyAbstractionsPreparedInputs, IdentifyAbstractionsExecutionResult]):
     """Identify core abstractions from the codebase using an LLM.
 
     This node takes the fetched file data, constructs a prompt for the LLM
     to identify key conceptual abstractions, calls the LLM, and then validates
     and processes the YAML response. The identified abstractions are stored
-    in the shared state.
+    in the shared context.
     """
 
     def _try_parse_index_from_string(self, entry_str: str, path_to_index_map: PathToIndexMap) -> Optional[int]:
@@ -81,7 +85,6 @@ class IdentifyAbstractions(BaseNode[IdentifyAbstractionsPrepResult, Abstractions
 
         Returns:
             The parsed integer index if successful, otherwise None.
-
         """
         parsed_idx: Optional[int] = None
         if "#" in entry_str:
@@ -112,7 +115,6 @@ class IdentifyAbstractions(BaseNode[IdentifyAbstractionsPrepResult, Abstractions
 
         Returns:
             Parsed integer index if valid and within bounds, otherwise None.
-
         """
         parsed_idx: Optional[int] = None
         try:
@@ -123,7 +125,7 @@ class IdentifyAbstractions(BaseNode[IdentifyAbstractionsPrepResult, Abstractions
             elif isinstance(idx_entry, float) and idx_entry.is_integer():
                 parsed_idx = int(idx_entry)
             elif idx_entry is None:
-                return None
+                return None  # Explicitly handle None case
             else:
                 module_logger.warning(
                     "Unexpected type '%s' for file index: '%s'. Ignoring entry.", type(idx_entry).__name__, idx_entry
@@ -132,11 +134,11 @@ class IdentifyAbstractions(BaseNode[IdentifyAbstractionsPrepResult, Abstractions
 
             if parsed_idx is not None and 0 <= parsed_idx < file_count:
                 return parsed_idx
-            if parsed_idx is not None:
+            if parsed_idx is not None:  # Only log if it was parsable but out of bounds
                 module_logger.warning(
                     "File index %d is out of valid range [0, %d). Ignoring index.", parsed_idx, file_count
                 )
-            return None
+            return None  # If not in range or still None
         except (ValueError, TypeError) as e:
             module_logger.warning("Could not parse file index entry '%s': %s. Ignoring.", idx_entry, e)
             return None
@@ -158,7 +160,6 @@ class IdentifyAbstractions(BaseNode[IdentifyAbstractionsPrepResult, Abstractions
 
         Returns:
             A sorted list of unique, valid integer file indices.
-
         """
         validated_indices: set[int] = set()
         if not isinstance(raw_indices, list):
@@ -178,7 +179,7 @@ class IdentifyAbstractions(BaseNode[IdentifyAbstractionsPrepResult, Abstractions
                     type(idx_entry_any).__name__,
                 )
                 continue
-            idx_entry: RawLLMIndexEntry = idx_entry_any
+            idx_entry: RawLLMIndexEntry = idx_entry_any  # Type assertion for mypy
 
             valid_idx = self._parse_single_index(idx_entry, path_to_index_map, file_count)
             if valid_idx is not None:
@@ -192,23 +193,23 @@ class IdentifyAbstractions(BaseNode[IdentifyAbstractionsPrepResult, Abstractions
             )
         return sorted(validated_indices)
 
-    def prep(self, shared: SLSharedState) -> IdentifyAbstractionsPrepResult:
+    def pre_execution(self, shared_context: SLSharedContext) -> IdentifyAbstractionsPreparedInputs:
         """Prepare context and parameters for abstraction identification LLM prompt.
 
         Args:
-            shared: The shared state dictionary.
+            shared_context: The shared context dictionary.
 
         Returns:
-            A dictionary containing context for the `exec` method.
+            A dictionary containing context for the `execution` method.
         """
         self._log_info("Preparing context for abstraction identification...")
-        files_data_any: Any = self._get_required_shared(shared, "files")
-        project_name_any: Any = self._get_required_shared(shared, "project_name")
-        llm_config_any: Any = self._get_required_shared(shared, "llm_config")
-        cache_config_any: Any = self._get_required_shared(shared, "cache_config")
-        language_any: Any = shared.get("language", "english")
+        files_data_any: Any = self._get_required_shared(shared_context, "files")
+        project_name_any: Any = self._get_required_shared(shared_context, "project_name")
+        llm_config_any: Any = self._get_required_shared(shared_context, "llm_config")
+        cache_config_any: Any = self._get_required_shared(shared_context, "cache_config")
+        language_any: Any = shared_context.get("language", "english")
 
-        files_data: FileDataList = files_data_any if isinstance(files_data_any, list) else []
+        files_data: FileDataListInternal = files_data_any if isinstance(files_data_any, list) else []
         project_name: str = str(project_name_any) if isinstance(project_name_any, str) else "Unknown Project"
         llm_config: dict[str, Any] = llm_config_any if isinstance(llm_config_any, dict) else {}
         cache_config: dict[str, Any] = cache_config_any if isinstance(cache_config_any, dict) else {}
@@ -219,7 +220,7 @@ class IdentifyAbstractions(BaseNode[IdentifyAbstractionsPrepResult, Abstractions
         ]
         file_info_for_prompt: list[str] = [f"- {i} # {path}" for i, (path, _) in enumerate(files_data)]
 
-        prep_result: IdentifyAbstractionsPrepResult = {
+        prepared_inputs: IdentifyAbstractionsPreparedInputs = {
             "context_str": "".join(context_list),
             "file_listing_str": "\n".join(file_info_for_prompt),
             "file_count": len(files_data),
@@ -227,18 +228,18 @@ class IdentifyAbstractions(BaseNode[IdentifyAbstractionsPrepResult, Abstractions
             "language": language,
             "llm_config": llm_config,
             "cache_config": cache_config,
-            "files_data_ref": files_data,
+            "files_data_ref": files_data,  # Reference to original files_data
         }
-        return prep_result
+        return prepared_inputs
 
     def _process_raw_abstractions(
-        self, raw_abstractions_list: list[Any], files_data_ref: FileDataList, file_count: int
+        self, raw_abstractions_list: list[Any], files_data_ref: FileDataListInternal, file_count: int
     ) -> AbstractionsList:
         """Process and validate a list of raw abstraction items from LLM response.
 
         Args:
             raw_abstractions_list: List of items parsed from LLM's YAML response.
-            files_data_ref: Original list of (path, content) tuples from `shared_state`.
+            files_data_ref: Original list of (path, content) tuples from `shared_context`.
             file_count: Total number of files, for validating index ranges.
 
         Returns:
@@ -251,7 +252,7 @@ class IdentifyAbstractions(BaseNode[IdentifyAbstractionsPrepResult, Abstractions
             if not isinstance(item_dict_any, dict):
                 module_logger.warning("Skipping non-dictionary item in raw_abstractions_list: %s", item_dict_any)
                 continue
-            item_dict: dict[str, Any] = item_dict_any
+            item_dict: dict[str, Any] = item_dict_any  # Type assertion for mypy
 
             item_name_raw: Any = item_dict.get("name", "Unknown Abstraction")
             item_desc_raw: Any = item_dict.get("description", "")
@@ -272,33 +273,33 @@ class IdentifyAbstractions(BaseNode[IdentifyAbstractionsPrepResult, Abstractions
             validated_abstractions.append(processed_item)
         return validated_abstractions
 
-    def exec(self, prep_res: IdentifyAbstractionsPrepResult) -> AbstractionsList:
+    def execution(self, prepared_inputs: IdentifyAbstractionsPreparedInputs) -> IdentifyAbstractionsExecutionResult:
         """Execute LLM call, parse, and validate identified abstractions.
 
         Args:
-            prep_res: The dictionary returned by the `prep` method.
+            prepared_inputs: The dictionary returned by the `pre_execution` method.
 
         Returns:
             A list of identified and validated abstraction dictionaries.
             Returns an empty list if the LLM call fails or validation fails.
         """
-        llm_config: dict[str, Any] = prep_res["llm_config"]
-        cache_config: dict[str, Any] = prep_res["cache_config"]
-        project_name: str = prep_res["project_name"]
+        llm_config: dict[str, Any] = prepared_inputs["llm_config"]
+        cache_config: dict[str, Any] = prepared_inputs["cache_config"]
+        project_name: str = prepared_inputs["project_name"]
         self._log_info("Identifying abstractions for '%s' using LLM...", project_name)
 
         prompt = AbstractionPrompts.format_identify_abstractions_prompt(
             project_name=project_name,
-            context=prep_res["context_str"],
-            file_listing=prep_res["file_listing_str"],
-            language=prep_res["language"],
+            context=prepared_inputs["context_str"],
+            file_listing=prepared_inputs["file_listing_str"],
+            language=prepared_inputs["language"],
         )
         response_text: str
         try:
             response_text = call_llm(prompt, llm_config, cache_config)
         except LlmApiError as e:
             self._log_error("LLM call failed during abstraction identification: %s", e, exc_info=True)
-            return []
+            return []  # Return empty list on LLM error
 
         raw_abstractions_from_yaml: list[Any]
         try:
@@ -310,38 +311,43 @@ class IdentifyAbstractions(BaseNode[IdentifyAbstractionsPrepResult, Abstractions
                 if len(e_val.raw_output) > MAX_RAW_OUTPUT_SNIPPET_LEN:
                     snippet += "..."
                 module_logger.warning("Problematic raw LLM output for abstractions:\n---\n%s\n---", snippet)
-            return []
+            return []  # Return empty list on validation failure
 
         try:
-            files_data_ref: FileDataList = prep_res["files_data_ref"]
-            file_count: int = prep_res["file_count"]
+            # Type assertion for files_data_ref
+            files_data_ref: FileDataListInternal = prepared_inputs["files_data_ref"]  # type: ignore[assignment]
+            file_count: int = prepared_inputs["file_count"]
             validated_abstractions = self._process_raw_abstractions(
                 raw_abstractions_from_yaml, files_data_ref, file_count
             )
             if not validated_abstractions and raw_abstractions_from_yaml:
-                self._log_warning(
-                    "LLM parsed YAML for abstractions, but no valid items remained after processing file indices."
-                )
+                log_msg = "LLM parsed YAML for abstractions, but no valid items remained after processing file indices."
+                self._log_warning(log_msg)
             elif not validated_abstractions:
                 self._log_warning("No valid abstractions found in LLM response or after processing.")
             else:
                 self._log_info("Successfully processed %d abstractions.", len(validated_abstractions))
             return validated_abstractions
-        except (ValueError, TypeError, KeyError) as e_proc:
+        except (ValueError, TypeError, KeyError) as e_proc:  # More specific errors during processing
             self._log_error("Error processing validated abstractions: %s", e_proc, exc_info=True)
-            return []
+            return []  # Return empty list on processing error
 
-    def post(self, shared: SLSharedState, prep_res: IdentifyAbstractionsPrepResult, exec_res: AbstractionsList) -> None:
-        """Update the shared state with identified abstractions.
+    def post_execution(
+        self,
+        shared_context: SLSharedContext,
+        prepared_inputs: IdentifyAbstractionsPreparedInputs,  # Renamed
+        execution_outputs: IdentifyAbstractionsExecutionResult,  # Renamed
+    ) -> None:
+        """Update the shared context with identified abstractions.
 
         Args:
-            shared: The shared state dictionary to update.
-            prep_res: Result from the `prep` phase (unused in this method).
-            exec_res: List of abstractions from the `exec` phase.
+            shared_context: The shared context dictionary to update.
+            prepared_inputs: Result from the `pre_execution` phase (unused here).
+            execution_outputs: List of abstractions from the `execution` phase.
         """
-        del prep_res
-        shared["abstractions"] = exec_res
-        self._log_info("Stored %d abstractions in shared state.", len(exec_res))
+        del prepared_inputs  # Mark as unused
+        shared_context["abstractions"] = execution_outputs
+        self._log_info("Stored %d abstractions in shared context.", len(execution_outputs))
 
 
 # End of src/sourcelens/nodes/n02_identify_abstractions.py

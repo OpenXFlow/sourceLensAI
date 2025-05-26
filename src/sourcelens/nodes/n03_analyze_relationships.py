@@ -16,7 +16,7 @@
 """Node responsible for analyzing relationships between identified abstractions using an LLM."""
 
 import logging
-from typing import Any, Final, Optional, Union  # Removed TypeAlias
+from typing import Any, Final, Optional, Union
 
 from typing_extensions import TypeAlias
 
@@ -25,23 +25,25 @@ from sourcelens.utils.helpers import get_content_for_indices
 from sourcelens.utils.llm_api import LlmApiError, call_llm
 from sourcelens.utils.validation import ValidationFailure, validate_yaml_dict
 
-from .base_node import BaseNode, SLSharedState
+from .base_node import BaseNode, SLSharedContext  # Updated import
 
-AbstractionItem: TypeAlias = dict[str, Union[str, list[int]]]
-AbstractionsList: TypeAlias = list[AbstractionItem]
+# Type Aliases with new naming convention
+AbstractionItemInternal: TypeAlias = dict[str, Union[str, list[int]]]  # Internal consistency
+AbstractionsListInternal: TypeAlias = list[AbstractionItemInternal]
 
 RelationshipDetail: TypeAlias = dict[str, Union[int, str]]
 """Type alias for a single relationship detail. Keys: 'from', 'to', 'label'."""
-RelationshipsOutput: TypeAlias = dict[str, Union[str, list[RelationshipDetail]]]
-"""Type alias for the execution result. Keys: 'summary', 'details'."""
 
-AnalyzeRelationshipsPrepResult: TypeAlias = dict[str, Any]
+AnalyzeRelationshipsPreparedInputs: TypeAlias = dict[str, Any]
 """Type alias for the preparation result.
    Contains: 'num_abstractions', 'project_name', 'language', 'llm_config',
              'cache_config', 'context_str', 'abstraction_listing_str'.
 """
+AnalyzeRelationshipsExecutionResult: TypeAlias = dict[str, Union[str, list[RelationshipDetail]]]
+"""Type alias for the execution result. Keys: 'summary', 'details'."""
 
-FileDataList: TypeAlias = list[tuple[str, str]]
+
+FileDataListInternal: TypeAlias = list[tuple[str, str]]  # Kept internal naming
 RawLLMIndexEntry: TypeAlias = Union[str, int, float, None]
 
 module_logger: logging.Logger = logging.getLogger(__name__)
@@ -70,7 +72,7 @@ RELATIONSHIPS_DICT_SCHEMA: dict[str, Any] = {
 }
 
 
-class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, RelationshipsOutput]):
+class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPreparedInputs, AnalyzeRelationshipsExecutionResult]):
     """Analyze relationships between identified abstractions using an LLM.
 
     This node uses the previously identified abstractions and relevant code snippets
@@ -96,15 +98,24 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
             to_entry_any: Any = rel_item.get("to_abstraction")
             label_val_any: Any = rel_item.get("label")
 
-            from_entry: RawLLMIndexEntry = from_entry_any
-            to_entry: RawLLMIndexEntry = to_entry_any
+            # Ensure type compatibility with RawLLMIndexEntry
+            from_entry: RawLLMIndexEntry = (
+                from_entry_any
+                if isinstance(from_entry_any, (str, int, float)) or from_entry_any is None
+                else str(from_entry_any)
+            )
+            to_entry: RawLLMIndexEntry = (
+                to_entry_any
+                if isinstance(to_entry_any, (str, int, float)) or to_entry_any is None
+                else str(to_entry_any)
+            )
 
             from_idx_str: Optional[str] = None
-            if isinstance(from_entry, (str, int, float)):
+            if isinstance(from_entry, (str, int, float)):  # Check if it's one of the expected types
                 from_idx_str = str(from_entry).split("#", 1)[0].strip()
 
             to_idx_str: Optional[str] = None
-            if isinstance(to_entry, (str, int, float)):
+            if isinstance(to_entry, (str, int, float)):  # Check if it's one of the expected types
                 to_idx_str = str(to_entry).split("#", 1)[0].strip()
 
             from_idx: Optional[int] = int(from_idx_str) if from_idx_str and from_idx_str.isdigit() else None
@@ -116,9 +127,8 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
             if from_idx is None or to_idx is None or label is None:
                 raise ValueError("Missing or invalid 'from_abstraction', 'to_abstraction', or 'label'.")
             if not (0 <= from_idx < num_abstractions and 0 <= to_idx < num_abstractions):
-                raise ValueError(
-                    f"Relationship index out of range [0-{num_abstractions - 1}]: from={from_idx}, to={to_idx}."
-                )
+                msg = f"Relationship index out of range [0-{num_abstractions - 1}]: from={from_idx}, to={to_idx}."
+                raise ValueError(msg)
             relationship_detail: RelationshipDetail = {"from": from_idx, "to": to_idx, "label": label}
             return relationship_detail, {from_idx, to_idx}
         except (ValueError, TypeError, AttributeError) as e:
@@ -149,7 +159,7 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
             if not isinstance(rel_item_any, dict):
                 module_logger.warning("Skipping non-dictionary relationship item: %s", rel_item_any)
                 continue
-            rel_item: dict[str, Any] = rel_item_any
+            rel_item: dict[str, Any] = rel_item_any  # Type assertion
             parsed_result = self._parse_single_relationship(rel_item, num_abstractions)
             if parsed_result:
                 validated_rel, involved = parsed_result
@@ -157,7 +167,9 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
                 involved_indices.update(involved)
         return validated_relationships, involved_indices
 
-    def _build_relationship_context(self, abstractions: AbstractionsList, files_data: FileDataList) -> tuple[str, str]:
+    def _build_relationship_context(
+        self, abstractions: AbstractionsListInternal, files_data: FileDataListInternal
+    ) -> tuple[str, str]:
         """Build context string and abstraction listing for the LLM prompt.
 
         Args:
@@ -174,7 +186,12 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
         for i, abstr in enumerate(abstractions):
             abstr_name = str(abstr.get("name", f"Unnamed Abstraction {i}"))
             abstr_desc = str(abstr.get("description", "N/A"))
-            file_indices: list[int] = abstr.get("files", [])  # type: ignore[assignment]
+            # Ensure file_indices is a list of ints
+            file_indices_raw: Any = abstr.get("files", [])
+            file_indices: list[int] = (
+                [idx for idx in file_indices_raw if isinstance(idx, int)] if isinstance(file_indices_raw, list) else []
+            )
+
             file_indices_str = ", ".join(map(str, file_indices)) if file_indices else "None"
 
             context_builder.append(f"- Index {i}: {abstr_name}\n  Desc: {abstr_desc}\n  Files: [{file_indices_str}]")
@@ -195,29 +212,30 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
             context_builder.append("No specific file content linked for relationship analysis based on abstractions.")
         return "\n".join(context_builder), "\n".join(abstraction_info_for_prompt)
 
-    def prep(self, shared: SLSharedState) -> AnalyzeRelationshipsPrepResult:
+    def pre_execution(self, shared_context: SLSharedContext) -> AnalyzeRelationshipsPreparedInputs:
         """Prepare context for relationship analysis LLM prompt.
 
         Args:
-            shared: The shared state dictionary.
+            shared_context: The shared context dictionary.
 
         Returns:
-            A dictionary containing all necessary context for the `exec` method.
+            A dictionary containing all necessary context for the `execution` method.
         """
         self._log_info("Preparing context for relationship analysis...")
-        abstractions_any: Any = self._get_required_shared(shared, "abstractions")
-        llm_config_any: Any = self._get_required_shared(shared, "llm_config")
-        cache_config_any: Any = self._get_required_shared(shared, "cache_config")
-        project_name_any: Any = self._get_required_shared(shared, "project_name")
-        language_any: Any = shared.get("language", "english")
+        abstractions_any: Any = self._get_required_shared(shared_context, "abstractions")
+        llm_config_any: Any = self._get_required_shared(shared_context, "llm_config")
+        cache_config_any: Any = self._get_required_shared(shared_context, "cache_config")
+        project_name_any: Any = self._get_required_shared(shared_context, "project_name")
+        language_any: Any = shared_context.get("language", "english")
 
-        abstractions: AbstractionsList = abstractions_any if isinstance(abstractions_any, list) else []
+        # Ensure types after retrieval
+        abstractions: AbstractionsListInternal = abstractions_any if isinstance(abstractions_any, list) else []
         llm_config: dict[str, Any] = llm_config_any if isinstance(llm_config_any, dict) else {}
         cache_config: dict[str, Any] = cache_config_any if isinstance(cache_config_any, dict) else {}
         project_name: str = str(project_name_any) if isinstance(project_name_any, str) else "Unknown Project"
         language: str = str(language_any)
 
-        prep_data: AnalyzeRelationshipsPrepResult = {
+        prepared_data: AnalyzeRelationshipsPreparedInputs = {
             "num_abstractions": len(abstractions),
             "project_name": project_name,
             "language": language,
@@ -228,14 +246,14 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
         }
         if not abstractions:
             self._log_warning("No abstractions provided for relationship analysis. Exec will produce default output.")
-            return prep_data
+            return prepared_data
 
-        files_data_any: Any = self._get_required_shared(shared, "files")
-        files_data: FileDataList = files_data_any if isinstance(files_data_any, list) else []
+        files_data_any: Any = self._get_required_shared(shared_context, "files")
+        files_data: FileDataListInternal = files_data_any if isinstance(files_data_any, list) else []
         context_str, abstraction_listing_str = self._build_relationship_context(abstractions, files_data)
-        prep_data["context_str"] = context_str
-        prep_data["abstraction_listing_str"] = abstraction_listing_str
-        return prep_data
+        prepared_data["context_str"] = context_str
+        prepared_data["abstraction_listing_str"] = abstraction_listing_str
+        return prepared_data
 
     def _call_llm_and_validate_response(
         self, prompt: str, llm_config: dict[str, Any], cache_config: dict[str, Any]
@@ -269,7 +287,7 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
 
     def _process_validated_yaml_data(
         self, relationships_data_yaml: Optional[dict[str, Any]], num_abstractions: int
-    ) -> RelationshipsOutput:
+    ) -> AnalyzeRelationshipsExecutionResult:
         """Process validated YAML data to extract and refine relationship details.
 
         Args:
@@ -277,9 +295,9 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
             num_abstractions: The total number of abstractions.
 
         Returns:
-            A `RelationshipsOutput` dictionary.
+            An `AnalyzeRelationshipsExecutionResult` dictionary.
         """
-        default_output: RelationshipsOutput = {"summary": DEFAULT_ERROR_SUMMARY, "details": []}
+        default_output: AnalyzeRelationshipsExecutionResult = {"summary": DEFAULT_ERROR_SUMMARY, "details": []}
         if not isinstance(relationships_data_yaml, dict):
             if relationships_data_yaml is not None:
                 self._log_error(
@@ -303,26 +321,26 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
         if num_abstractions > 1 and len(involved_indices) < num_abstractions:
             missing_indices = set(range(num_abstractions)) - involved_indices
             if missing_indices:
-                self._log_warning(
+                msg = (
                     "Relationship analysis may be incomplete. Abstractions not involved in any "
-                    "valid reported relationship (indices): %s",
-                    sorted(missing_indices),
+                    f"valid reported relationship (indices): {sorted(missing_indices)}"
                 )
+                self._log_warning(msg)
         self._log_info("Generated relationship summary and %d valid relationships.", len(valid_rels))
         return {"summary": summary_text, "details": valid_rels}
 
-    def exec(self, prep_res: AnalyzeRelationshipsPrepResult) -> RelationshipsOutput:
+    def execution(self, prepared_inputs: AnalyzeRelationshipsPreparedInputs) -> AnalyzeRelationshipsExecutionResult:
         """Execute LLM call to analyze relationships, parse, and validate.
 
         Args:
-            prep_res: The dictionary returned by the `prep` method.
+            prepared_inputs: The dictionary returned by the `pre_execution` method.
 
         Returns:
             A dictionary containing the relationship 'summary' and 'details'.
         """
-        num_abstractions: int = prep_res["num_abstractions"]
-        project_name: str = prep_res["project_name"]
-        default_output: RelationshipsOutput = {"summary": "Analysis not performed.", "details": []}
+        num_abstractions: int = prepared_inputs["num_abstractions"]
+        project_name: str = prepared_inputs["project_name"]
+        default_output: AnalyzeRelationshipsExecutionResult = {"summary": "Analysis not performed.", "details": []}
 
         if num_abstractions == 0:
             self._log_info("Skipping relationship analysis due to no abstractions.")
@@ -331,14 +349,14 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
 
         prompt = AbstractionPrompts.format_analyze_relationships_prompt(
             project_name=project_name,
-            context=prep_res["context_str"],
-            abstraction_listing=prep_res["abstraction_listing_str"],
+            context=prepared_inputs["context_str"],
+            abstraction_listing=prepared_inputs["abstraction_listing_str"],
             num_abstractions=num_abstractions,
-            language=prep_res["language"],
+            language=prepared_inputs["language"],
         )
 
-        llm_config: dict[str, Any] = prep_res["llm_config"]
-        cache_config: dict[str, Any] = prep_res["cache_config"]
+        llm_config: dict[str, Any] = prepared_inputs["llm_config"]
+        cache_config: dict[str, Any] = prepared_inputs["cache_config"]
         validated_yaml_data: Optional[dict[str, Any]] = self._call_llm_and_validate_response(
             prompt, llm_config, cache_config
         )
@@ -349,29 +367,31 @@ class AnalyzeRelationships(BaseNode[AnalyzeRelationshipsPrepResult, Relationship
 
         try:
             return self._process_validated_yaml_data(validated_yaml_data, num_abstractions)
-        except (ValueError, TypeError, KeyError) as e_proc:
+        except (ValueError, TypeError, KeyError) as e_proc:  # Catch specific processing errors
             self._log_error("Critical error processing relationships from validated YAML: %s", e_proc, exc_info=True)
             default_output["summary"] = "Critical error processing relationship data after validation."
             return default_output
 
-    def post(
-        self, shared: SLSharedState, prep_res: AnalyzeRelationshipsPrepResult, exec_res: RelationshipsOutput
+    def post_execution(
+        self,
+        shared_context: SLSharedContext,
+        prepared_inputs: AnalyzeRelationshipsPreparedInputs,
+        execution_outputs: AnalyzeRelationshipsExecutionResult,
     ) -> None:
-        """Update shared state with analyzed relationships.
+        """Update shared context with analyzed relationships.
 
         Args:
-            shared: The shared state dictionary to update.
-            prep_res: Result from the `prep` phase.
-            exec_res: Dictionary of relationships from the `exec` phase.
+            shared_context: The shared context dictionary to update.
+            prepared_inputs: Result from the `pre_execution` phase (unused).
+            execution_outputs: Dictionary of relationships from the `execution` phase.
         """
-        del prep_res
-        shared["relationships"] = exec_res
-        summary_snippet_raw: Any = exec_res.get("summary", "")
+        del prepared_inputs  # Mark as unused
+        shared_context["relationships"] = execution_outputs
+        summary_snippet_raw: Any = execution_outputs.get("summary", "")
         summary_snippet: str = str(summary_snippet_raw)[:50]
-        details_raw: Any = exec_res.get("details", [])
-        details_list_any: Any = details_raw if isinstance(details_raw, list) else []
-        # Ensure details_list is list[RelationshipDetail] if possible, or list[Any]
-        details_list: list[RelationshipDetail] = [item for item in details_list_any if isinstance(item, dict)]
+        details_raw: Any = execution_outputs.get("details", [])
+        # Ensure details_list is list[RelationshipDetail] if possible, or list[Any] for safety
+        details_list: list[Any] = details_raw if isinstance(details_raw, list) else []
 
         details_count = len(details_list)
         self._log_info(

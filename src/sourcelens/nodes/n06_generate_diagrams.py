@@ -28,25 +28,31 @@ from sourcelens.prompts.diagrams import (
     format_relationship_flowchart_prompt,
     format_sequence_diagram_prompt,
 )
+
+# generate_file_structure_mermaid is used by GenerateSourceIndexNode, not directly here
 from sourcelens.utils.llm_api import LlmApiError, call_llm
 
-from .base_node import BaseNode, SLSharedState
+from .base_node import BaseNode, SLSharedContext  # Updated import
 
+# Renamed Type Aliases
 DiagramMarkup: TypeAlias = Optional[str]
-SequenceDiagramsListInternal: TypeAlias = list[DiagramMarkup]
-DiagramResultDict: TypeAlias = dict[str, Union[DiagramMarkup, SequenceDiagramsListInternal]]
-PrepContext: TypeAlias = dict[str, Any]
-GenerateDiagramsPrepResult: TypeAlias = Optional[PrepContext]
-GenerateDiagramsExecResult: TypeAlias = DiagramResultDict
+SequenceDiagramsListInternal: TypeAlias = list[DiagramMarkup]  # Internal list of markups
 
-AbstractionItem: TypeAlias = dict[str, Any]
-AbstractionsList: TypeAlias = list[AbstractionItem]
-RelationshipDetail: TypeAlias = dict[str, Any]
-RelationshipsDict: TypeAlias = dict[str, Union[str, list[RelationshipDetail]]]
-FilesDataList: TypeAlias = list[tuple[str, str]]
-IdentifiedScenarioList: TypeAlias = list[str]
-LlmConfigDict: TypeAlias = dict[str, Any]
-CacheConfigDict: TypeAlias = dict[str, Any]
+GenerateDiagramsPreparedInputs: TypeAlias = Optional[dict[str, Any]]  # Can be None if skipped
+"""Type alias for prepared inputs; None if diagram generation is skipped."""
+GenerateDiagramsExecutionResult: TypeAlias = dict[str, Union[DiagramMarkup, SequenceDiagramsListInternal]]
+"""Type alias for execution result: dict of diagram markups."""
+
+
+# Internal type consistency
+AbstractionItemInternal: TypeAlias = dict[str, Any]
+AbstractionsListInternal: TypeAlias = list[AbstractionItemInternal]
+RelationshipDetailInternal: TypeAlias = dict[str, Any]
+RelationshipsDictInternal: TypeAlias = dict[str, Union[str, list[RelationshipDetailInternal]]]
+FilesDataListInternal: TypeAlias = list[tuple[str, str]]  # Assumes content is always str
+IdentifiedScenarioListInternal: TypeAlias = list[str]
+LlmConfigDictInternal: TypeAlias = dict[str, Any]
+CacheConfigDictInternal: TypeAlias = dict[str, Any]
 
 
 module_logger: logging.Logger = logging.getLogger(__name__)
@@ -59,16 +65,23 @@ CODE_FENCE_REGEX: Final[re.Pattern[str]] = re.compile(r"^\s*```(?:\w+)?\s*\n|\n\
 LOG_MARKUP_SNIPPET_LEN: Final[int] = 150
 
 
-class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagramsExecResult]):
-    """Generate architectural diagrams using an LLM."""
+class GenerateDiagramsNode(BaseNode[GenerateDiagramsPreparedInputs, GenerateDiagramsExecutionResult]):
+    """Generate architectural diagrams using an LLM based on analyzed project data."""
 
-    def _get_structure_context(self, files_data: Optional[FilesDataList]) -> str:
-        """Prepare a string summarizing the project file structure."""
+    def _get_structure_context(self, files_data: Optional[FilesDataListInternal]) -> str:
+        """Prepare a string summarizing the project file structure.
+
+        Args:
+            files_data: List of (filepath, content) tuples. Content is not used.
+
+        Returns:
+            A string summarizing the project file structure for prompts.
+        """
         if not files_data:
             return "No file data available to generate structure context."
 
         file_list_parts: list[str] = [
-            f"- {path.replace(chr(92), '/')}"
+            f"- {path.replace(chr(92), '/')}"  # Normalize path separators
             for i, (path, _) in enumerate(files_data)
             if i < MAX_FILES_FOR_STRUCTURE_CONTEXT
         ]
@@ -80,19 +93,26 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
             return "Project structure context is empty (no files after filtering)."
         return f"Project File Structure Overview:\n{chr(10).join(file_list_parts)}"
 
-    def _prepare_diagram_flags_and_configs(self, shared: SLSharedState) -> dict[str, Any]:
-        """Extract diagram generation flags and LLM/cache configurations."""
-        config_any: Any = self._get_required_shared(shared, "config")
+    def _prepare_diagram_flags_and_configs(self, shared_context: SLSharedContext) -> dict[str, Any]:
+        """Extract diagram generation flags and LLM/cache configurations from shared context.
+
+        Args:
+            shared_context: The shared context dictionary.
+
+        Returns:
+            A dictionary containing boolean flags for each diagram type and LLM/cache configs.
+        """
+        config_any: Any = self._get_required_shared(shared_context, "config")
         config: dict[str, Any] = config_any if isinstance(config_any, dict) else {}
         output_config_any: Any = config.get("output", {})
         output_config: dict[str, Any] = output_config_any if isinstance(output_config_any, dict) else {}
         diagram_config_raw: Any = output_config.get("diagram_generation", {})
         diagram_config: dict[str, Any] = diagram_config_raw if isinstance(diagram_config_raw, dict) else {}
 
-        llm_config_val: Any = self._get_required_shared(shared, "llm_config")
-        cache_config_val: Any = self._get_required_shared(shared, "cache_config")
-        llm_config: LlmConfigDict = llm_config_val if isinstance(llm_config_val, dict) else {}
-        cache_config: CacheConfigDict = cache_config_val if isinstance(cache_config_val, dict) else {}
+        llm_config_val: Any = self._get_required_shared(shared_context, "llm_config")
+        cache_config_val: Any = self._get_required_shared(shared_context, "cache_config")
+        llm_config: LlmConfigDictInternal = llm_config_val if isinstance(llm_config_val, dict) else {}
+        cache_config: CacheConfigDictInternal = cache_config_val if isinstance(cache_config_val, dict) else {}
 
         flags_and_configs: dict[str, Any] = {
             "gen_flowchart": bool(diagram_config.get("include_relationship_flowchart", False)),
@@ -109,58 +129,67 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
         flags_and_configs["seq_max"] = int(seq_config.get("max_diagrams", 5))
         return flags_and_configs
 
-    def _gather_diagram_context_data(self, shared: SLSharedState, flags_configs: dict[str, Any]) -> PrepContext:
-        """Gather all core context data required for generating diagrams."""
-        project_name_any: Any = shared.get("project_name", "Unknown Project")
+    def _gather_diagram_context_data(
+        self, shared_context: SLSharedContext, flags_configs: dict[str, Any]
+    ) -> GenerateDiagramsPreparedInputs:  # Return type changed
+        """Gather all core context data required for generating diagrams.
+
+        Args:
+            shared_context: The shared context dictionary.
+            flags_configs: Dictionary of diagram flags and LLM/cache configurations.
+
+        Returns:
+            A dictionary suitable for `prepared_inputs` in the `execution` phase.
+        """
+        project_name_any: Any = shared_context.get("project_name", "Unknown Project")
         project_name: str = str(project_name_any)
 
-        abstractions: AbstractionsList = []
+        abstractions: AbstractionsListInternal = []
         if flags_configs.get("gen_flowchart") or flags_configs.get("gen_seq"):
-            abstractions_any: Any = self._get_required_shared(shared, "abstractions")
+            abstractions_any: Any = self._get_required_shared(shared_context, "abstractions")
             abstractions = abstractions_any if isinstance(abstractions_any, list) else []
 
-        relationships: RelationshipsDict = {}
+        relationships: RelationshipsDictInternal = {}
         if flags_configs.get("gen_flowchart"):
-            relationships_any: Any = self._get_required_shared(shared, "relationships")
+            relationships_any: Any = self._get_required_shared(shared_context, "relationships")
             relationships = relationships_any if isinstance(relationships_any, dict) else {}
 
-        files_data_val: Any = shared.get("files")
-        files_data_for_context: Optional[FilesDataList] = None
+        files_data_val: Any = shared_context.get("files")
+        files_data_for_context: Optional[FilesDataListInternal] = None
         if isinstance(files_data_val, list) and all(
             isinstance(t, tuple)
             and len(t) == EXPECTED_FILE_DATA_TUPLE_LENGTH
             and isinstance(t[0], str)
-            and isinstance(t[1], str)
+            and isinstance(t[1], str)  # Assuming content, if present, is string
             for t in files_data_val
         ):
             files_data_for_context = files_data_val  # type: ignore[assignment]
         elif files_data_val is not None:
-            self._log_warning("Invalid 'files' data structure in shared state. Expected list of (str, str) tuples.")
+            self._log_warning("Invalid 'files' data structure. Expected list of (str, str) tuples.")
 
         structure_context_str: str = ""
-        if files_data_for_context and (flags_configs.get("gen_pkg") or flags_configs.get("gen_class")):
+        needs_structure_context = flags_configs.get("gen_pkg") or flags_configs.get("gen_class")
+        if files_data_for_context and needs_structure_context:
             structure_context_str = self._get_structure_context(files_data_for_context)
-        elif (flags_configs.get("gen_pkg") or flags_configs.get("gen_class")) and not files_data_for_context:
-            self._log_warning("Cannot generate structure_context for diagrams: 'files' data missing or invalid.")
+        elif needs_structure_context and not files_data_for_context:
+            self._log_warning("Cannot generate structure_context: 'files' data missing or invalid.")
             structure_context_str = "File structure data was not available."
 
-        scenarios_to_use: IdentifiedScenarioList = []
+        scenarios_to_use: IdentifiedScenarioListInternal = []
         if flags_configs.get("gen_seq"):
-            identified_scenarios_raw_any: Any = shared.get("identified_scenarios")
-            identified_scenarios_raw: list[Any] = (
-                identified_scenarios_raw_any if isinstance(identified_scenarios_raw_any, list) else []
-            )
-            scenarios_to_use = [str(s) for s in identified_scenarios_raw if isinstance(s, str) and s.strip()]
+            identified_scenarios_raw_any: Any = shared_context.get("identified_scenarios")
+            raw_list: list[Any] = identified_scenarios_raw_any if isinstance(identified_scenarios_raw_any, list) else []
+            scenarios_to_use = [str(s) for s in raw_list if isinstance(s, str) and s.strip()]
 
             if not scenarios_to_use:
                 self._log_warning("Sequence diagrams enabled, but no valid scenarios found.")
 
-        prep_context: PrepContext = {
+        prepared_inputs: dict[str, Any] = {  # Explicit dict type for clarity
             "project_name": project_name,
             "abstractions": abstractions,
             "relationships": relationships,
             "structure_context": structure_context_str,
-            "files_data_for_class_pkg": files_data_for_context,
+            # "files_data_for_class_pkg" was ambiguous, structure_context is what's used
             "identified_scenarios": scenarios_to_use,
             "llm_config": flags_configs["llm_config"],
             "cache_config": flags_configs["cache_config"],
@@ -171,56 +200,83 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
             "seq_max": flags_configs["seq_max"],
             "diagram_format": flags_configs["diagram_format"],
         }
-        return prep_context
+        return prepared_inputs
 
-    def prep(self, shared: SLSharedState) -> GenerateDiagramsPrepResult:
-        """Prepare context and configuration flags for diagram generation."""
+    def pre_execution(self, shared_context: SLSharedContext) -> GenerateDiagramsPreparedInputs:
+        """Prepare context and configuration flags for diagram generation.
+
+        Args:
+            shared_context: The shared context dictionary.
+
+        Returns:
+            A dictionary with prepared inputs if any diagram is to be generated,
+            otherwise None to indicate skipping the execution phase.
+        """
         self._log_info("Preparing for diagram generation...")
         try:
-            flags_and_configs = self._prepare_diagram_flags_and_configs(shared)
-            if not any(
-                flags_and_configs.get(k) for k in flags_and_configs if isinstance(k, str) and k.startswith("gen_")
-            ):
+            flags_and_configs = self._prepare_diagram_flags_and_configs(shared_context)
+            # Check if any gen_ flag is true
+            if not any(flags_and_configs.get(k) for k in flags_and_configs if k.startswith("gen_")):
                 self._log_info("All diagram types are disabled. Skipping diagram generation.")
-                return None
-            return self._gather_diagram_context_data(shared, flags_and_configs)
-        except ValueError as e_val:
+                return None  # Indicate skip
+            return self._gather_diagram_context_data(shared_context, flags_and_configs)
+        except ValueError as e_val:  # From _get_required_shared
             self._log_error("Error preparing diagram context (missing shared data): %s", e_val, exc_info=True)
-            raise
-        except (OSError, TypeError, KeyError) as e_prep:
+            raise  # Propagate critical error
+        except (OSError, TypeError, KeyError) as e_prep:  # Other prep errors
             self._log_error("Error during diagram preparation: %s", e_prep, exc_info=True)
-            return None
+            return None  # Indicate skip due to non-critical prep error
 
     def _clean_llm_diagram_output(self, raw_markup: str) -> str:
-        """Clean the raw markup from LLM, removing potential code fences."""
+        """Clean the raw markup from LLM, removing potential code fences.
+
+        Args:
+            raw_markup: The raw string output from the LLM.
+
+        Returns:
+            Cleaned markup string.
+        """
         return CODE_FENCE_REGEX.sub("", raw_markup).strip()
 
     def _call_llm_for_diagram(
         self,
         prompt: str,
-        llm_config: LlmConfigDict,
-        cache_config: CacheConfigDict,
+        llm_config: LlmConfigDictInternal,
+        cache_config: CacheConfigDictInternal,
         diagram_type: str,
         expected_keywords: Optional[list[str]] = None,
     ) -> DiagramMarkup:
-        """Call LLM for diagram generation and validate the response."""
+        """Call LLM for diagram generation and validate the response.
+
+        Args:
+            prompt: The formatted prompt string for the LLM.
+            llm_config: LLM API configuration.
+            cache_config: LLM cache configuration.
+            diagram_type: A string identifying the type of diagram for logging.
+            expected_keywords: Optional list of keywords the markup should start with.
+
+        Returns:
+            The generated diagram markup as a string, or None on failure.
+        """
         markup: DiagramMarkup = None
         try:
             markup_raw: str = call_llm(prompt, llm_config, cache_config)
+            log_snippet_raw = markup_raw[:LOG_MARKUP_SNIPPET_LEN].replace("\n", " ")
             self._logger.debug(
                 "Raw LLM response for %s diagram (len %d): '%.*s...'",
                 diagram_type,
                 len(markup_raw),
                 LOG_MARKUP_SNIPPET_LEN,
-                markup_raw.replace("\n", " "),
+                log_snippet_raw,
             )
             markup = self._clean_llm_diagram_output(markup_raw)
+            log_snippet_clean = markup[:LOG_MARKUP_SNIPPET_LEN].replace("\n", " ")
             self._logger.debug(
                 "Cleaned markup for %s diagram (len %d): '%.*s...'",
                 diagram_type,
                 len(markup),
                 LOG_MARKUP_SNIPPET_LEN,
-                markup.replace("\n", " "),
+                log_snippet_clean,
             )
 
             if not markup:
@@ -228,44 +284,44 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
                 return None
 
             if expected_keywords and not any(markup.startswith(kw) for kw in expected_keywords):
-                log_msg = (
-                    f"LLM {diagram_type} diagram markup missing expected start. "
-                    f"Expected one of: {expected_keywords}. Received: '%.*s...'"
-                )
-                self._log_warning(log_msg, LOG_MARKUP_SNIPPET_LEN, markup.replace("\n", " "))
+                log_msg_l1 = f"LLM {diagram_type} diagram markup missing expected start. "
+                log_msg_l2 = f"Expected one of: {expected_keywords}. Received: '%.*s...'"
+                self._log_warning(log_msg_l1 + log_msg_l2, LOG_MARKUP_SNIPPET_LEN, markup.replace("\n", " "))
 
             self._log_info("Successfully generated %s diagram markup.", diagram_type)
             return markup
         except LlmApiError as e_llm:
             self._log_error("LLM API call failed for %s diagram: %s", diagram_type, e_llm, exc_info=True)
             return None
-        except (ValueError, TypeError, AttributeError, IndexError) as e_other:  # More specific processing errors
+        except (ValueError, TypeError, AttributeError, IndexError) as e_other:
             self._log_error("Error processing LLM response for %s diagram: %s", diagram_type, e_other, exc_info=True)
             return None
 
-    def _generate_relationship_flowchart(self, prep_res_context: PrepContext) -> DiagramMarkup:
-        """Generate the relationship flowchart diagram."""
-        abstractions_any: Any = prep_res_context.get("abstractions", [])
-        relationships_any: Any = prep_res_context.get("relationships", {})
-        structure_context_any: Any = prep_res_context.get("structure_context")
+    def _generate_relationship_flowchart(self, prepared_inputs: dict[str, Any]) -> DiagramMarkup:
+        """Generate the relationship flowchart diagram.
 
-        abstractions: AbstractionsList = abstractions_any if isinstance(abstractions_any, list) else []
-        relationships: RelationshipsDict = relationships_any if isinstance(relationships_any, dict) else {}
-        structure_context: Optional[str] = (
-            str(structure_context_any) if isinstance(structure_context_any, str) else None
-        )
+        Args:
+            prepared_inputs: The dictionary from the pre_execution phase.
 
-        llm_cfg: LlmConfigDict = prep_res_context.get("llm_config", {})
-        cache_cfg: CacheConfigDict = prep_res_context.get("cache_config", {})
-        diagram_format_str: str = str(prep_res_context.get("diagram_format", DEFAULT_DIAGRAM_FORMAT))
+        Returns:
+            The diagram markup string, or None.
+        """
+        # Ensure type safety when accessing dictionary
+        abstractions: AbstractionsListInternal = prepared_inputs.get("abstractions", [])  # type: ignore[assignment]
+        relationships: RelationshipsDictInternal = prepared_inputs.get("relationships", {})  # type: ignore[assignment]
+        structure_ctx: Optional[str] = str(prepared_inputs.get("structure_context")) or None
+
+        llm_cfg: LlmConfigDictInternal = prepared_inputs.get("llm_config", {})  # type: ignore[assignment]
+        cache_cfg: CacheConfigDictInternal = prepared_inputs.get("cache_config", {})  # type: ignore[assignment]
+        diag_fmt: str = str(prepared_inputs.get("diagram_format", DEFAULT_DIAGRAM_FORMAT))
 
         return self._call_llm_for_diagram(
             prompt=format_relationship_flowchart_prompt(
-                project_name=str(prep_res_context.get("project_name")),
+                project_name=str(prepared_inputs.get("project_name")),
                 abstractions=abstractions,
                 relationships=relationships,
-                diagram_format=diagram_format_str,
-                structure_context=structure_context,
+                diagram_format=diag_fmt,
+                structure_context=structure_ctx,
             ),
             llm_config=llm_cfg,
             cache_config=cache_cfg,
@@ -273,20 +329,28 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
             expected_keywords=["flowchart TD", "graph TD"],
         )
 
-    def _generate_class_diagram(self, prep_res_context: PrepContext) -> DiagramMarkup:
-        """Generate the class hierarchy diagram."""
-        code_context_str = str(prep_res_context.get("structure_context", "No code context available."))
+    def _generate_class_diagram(self, prepared_inputs: dict[str, Any]) -> DiagramMarkup:
+        """Generate the class hierarchy diagram.
+
+        Args:
+            prepared_inputs: The dictionary from the pre_execution phase.
+
+        Returns:
+            The diagram markup string, or None.
+        """
+        code_context_str = str(prepared_inputs.get("structure_context", "No code context available."))
         if not code_context_str or code_context_str == "No file data available to generate structure context.":
             self._log_warning("No proper code/structure context for class diagram. Diagram might be suboptimal.")
-        llm_cfg: LlmConfigDict = prep_res_context.get("llm_config", {})
-        cache_cfg: CacheConfigDict = prep_res_context.get("cache_config", {})
-        diagram_format_str: str = str(prep_res_context.get("diagram_format", DEFAULT_DIAGRAM_FORMAT))
+
+        llm_cfg: LlmConfigDictInternal = prepared_inputs.get("llm_config", {})  # type: ignore[assignment]
+        cache_cfg: CacheConfigDictInternal = prepared_inputs.get("cache_config", {})  # type: ignore[assignment]
+        diag_fmt: str = str(prepared_inputs.get("diagram_format", DEFAULT_DIAGRAM_FORMAT))
 
         return self._call_llm_for_diagram(
             prompt=format_class_diagram_prompt(
-                project_name=str(prep_res_context.get("project_name")),
+                project_name=str(prepared_inputs.get("project_name")),
                 code_context=code_context_str,
-                diagram_format=diagram_format_str,
+                diagram_format=diag_fmt,
             ),
             llm_config=llm_cfg,
             cache_config=cache_cfg,
@@ -294,43 +358,56 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
             expected_keywords=["classDiagram"],
         )
 
-    def _generate_package_diagram(self, prep_res_context: PrepContext) -> DiagramMarkup:
-        """Generate the package dependency diagram."""
-        structure_context_str = str(prep_res_context.get("structure_context", ""))
+    def _generate_package_diagram(self, prepared_inputs: dict[str, Any]) -> DiagramMarkup:
+        """Generate the package dependency diagram.
+
+        Args:
+            prepared_inputs: The dictionary from the pre_execution phase.
+
+        Returns:
+            The diagram markup string, or None.
+        """
+        structure_context_str = str(prepared_inputs.get("structure_context", ""))
         if (
             not structure_context_str
             or structure_context_str == "No file data available to generate structure context."
         ):
             self._log_warning("Cannot generate package diagram: structure_context is missing or empty.")
             return None
-        llm_cfg: LlmConfigDict = prep_res_context.get("llm_config", {})
-        cache_cfg: CacheConfigDict = prep_res_context.get("cache_config", {})
-        diagram_format_str: str = str(prep_res_context.get("diagram_format", DEFAULT_DIAGRAM_FORMAT))
+
+        llm_cfg: LlmConfigDictInternal = prepared_inputs.get("llm_config", {})  # type: ignore[assignment]
+        cache_cfg: CacheConfigDictInternal = prepared_inputs.get("cache_config", {})  # type: ignore[assignment]
+        diag_fmt: str = str(prepared_inputs.get("diagram_format", DEFAULT_DIAGRAM_FORMAT))
 
         return self._call_llm_for_diagram(
             prompt=format_package_diagram_prompt(
-                project_name=str(prep_res_context.get("project_name")),
+                project_name=str(prepared_inputs.get("project_name")),
                 structure_context=structure_context_str,
-                diagram_format=diagram_format_str,
+                diagram_format=diag_fmt,
             ),
             llm_config=llm_cfg,
             cache_config=cache_cfg,
             diagram_type="package",
-            expected_keywords=["graph TD"],
+            expected_keywords=["graph TD"],  # Mermaid package typically uses graph
         )
 
-    def _generate_sequence_diagrams(self, prep_res_context: PrepContext) -> SequenceDiagramsListInternal:
-        """Generate sequence diagrams based on identified scenarios."""
-        diagram_format: str = str(prep_res_context.get("diagram_format", DEFAULT_DIAGRAM_FORMAT))
+    def _generate_sequence_diagrams(self, prepared_inputs: dict[str, Any]) -> SequenceDiagramsListInternal:
+        """Generate sequence diagrams based on identified scenarios.
+
+        Args:
+            prepared_inputs: The dictionary from the pre_execution phase.
+
+        Returns:
+            A list of diagram markup strings, with None for failed diagrams.
+        """
+        diagram_format: str = str(prepared_inputs.get("diagram_format", DEFAULT_DIAGRAM_FORMAT))
         self._log_info("Generating Sequence diagrams (format: %s)...", diagram_format)
         generated_seq_diagrams: SequenceDiagramsListInternal = []
 
-        scenarios_any: Any = prep_res_context.get("identified_scenarios", [])
-        max_diagrams_any: Any = prep_res_context.get("seq_max", 0)
-        scenarios: IdentifiedScenarioList = scenarios_any if isinstance(scenarios_any, list) else []
-        max_diagrams_to_generate: int = max_diagrams_any if isinstance(max_diagrams_any, int) else 0
-        llm_cfg: LlmConfigDict = prep_res_context.get("llm_config", {})
-        cache_cfg: CacheConfigDict = prep_res_context.get("cache_config", {})
+        scenarios: IdentifiedScenarioListInternal = prepared_inputs.get("identified_scenarios", [])  # type: ignore[assignment]
+        max_diagrams_to_generate: int = prepared_inputs.get("seq_max", 0)  # type: ignore[assignment]
+        llm_cfg: LlmConfigDictInternal = prepared_inputs.get("llm_config", {})  # type: ignore[assignment]
+        cache_cfg: CacheConfigDictInternal = prepared_inputs.get("cache_config", {})  # type: ignore[assignment]
 
         scenarios_to_process = scenarios[:max_diagrams_to_generate]
 
@@ -338,11 +415,11 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
             self._log_warning("No scenarios available or 'seq_max' is 0. No sequence diagrams generated.")
             return []
 
-        self._log_info(
-            "Attempting to generate up to %d sequence diagrams from %d scenarios.",
-            max_diagrams_to_generate,
-            len(scenarios),
+        log_msg = (
+            f"Attempting to generate up to {max_diagrams_to_generate} sequence diagrams "
+            f"from {len(scenarios)} scenarios."
         )
+        self._log_info(log_msg)
 
         for i, scenario_desc in enumerate(scenarios_to_process):
             words = scenario_desc.split()
@@ -352,11 +429,17 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
             self._log_info(
                 "Generating sequence diagram %d/%d: '%s'", i + 1, len(scenarios_to_process), scenario_name_short
             )
+            # Abstractions and relationships from prepared_inputs can be passed if needed by SequenceDiagramContext
+            abstractions_for_ctx: AbstractionsListInternal = prepared_inputs.get("abstractions", [])  # type: ignore[assignment]
+            relationships_for_ctx: RelationshipsDictInternal = prepared_inputs.get("relationships", {})  # type: ignore[assignment]
+
             sequence_context_obj = SequenceDiagramContext(
-                project_name=str(prep_res_context.get("project_name")),
+                project_name=str(prepared_inputs.get("project_name")),
                 scenario_name=scenario_name_short,
                 scenario_description=scenario_desc,
                 diagram_format=diagram_format,
+                abstractions=abstractions_for_ctx,  # Pass if needed
+                relationships=relationships_for_ctx,  # Pass if needed
             )
             markup: DiagramMarkup = self._call_llm_for_diagram(
                 prompt=format_sequence_diagram_prompt(sequence_context_obj),
@@ -374,43 +457,65 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
             self._log_info("Generated %d valid sequence diagram(s).", valid_diagrams_count)
         return generated_seq_diagrams
 
-    def exec(self, prep_res: GenerateDiagramsPrepResult) -> GenerateDiagramsExecResult:
-        """Generate diagrams based on prepared context and configuration flags."""
-        results: DiagramResultDict = {
+    def execution(self, prepared_inputs: GenerateDiagramsPreparedInputs) -> GenerateDiagramsExecutionResult:
+        """Generate diagrams based on prepared context and configuration flags.
+
+        Args:
+            prepared_inputs: The dictionary from `pre_execution`, or None if skipped.
+
+        Returns:
+            A dictionary containing the markup for each generated diagram type.
+            Values will be None if a diagram was not generated or failed.
+        """
+        results: GenerateDiagramsExecutionResult = {
             "relationship_flowchart_markup": None,
             "class_diagram_markup": None,
             "package_diagram_markup": None,
             "sequence_diagrams_markup": [],
         }
-        if prep_res is None:
+        if prepared_inputs is None:  # Indicates skipping
             self._log_info("Diagram generation skipped as per preparation step.")
             return results
 
-        if prep_res.get("gen_flowchart"):
-            results["relationship_flowchart_markup"] = self._generate_relationship_flowchart(prep_res)
-        if prep_res.get("gen_class"):
-            results["class_diagram_markup"] = self._generate_class_diagram(prep_res)
-        if prep_res.get("gen_pkg"):
-            results["package_diagram_markup"] = self._generate_package_diagram(prep_res)
-        if prep_res.get("gen_seq"):
-            results["sequence_diagrams_markup"] = self._generate_sequence_diagrams(prep_res)
+        # Type assertion: prepared_inputs is now known to be a dict
+        prep_dict: dict[str, Any] = prepared_inputs
+
+        if prep_dict.get("gen_flowchart"):
+            results["relationship_flowchart_markup"] = self._generate_relationship_flowchart(prep_dict)
+        if prep_dict.get("gen_class"):
+            results["class_diagram_markup"] = self._generate_class_diagram(prep_dict)
+        if prep_dict.get("gen_pkg"):
+            results["package_diagram_markup"] = self._generate_package_diagram(prep_dict)
+        if prep_dict.get("gen_seq"):
+            results["sequence_diagrams_markup"] = self._generate_sequence_diagrams(prep_dict)
         return results
 
-    def post(
-        self, shared: SLSharedState, prep_res: GenerateDiagramsPrepResult, exec_res: GenerateDiagramsExecResult
+    def post_execution(
+        self,
+        shared_context: SLSharedContext,
+        prepared_inputs: GenerateDiagramsPreparedInputs,
+        execution_outputs: GenerateDiagramsExecutionResult,
     ) -> None:
-        """Update shared state with generated diagram markups."""
-        del prep_res
+        """Update shared context with generated diagram markups.
+
+        Args:
+            shared_context: The shared context dictionary to update.
+            prepared_inputs: Result from `pre_execution` (unused here).
+            execution_outputs: Dictionary of diagram markups from `execution`.
+        """
+        del prepared_inputs  # Mark as unused
         updated_keys: list[str] = []
-        if not isinstance(exec_res, dict):
-            self._log_warning(
-                "No diagram results or unexpected type (%s) from exec. Shared state not updated for diagrams.",
-                type(exec_res).__name__,
+        if not isinstance(execution_outputs, dict):
+            msg = (
+                f"No diagram results or unexpected type ({type(execution_outputs).__name__}) from execution. "
+                "Shared context not updated for diagrams."
             )
+            self._log_warning(msg)
             return
 
-        for key, value in exec_res.items():
+        for key, value in execution_outputs.items():
             is_valid_str_markup = isinstance(value, str) and value.strip()
+            # Ensure value is treated as list only if it's the specific key and actually a list
             seq_markup_list = value if key == "sequence_diagrams_markup" and isinstance(value, list) else None
             is_valid_list_markup = (
                 seq_markup_list is not None
@@ -419,43 +524,41 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPrepResult, GenerateDiagrams
             )
 
             if is_valid_str_markup or is_valid_list_markup:
-                shared[key] = value
+                shared_context[key] = value
                 updated_keys.append(key)
-            elif key in shared:
-                current_val = shared[key]
-                new_val_for_key = [] if key == "sequence_diagrams_markup" and value is None else value
-                if current_val != new_val_for_key:  # Only update if value actually changes to None/empty
-                    shared[key] = new_val_for_key
-                    self._log_info("Diagram for '%s' was None or empty, key in shared state updated.", key)
-            elif value is None or (isinstance(value, list) and not value):  # Key not in shared, but value is None/empty
-                shared[key] = [] if key == "sequence_diagrams_markup" and value is None else value
-                self._log_info("Diagram for '%s' was None or empty, setting key in shared state.", key)
+            # Handle cases where a diagram type was meant to be generated but failed (value is None or empty list)
+            # Ensure the key exists in shared_context with a default empty value if it was attempted.
+            elif key in execution_outputs:  # Key was attempted by exec phase
+                shared_context[key] = [] if key == "sequence_diagrams_markup" else None
+                self._log_info("Diagram for '%s' was None or empty, key set/updated in shared context.", key)
 
         if updated_keys:
-            self._log_info("Stored diagram generation results in shared state for keys: %s", sorted(updated_keys))
+            self._log_info("Stored diagram generation results in shared context for keys: %s", sorted(updated_keys))
         else:
-            # Check if any generation was attempted (based on exec_res keys) but failed
             attempted_diagram_keys = {
                 "relationship_flowchart_markup",
                 "class_diagram_markup",
                 "package_diagram_markup",
                 "sequence_diagrams_markup",
             }
-            any_attempt_failed = False
-            for k in attempted_diagram_keys:
-                if k in exec_res:  # Diagram generation was part of exec_res
-                    val = exec_res[k]
-                    if val is None or (
-                        isinstance(val, list) and not any(v for v in val if isinstance(v, str) and v.strip())
-                    ):
-                        any_attempt_failed = True
+            any_attempt_failed_or_empty = False
+            for k_diag in attempted_diagram_keys:
+                if k_diag in execution_outputs:  # Diagram generation was part of exec_res
+                    val_diag = execution_outputs[k_diag]
+                    is_empty_list = isinstance(val_diag, list) and not any(
+                        v for v in val_diag if isinstance(v, str) and v.strip()
+                    )
+                    if val_diag is None or is_empty_list:
+                        any_attempt_failed_or_empty = True
                         break
-            if any_attempt_failed:
+            if any_attempt_failed_or_empty:
                 self._log_info(
-                    "Some diagram generation was attempted but resulted in no valid markup. Shared state reflects this."
+                    "Some diagram generation was attempted but resulted in no valid markup. "
+                    "Shared context reflects this."
                 )
-            else:
-                self._log_info("No diagram generation was attempted or no valid markups produced to update state.")
+            else:  # This case means no diagram generation was attempted (all gen_ flags were false in prep_res)
+                # or an unexpected structure of execution_outputs.
+                self._log_info("No diagram generation attempted or no valid markups produced to update context.")
 
 
 # End of src/sourcelens/nodes/n06_generate_diagrams.py
