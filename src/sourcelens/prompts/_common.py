@@ -17,14 +17,13 @@
 """Common dataclasses and constants used across different prompt modules."""
 
 from dataclasses import dataclass, field
-from typing import Any, Final, Optional  # TypeAlias odstránený z typing
+from typing import Any, Final, Optional
 
-from typing_extensions import TypeAlias  # Použitie typing_extensions
+from typing_extensions import TypeAlias
 
 # Type Aliases matching those used in nodes for context clarity
-# Používame moderné typy (list namiesto List)
 AbstractionsList: TypeAlias = list[dict[str, Any]]
-RelationshipsDict: TypeAlias = dict[str, Any]  # Spresníme neskôr, ak bude treba
+RelationshipsDict: TypeAlias = dict[str, Any]
 ChapterMetadata: TypeAlias = dict[str, Any]  # keys: num, name, filename, abstraction_index
 
 
@@ -32,6 +31,9 @@ ChapterMetadata: TypeAlias = dict[str, Any]  # keys: num, name, filename, abstra
 CODE_BLOCK_MAX_LINES: Final[int] = 20
 DEFAULT_RELATIONSHIP_LABEL: Final[str] = "related to"
 MAX_FLOWCHART_LABEL_LEN: Final[int] = 30
+
+# INLINE_MERMAID_DIAGRAM_GUIDELINES_TEXT was moved to
+# sourcelens.prompts.diagrams._inline_diagram_guidelines
 
 
 # --- Dataclasses for Prompt Context ---

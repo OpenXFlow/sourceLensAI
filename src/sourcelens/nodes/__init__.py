@@ -36,7 +36,8 @@ from .n05_identify_scenarios import IdentifyScenariosNode
 from .n06_generate_diagrams import GenerateDiagramsNode
 from .n07_write_chapters import WriteChapters
 from .n08_generate_source_index import GenerateSourceIndexNode
-from .n09_combine_tutorial import CombineTutorial
+from .n09_generate_project_review import GenerateProjectReview  # New node
+from .n10_combine_tutorial import CombineTutorial  # Renamed and renumbered
 
 # Define __all__ for explicit public interface of the package
 # Controls what `from sourcelens.nodes import *` imports
@@ -49,9 +50,10 @@ __all__ = [
     "OrderChapters",
     "IdentifyScenariosNode",
     "GenerateDiagramsNode",
-    "GenerateSourceIndexNode",
     "WriteChapters",
-    "CombineTutorial",
+    "GenerateSourceIndexNode",
+    "GenerateProjectReview",  # Added new node
+    "CombineTutorial",  # Updated reference
 ]
 
 # End of src/sourcelens/nodes/__init__.py

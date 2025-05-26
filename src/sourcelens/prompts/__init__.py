@@ -17,8 +17,8 @@
 
 This package centralizes all prompt generation logic, organizing prompts
 into specific classes or modules based on their purpose (e.g., abstractions,
-relationships, chapter writing, diagram generation, source index). It also provides
-common data classes used as context for these prompts.
+relationships, chapter writing, diagram generation, source index, project review).
+It also provides common data classes used as context for these prompts.
 
 Key exports:
     - AbstractionPrompts: Class for formatting prompts related to identifying
@@ -29,6 +29,7 @@ Key exports:
       interaction scenarios.
     - SourceIndexPrompts: Class for formatting prompts related to LLM-based
       source code analysis for indexing.
+    - ProjectReviewPrompts: Class for formatting prompts for AI project review.
     - Individual diagram prompt formatters from the `diagrams` sub-package.
     - WriteChapterContext: Dataclass for chapter writing context.
     - SequenceDiagramContext: Dataclass for sequence diagram context.
@@ -50,14 +51,17 @@ from sourcelens.prompts._common import (
 # Import prompt-generating classes/modules
 from sourcelens.prompts.abstraction_prompts import AbstractionPrompts
 from sourcelens.prompts.chapter_prompts import ChapterPrompts
+
+# Import from the diagrams sub-package __init__ which handles its internal exports
 from sourcelens.prompts.diagrams import (
-    INLINE_MERMAID_DIAGRAM_GUIDELINES_TEXT,  # Added this as it's exported by diagrams/__init__
+    INLINE_MERMAID_DIAGRAM_GUIDELINES_TEXT,
     format_class_diagram_prompt,
     format_package_diagram_prompt,
     format_relationship_flowchart_prompt,
     format_sequence_diagram_prompt,
-    generate_file_structure_mermaid,  # Added this as it's exported by diagrams/__init__
+    generate_file_structure_mermaid,
 )
+from sourcelens.prompts.project_review_prompts import ProjectReviewPrompts
 from sourcelens.prompts.scenario_prompts import ScenarioPrompts
 from sourcelens.prompts.source_index_prompts import SourceIndexPrompts
 
@@ -73,17 +77,18 @@ __all__: list[str] = [
     "CODE_BLOCK_MAX_LINES",
     "DEFAULT_RELATIONSHIP_LABEL",
     "MAX_FLOWCHART_LABEL_LEN",
-    "INLINE_MERMAID_DIAGRAM_GUIDELINES_TEXT",  # Added to __all__
+    "INLINE_MERMAID_DIAGRAM_GUIDELINES_TEXT",
     # Prompt Classes/Functions
     "AbstractionPrompts",
     "ChapterPrompts",
     "ScenarioPrompts",
-    "SourceIndexPrompts",  # Added to __all__
+    "SourceIndexPrompts",
+    "ProjectReviewPrompts",
     "format_class_diagram_prompt",
     "format_package_diagram_prompt",
     "format_relationship_flowchart_prompt",
     "format_sequence_diagram_prompt",
-    "generate_file_structure_mermaid",  # Added to __all__
+    "generate_file_structure_mermaid",
 ]
 
 # End of src/sourcelens/prompts/__init__.py

@@ -142,6 +142,11 @@ OUTPUT_SCHEMA: ConfigDict = {
             "default": False,
             "description": "Globally controls if the source index (code_inventory.md) should be generated.",
         },
+        "include_project_review": {
+            "type": "boolean",
+            "default": False,
+            "description": "Globally controls if the AI-generated project review chapter should be generated.",
+        },
     },
     "additionalProperties": False,
     "default": {
@@ -149,6 +154,7 @@ OUTPUT_SCHEMA: ConfigDict = {
         "language": DEFAULT_LANGUAGE,
         "diagram_generation": DIAGRAM_GENERATION_SCHEMA["default"],
         "include_source_index": False,
+        "include_project_review": False,  # Added default for the new property
     },
 }
 CONFIG_SCHEMA: ConfigDict = {
@@ -318,11 +324,10 @@ class ConfigLoader:
         api_key_or_creds_any: Any = provider_cfg.get("api_key")
         api_key_or_creds: Optional[str] = str(api_key_or_creds_any) if api_key_or_creds_any else None
 
-        env_var_msg: str = ""  # Initialize env_var_msg
+        env_var_msg: str = ""
         if not api_key_or_creds:
             env_var_msg = f" or environment variable '{checked_env_var}'" if checked_env_var else ""
             logger.warning("Vertex AI: No API key/creds path in config%s. Using ADC.", env_var_msg)
-        # env_var_msg is now defined regardless of the if condition.
 
         if not provider_cfg.get("vertex_project"):
             if proj_env := os.environ.get(ENV_VAR_GOOGLE_PROJECT):
@@ -432,6 +437,7 @@ class ConfigLoader:
         output_s.setdefault("base_dir", DEFAULT_OUTPUT_DIR)
         output_s.setdefault("language", DEFAULT_LANGUAGE)
         output_s.setdefault("include_source_index", False)
+        output_s.setdefault("include_project_review", False)  # Ensure default is applied
         diag_gen_s_any: Any = output_s.get("diagram_generation")
         diag_gen_s: ConfigDict = (
             diag_gen_s_any if isinstance(diag_gen_s_any, dict) else DIAGRAM_GENERATION_SCHEMA["default"].copy()

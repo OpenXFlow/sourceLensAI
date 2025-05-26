@@ -17,8 +17,8 @@
 
 Instantiates and connects the various processing nodes using the internal
 SourceLens flow engine to generate tutorials from source code. Includes
-dynamic scenario identification for sequence diagrams and optional source
-code index generation.
+dynamic scenario identification for sequence diagrams, optional source
+code index generation, and an optional AI-generated project review.
 """
 
 import logging
@@ -34,9 +34,10 @@ else:
 # Import node classes using the updated nodes package __init__
 from sourcelens.nodes import (
     AnalyzeRelationships,
-    CombineTutorial,
+    CombineTutorial,  # Now n10
     FetchCode,
     GenerateDiagramsNode,
+    GenerateProjectReview,  # New node n09
     GenerateSourceIndexNode,
     IdentifyAbstractions,
     IdentifyScenariosNode,
@@ -83,7 +84,8 @@ def create_tutorial_flow(llm_config: LlmConfigDict, cache_config: CacheConfigDic
     generate_diagrams = GenerateDiagramsNode(max_retries=max_retries_llm, wait=retry_wait_llm)
     write_chapters = WriteChapters(max_retries=max_retries_llm, wait=retry_wait_llm)
     generate_source_index = GenerateSourceIndexNode(max_retries=1, wait=0)  # Does not use LLM for content
-    combine_tutorial = CombineTutorial()
+    generate_project_review = GenerateProjectReview(max_retries=max_retries_llm, wait=retry_wait_llm)  # New node
+    combine_tutorial = CombineTutorial()  # Renamed from n09 to n10
 
     # Define flow sequence
     (
@@ -95,12 +97,13 @@ def create_tutorial_flow(llm_config: LlmConfigDict, cache_config: CacheConfigDic
         >> generate_diagrams
         >> write_chapters
         >> generate_source_index
+        >> generate_project_review  # Added new node in sequence
         >> combine_tutorial
     )
     logger.info(
         "Flow sequence defined: Fetch -> IdentifyAbstractions -> AnalyzeRelationships -> "
         "OrderChapters -> IdentifyScenariosNode -> GenerateDiagramsNode -> "
-        "WriteChapters -> GenerateSourceIndexNode -> CombineTutorial"
+        "WriteChapters -> GenerateSourceIndexNode -> GenerateProjectReview -> CombineTutorial"
     )
 
     # Create flow instance
@@ -108,7 +111,8 @@ def create_tutorial_flow(llm_config: LlmConfigDict, cache_config: CacheConfigDic
     if TYPE_CHECKING:
         from sourcelens.core.flow_engine_sync import Flow as ActualSourceLensFlow
     else:
-        from sourcelens.core.flow_engine_sync import Flow as ActualSourceLensFlow  # Runtime import
+        # Runtime import, ensure this path matches your actual flow engine location
+        from sourcelens.core.flow_engine_sync import Flow as ActualSourceLensFlow
 
     flow_instance: "SourceLensFlow" = ActualSourceLensFlow(start=fetch_code)  # type: ignore[assignment, misc]
 

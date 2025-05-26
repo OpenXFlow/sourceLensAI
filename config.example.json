@@ -15,7 +15,8 @@
         "max_diagrams": 5
       }
     },
-    "include_source_index": true
+    "include_source_index": true,
+    "include_project_review": true
   },
   "source": {
     "max_file_size_bytes": 150000,

@@ -31,7 +31,7 @@ from ._common import (
     WriteChapterContext,
 )
 
-# Import the centralized inline Mermaid diagram guidelines
+# Import the centralized inline Mermaid diagram guidelines from the diagrams package
 from .diagrams import INLINE_MERMAID_DIAGRAM_GUIDELINES_TEXT
 
 
@@ -74,13 +74,16 @@ class ChapterPrompts:
         }
         if language.lower() != "english":
             lang_cap = hints["lang_cap"]
-            hints["lang_instr"] = (
+            hints_l1 = (
                 f"IMPORTANT: You MUST write the ENTIRE chapter content in **{lang_cap}**. "
                 f"This includes all explanatory text, comments within code examples, "
+            )
+            hints_l2 = (
                 f"and labels in diagrams. Use English ONLY for actual code keywords, "
                 f"function/variable names, and standard technical terms that do not have "
                 f"a common {lang_cap} translation (e.g., 'API', 'JSON').\n\n"
             )
+            hints["lang_instr"] = hints_l1 + hints_l2
             hints["concept_note"] = f" (This name/description is expected in {lang_cap})"
             hints["struct_note"] = f" (Chapter titles/links expected in {lang_cap})"
             hints["prev_sum_note"] = f" (Summaries expected in {lang_cap})"
@@ -185,11 +188,16 @@ class ChapterPrompts:
             f"chapters using Markdown `[Title](filename.md)` based on 'Overall Tutorial Structure'."
         )
         instr_part_10 = f"9.  **Tone & Style{hints['tone_note']}:** Beginner-friendly, encouraging. Explain jargon."
-        instr_part_11 = (
+        instr_part_11_l1 = (
             f"10. **Conclusion:** Summarize the key takeaway. End the main content *EXACTLY* with: "
-            f'"{transition_to_next}". **CRITICAL: Do NOT add any "Next, we will examine..." link or '
-            f"similar transition phrase after this concluding sentence.** The linking will be handled later."
+            f'"{transition_to_next}". '
         )
+        instr_part_11_l2 = (
+            '**CRITICAL: Do NOT add any "Next, we will examine..." link or '
+            "similar transition phrase after this concluding sentence.** The linking will be handled later."
+        )
+        instr_part_11 = instr_part_11_l1 + instr_part_11_l2
+
         instr_part_12 = (
             "11. **Output Format:** Generate ONLY raw Markdown. Start with H1. NO outer ```markdown wrapper. NO footer."
         )
@@ -255,12 +263,15 @@ class ChapterPrompts:
         ]
         ordering_criteria = f"{ordering_criteria_intro}\n{'\n'.join(ordering_criteria_list)}"
 
-        output_format_instruction = (
+        output_format_instruction_l1 = (
             f"Your output MUST be a YAML list containing all integer indices from 0 to {max_index}, "
             f"each appearing exactly once, in the suggested chapter order. "
-            f"You can use the 'index # Name' format in your YAML list for clarity, "
+        )
+        output_format_instruction_l2 = (
+            "You can use the 'index # Name' format in your YAML list for clarity, "
             "but only the leading integer index matters."
         )
+        output_format_instruction = output_format_instruction_l1 + output_format_instruction_l2
         example_yaml = (
             "Example (for 3 abstractions):\n"
             "```yaml\n"
