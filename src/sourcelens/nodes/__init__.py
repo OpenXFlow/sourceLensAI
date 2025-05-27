@@ -16,34 +16,65 @@
 """Nodes Package for SourceLens Processing Flow.
 
 This package contains the modular processing steps (Nodes) used in the
-SourceLens tutorial generation workflow. Each module typically encapsulates
-a distinct stage of the process, such as fetching code, analyzing structure,
-identifying scenarios, generating content, or combining outputs.
+SourceLens application. It is organized into sub-packages:
+- `code`: Nodes for source code analysis and tutorial generation.
+- `web`: Nodes for web content fetching and analysis.
 
-The nodes are designed to be connected in a sequence using a flow execution
-framework to form the complete pipeline.
+The actual base classes (BaseNode, BaseBatchNode) and common type aliases
+(SLSharedContext, etc.) are defined in `sourcelens.nodes.base_node` and should
+be imported directly from there by individual node implementations.
+This __init__.py re-exports them for convenience.
 """
 
-# Import base classes for node implementation
-from .base_node import BaseBatchNode, BaseNode
+# Import and re-export base classes and common type aliases directly
+# This makes them available as sourcelens.nodes.BaseNode etc.
+from .base_node import (
+    BaseBatchNode as BaseBatchNode,  # Explicit re-export alias
+)
+from .base_node import (
+    BaseNode as BaseNode,  # Explicit re-export alias
+)
+from .base_node import (
+    SLBatchItem as SLBatchItem,
+)
+from .base_node import (
+    SLBatchItemExecutionResult as SLBatchItemExecutionResult,
+)
+from .base_node import (
+    SLExecutionResult as SLExecutionResult,
+)
+from .base_node import (
+    SLPreparedInputs as SLPreparedInputs,
+)
+from .base_node import (
+    SLSharedContext as SLSharedContext,  # Explicit re-export alias
+)
 
-# Import node classes from their new locations
-from .n01_fetch_code import FetchCode
-from .n02_identify_abstractions import IdentifyAbstractions
-from .n03_analyze_relationships import AnalyzeRelationships
-from .n04_order_chapters import OrderChapters
-from .n05_identify_scenarios import IdentifyScenariosNode
-from .n06_generate_diagrams import GenerateDiagramsNode
-from .n07_write_chapters import WriteChapters
-from .n08_generate_source_index import GenerateSourceIndexNode
-from .n09_generate_project_review import GenerateProjectReview  # New node
-from .n10_combine_tutorial import CombineTutorial  # Renamed and renumbered
+# Import and re-export all public symbols from the 'code' sub-package
+# This relies on .code.__init__.py having a correctly defined __all__
+from .code import *  # noqa: F403
 
-# Define __all__ for explicit public interface of the package
-# Controls what `from sourcelens.nodes import *` imports
-__all__ = [
+# Import and re-export all public symbols from the 'web' sub-package
+# This relies on .web.__init__.py having a correctly defined __all__
+from .web import *  # noqa: F403
+
+# Define __all__ for this top-level nodes package.
+# It should include the base node classes/types and all re-exported nodes
+# from the sub-packages.
+
+_base_exports: list[str] = [
     "BaseNode",
     "BaseBatchNode",
+    "SLSharedContext",
+    "SLPreparedInputs",
+    "SLExecutionResult",
+    "SLBatchItem",
+    "SLBatchItemExecutionResult",
+]
+
+# These lists should ideally mirror the __all__ lists in the respective
+# sub-package __init__.py files for clarity, though '*' import handles it.
+_code_node_exports: list[str] = [
     "FetchCode",
     "IdentifyAbstractions",
     "AnalyzeRelationships",
@@ -52,8 +83,21 @@ __all__ = [
     "GenerateDiagramsNode",
     "WriteChapters",
     "GenerateSourceIndexNode",
-    "GenerateProjectReview",  # Added new node
-    "CombineTutorial",  # Updated reference
+    "GenerateProjectReview",
+    "CombineTutorial",
 ]
+
+_web_node_exports: list[str] = [
+    "FetchWebPage",
+    "IdentifyWebConcepts",
+    "AnalyzeWebRelationships",
+    "OrderWebChapters",
+    "WriteWebChapters",
+    "GenerateWebInventory",
+    "GenerateWebReview",
+    "CombineWebSummary",
+]
+
+__all__ = _base_exports + _code_node_exports + _web_node_exports
 
 # End of src/sourcelens/nodes/__init__.py

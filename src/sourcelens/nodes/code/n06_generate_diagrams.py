@@ -21,8 +21,9 @@ from typing import Any, Final, Optional, Union
 
 from typing_extensions import TypeAlias
 
-from sourcelens.prompts._common import SequenceDiagramContext
-from sourcelens.prompts.diagrams import (
+from sourcelens.nodes.base_node import BaseNode, SLSharedContext  # Updated import
+from sourcelens.prompts.code._common import SequenceDiagramContext
+from sourcelens.prompts.code.diagrams import (
     format_class_diagram_prompt,
     format_package_diagram_prompt,
     format_relationship_flowchart_prompt,
@@ -31,8 +32,6 @@ from sourcelens.prompts.diagrams import (
 
 # generate_file_structure_mermaid is used by GenerateSourceIndexNode, not directly here
 from sourcelens.utils.llm_api import LlmApiError, call_llm
-
-from .base_node import BaseNode, SLSharedContext  # Updated import
 
 # Renamed Type Aliases
 DiagramMarkup: TypeAlias = Optional[str]

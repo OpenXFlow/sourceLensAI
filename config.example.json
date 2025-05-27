@@ -2,6 +2,13 @@
   "project": {
     "default_name": null
   },
+  "web_crawler_options": {
+    "default_output_subdir_name": "crawled_web_content",
+	"processing_mode": "minimalistic",
+    "max_depth_recursive": 2,
+    "user_agent": "SourceLensBot/0.1 (https://github.com/DeepAzureFlow/sourceLensAI)",
+    "respect_robots_txt": true
+  },
   "output": {
     "base_dir": "output",
     "language": "english",

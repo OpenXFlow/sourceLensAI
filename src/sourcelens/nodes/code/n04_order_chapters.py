@@ -25,11 +25,10 @@ from typing import Any, Final, Union
 
 from typing_extensions import TypeAlias
 
+from sourcelens.nodes.base_node import BaseNode, SLSharedContext  # Updated import
 from sourcelens.prompts import ChapterPrompts
 from sourcelens.utils.llm_api import LlmApiError, call_llm
 from sourcelens.utils.validation import ValidationFailure, validate_yaml_list
-
-from .base_node import BaseNode, SLSharedContext  # Updated import
 
 # Renamed Type Aliases
 OrderChaptersPreparedInputs: TypeAlias = dict[str, Any]

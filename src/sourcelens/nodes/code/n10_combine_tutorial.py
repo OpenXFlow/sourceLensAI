@@ -24,10 +24,9 @@ from typing import Any, Final, Literal, Optional, Union
 
 from typing_extensions import TypeAlias
 
+from sourcelens.nodes.base_node import BaseNode, SLSharedContext
 from sourcelens.utils._exceptions import LlmApiError
 from sourcelens.utils.helpers import sanitize_filename
-
-from .base_node import BaseNode, SLSharedContext
 
 CombinePreparedInputs: TypeAlias = bool
 CombineExecutionResult: TypeAlias = None

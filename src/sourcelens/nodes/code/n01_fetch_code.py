@@ -20,7 +20,7 @@ from typing import Any, Optional, TypedDict
 
 from typing_extensions import TypeAlias
 
-from .base_node import BaseNode, SLSharedContext  # Updated import and type name
+from sourcelens.nodes.base_node import BaseNode, SLSharedContext  # Updated import and type name
 
 # Using new type naming convention
 FetchPreparedInputs: TypeAlias = bool

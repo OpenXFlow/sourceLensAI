@@ -19,11 +19,10 @@ from typing import Any, Final, Optional
 
 from typing_extensions import TypeAlias
 
-from sourcelens.prompts.project_review_prompts import ProjectReviewPrompts
+from sourcelens.nodes.base_node import BaseNode, SLSharedContext
+from sourcelens.prompts.code.project_review_prompts import ProjectReviewPrompts
 from sourcelens.utils.llm_api import LlmApiError, call_llm
 from sourcelens.utils.validation import ValidationFailure, validate_yaml_dict
-
-from .base_node import BaseNode, SLSharedContext
 
 ProjectReviewPreparedInputs: TypeAlias = dict[str, Any]
 ProjectReviewExecutionResult: TypeAlias = Optional[str]
@@ -72,7 +71,8 @@ class GenerateProjectReview(BaseNode[ProjectReviewPreparedInputs, ProjectReviewE
         warning_text_l2 = (
             "relationships, and file structure. "
             "It is intended to provide high-level insights and stimulate discussion, "
-            "not as a definitive expert assessment. Always use critical judgment when interpreting AI-generated content."
+            "not as a definitive expert assessment. "
+            "Always use critical judgment when interpreting AI-generated content."
         )
         markdown_parts.append(f"{warning_text_l1}{warning_text_l2}\n")
 
@@ -247,7 +247,7 @@ class GenerateProjectReview(BaseNode[ProjectReviewPreparedInputs, ProjectReviewE
         self._log_error(
             "All attempts to generate project review for '%s' failed. Last error: %s", project_name, exc, exc_info=True
         )
-        return f"# Project Review: {project_name}\n\n> AI-generated review could not be created after multiple attempts. Error: {exc!s}"
+        return f"# Project Review: {project_name}\n\n> AI-generated review could not be created after multiple attempts. Error: {exc!s}"  # noqa: E501
 
     def post_execution(
         self,

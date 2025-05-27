@@ -22,30 +22,15 @@ functions for algorithmically generating certain diagrams like the file
 structure diagram and provides shared guidelines for inline diagrams.
 """
 
-# Import from specific modules within this package
-from sourcelens.prompts.diagrams._inline_diagram_guidelines import (
-    INLINE_MERMAID_DIAGRAM_GUIDELINES_TEXT,
-)
-from sourcelens.prompts.diagrams.class_diagram_prompts import (
-    format_class_diagram_prompt,
-)
-from sourcelens.prompts.diagrams.file_structure_diagram import (
-    generate_file_structure_mermaid,
-)
-from sourcelens.prompts.diagrams.package_diagram_prompts import (
-    format_package_diagram_prompt,
-)
-from sourcelens.prompts.diagrams.relationship_flowchart_prompts import (
-    format_relationship_flowchart_prompt,
-)
-from sourcelens.prompts.diagrams.sequence_diagram_prompts import (
-    format_sequence_diagram_prompt,
-)
+# src/sourcelens/prompts/code/diagrams/__init__.py
+from ._inline_diagram_guidelines import INLINE_MERMAID_DIAGRAM_GUIDELINES_TEXT
+from .class_diagram_prompts import format_class_diagram_prompt
+from .file_structure_diagram import generate_file_structure_mermaid
+from .package_diagram_prompts import format_package_diagram_prompt
+from .relationship_flowchart_prompts import format_relationship_flowchart_prompt
+from .sequence_diagram_prompts import format_sequence_diagram_prompt
 
-# Removed problematic circular import:
-# from sourcelens.prompts.chapter_prompts import ChapterPrompts
-
-__all__: list[str] = [
+__all__ = [
     "format_class_diagram_prompt",
     "format_package_diagram_prompt",
     "format_relationship_flowchart_prompt",
@@ -53,5 +38,4 @@ __all__: list[str] = [
     "generate_file_structure_mermaid",
     "INLINE_MERMAID_DIAGRAM_GUIDELINES_TEXT",
 ]
-
 # End of src/sourcelens/prompts/diagrams/__init__.py

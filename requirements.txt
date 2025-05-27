@@ -10,10 +10,11 @@ google-cloud-aiplatform>=1.25.0
 google-generativeai>=0.8.0
 python-dotenv>=1.0.0
 attrs>=21.3.0
-jsonschema>=4.0.0
+jsonschema>=4.0.1
 types-jsonschema >=4.0.1
 types-requests >=2.3.0
- types-PyYAML >=6.0.0
-
+types-PyYAML >=6.0.0
+crawl4ai>=0.6.3
+playwright>=1.40.0 
 
 # End of requirements.txt

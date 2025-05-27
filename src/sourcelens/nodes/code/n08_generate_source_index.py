@@ -26,14 +26,13 @@ from typing import TYPE_CHECKING, Any, Final, Optional
 
 from typing_extensions import TypeAlias
 
-from sourcelens.nodes.index_formatters import (
+from sourcelens.nodes.base_node import BaseNode, SLSharedContext
+from sourcelens.nodes.code.index_formatters import (
     format_index_from_llm,
     format_python_index_from_ast,
 )
-from sourcelens.prompts.diagrams import generate_file_structure_mermaid
+from sourcelens.prompts.code.diagrams import generate_file_structure_mermaid
 from sourcelens.utils._exceptions import LlmApiError
-
-from .base_node import BaseNode, SLSharedContext
 
 if TYPE_CHECKING:
     ConfigDictInternal: TypeAlias = dict[str, Any]

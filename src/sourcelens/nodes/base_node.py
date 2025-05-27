@@ -31,24 +31,14 @@ from typing import Any, Generic, Optional, TypeVar
 
 from typing_extensions import TypeAlias
 
-# Import Node and BatchNode from the integrated core flow engine
-# These core classes now use pre_execution, execution, post_execution
 from sourcelens.core import BatchNode as CoreBatchNode
 from sourcelens.core import Node as CoreNode
 
-# --- Type Variables for SourceLens specific node implementations ---
-SLSharedContext: TypeAlias = dict[str, Any]  # Renamed from SLSharedState
-"""Standard shared context type for all SourceLens nodes."""
-
-SLPreparedInputs = TypeVar("SLPreparedInputs")  # Renamed from SLPrepResType
-"""TypeVar for the result of a BaseNode's pre_execution method."""
-SLExecutionResult = TypeVar("SLExecutionResult")  # Renamed from SLExecResType
-"""TypeVar for the result of a BaseNode's execution method."""
-
-SLBatchItem = TypeVar("SLBatchItem")  # Renamed from SLItemType
-"""TypeVar for individual items in a batch processed by BaseBatchNode."""
-SLBatchItemExecutionResult = TypeVar("SLBatchItemExecutionResult")  # Renamed
-"""TypeVar for the result of execution on a single batch item in BaseBatchNode."""
+SLSharedContext: TypeAlias = dict[str, Any]
+SLPreparedInputs = TypeVar("SLPreparedInputs")
+SLExecutionResult = TypeVar("SLExecutionResult")
+SLBatchItem = TypeVar("SLBatchItem")
+SLBatchItemExecutionResult = TypeVar("SLBatchItemExecutionResult")
 
 
 class BaseNode(
@@ -73,10 +63,10 @@ class BaseNode(
         Retry parameters are passed to the underlying core Node.
 
         Args:
-            max_retries: Maximum number of retries for the node's `execution` phase.
-                         If 0, the underlying Node's default (usually 1 attempt)
-                         will be used.
-            wait: Wait time in seconds between retries. Defaults to 0.
+            max_retries (int): Maximum number of retries for the node's `execution` phase.
+                               If 0, the underlying Node's default (usually 1 attempt)
+                               will be used. Defaults to 0.
+            wait (int): Wait time in seconds between retries. Defaults to 0.
         """
         super().__init__(max_retries=max_retries if max_retries > 0 else 1, wait=wait)
         self._logger = logging.getLogger(self.__class__.__name__)
@@ -89,12 +79,12 @@ class BaseNode(
         from the `shared_context` into a format suitable for the `execution` method.
 
         Args:
-            shared_context: The shared context dictionary, providing data from
-                            previous nodes or initial setup.
+            shared_context (SLSharedContext): The shared context dictionary, providing data from
+                                              previous nodes or initial setup.
 
         Returns:
-            The prepared data for the `execution` method, with a type corresponding
-            to `SLPreparedInputs` specialized by the subclass.
+            SLPreparedInputs: The prepared data for the `execution` method, with a type corresponding
+                              to `SLPreparedInputs` specialized by the subclass.
 
         Raises:
             NotImplementedError: If the subclass does not implement this method.
@@ -111,11 +101,11 @@ class BaseNode(
         task of the node, using the `prepared_inputs` data.
 
         Args:
-            prepared_inputs: The data prepared by the `pre_execution` method.
+            prepared_inputs (SLPreparedInputs): The data prepared by the `pre_execution` method.
 
         Returns:
-            The result of the node's execution, with a type corresponding
-            to `SLExecutionResult` specialized by the subclass.
+            SLExecutionResult: The result of the node's execution, with a type corresponding
+                               to `SLExecutionResult` specialized by the subclass.
 
         Raises:
             NotImplementedError: If the subclass does not implement this method.
@@ -128,7 +118,7 @@ class BaseNode(
     @abstractmethod
     def post_execution(
         self, shared_context: SLSharedContext, prepared_inputs: SLPreparedInputs, execution_outputs: SLExecutionResult
-    ) -> None:  # SourceLens nodes typically don't return an action string directly
+    ) -> None:
         """Update the shared context with the execution results.
 
         Subclasses must implement this method to store the results from `execution_outputs`
@@ -137,12 +127,12 @@ class BaseNode(
         return an action string; flow control is linear or managed by the Flow itself.
 
         Args:
-            shared_context: The shared context dictionary to update.
-            prepared_inputs: The data prepared by the `pre_execution` method.
-            execution_outputs: The result from the `execution` method.
+            shared_context (SLSharedContext): The shared context dictionary to update.
+            prepared_inputs (SLPreparedInputs): The data prepared by the `pre_execution` method.
+            execution_outputs (SLExecutionResult): The result from the `execution` method.
 
         Returns:
-            None. This method's primary side effect is modifying `shared_context`.
+            None: This method's primary side effect is modifying `shared_context`.
 
         Raises:
             NotImplementedError: If the subclass does not implement this method.
@@ -153,12 +143,12 @@ class BaseNode(
         """Safely retrieve a required value from the shared context dictionary.
 
         Args:
-            shared_context: The shared context dictionary to query.
-            key: The key of the value to retrieve.
+            shared_context (SLSharedContext): The shared context dictionary to query.
+            key (str): The key of the value to retrieve.
 
         Returns:
-            The value associated with the key. The caller is responsible for
-            asserting or casting to the expected specific type.
+            Any: The value associated with the key. The caller is responsible for
+                 asserting or casting to the expected specific type.
 
         Raises:
             ValueError: If the key is not found in the shared context or its
@@ -173,12 +163,24 @@ class BaseNode(
             raise ValueError(error_msg)
         return value
 
+    def _log_debug(self, message: str, *args: object) -> None:
+        """Log a debug message using the node's logger.
+
+        Args:
+            message (str): The message string to log.
+            *args (object): Arguments to be merged into message.
+        """
+        if self._supports_stacklevel:
+            self._logger.debug(message, *args, stacklevel=2)
+        else:  # pragma: no cover
+            self._logger.debug(message, *args)
+
     def _log_info(self, message: str, *args: object) -> None:
         """Log an informational message using the node's logger.
 
         Args:
-            message: The message string to log.
-            *args: Arguments to be merged into message.
+            message (str): The message string to log.
+            *args (object): Arguments to be merged into message.
         """
         if self._supports_stacklevel:
             self._logger.info(message, *args, stacklevel=2)
@@ -189,8 +191,8 @@ class BaseNode(
         """Log a warning message using the node's logger.
 
         Args:
-            message: The message string to log.
-            *args: Arguments to be merged into message.
+            message (str): The message string to log.
+            *args (object): Arguments to be merged into message.
         """
         if self._supports_stacklevel:
             self._logger.warning(message, *args, stacklevel=2)
@@ -201,9 +203,9 @@ class BaseNode(
         """Log an error message, optionally including exception info.
 
         Args:
-            message: The message string to log.
-            *args: Arguments to be merged into message.
-            exc_info: If True, exception information is added. Defaults to False.
+            message (str): The message string to log.
+            *args (object): Arguments to be merged into message.
+            exc_info (bool): If True, exception information is added. Defaults to False.
         """
         if self._supports_stacklevel:
             self._logger.error(message, *args, exc_info=exc_info, stacklevel=2)
@@ -241,8 +243,10 @@ class BaseBatchNode(
         """Initialize the BaseBatchNode with retry and logging capabilities.
 
         Args:
-            max_retries: Maximum number of retries for the entire batch's execution.
-            wait: Wait time in seconds between retries for the entire batch.
+            max_retries (int): Maximum number of retries for the entire batch's execution.
+                               Defaults to 0, meaning the underlying CoreNode default will be used.
+            wait (int): Wait time in seconds between retries for the entire batch.
+                        Defaults to 0.
         """
         super().__init__(max_retries=max_retries, wait=wait)
         self._logger = logging.getLogger(self.__class__.__name__)
@@ -255,12 +259,12 @@ class BaseBatchNode(
         items will be passed as a whole to the `execution` method.
 
         Args:
-            shared_context: The shared context dictionary, providing necessary data
-                            to determine or generate the batch items.
+            shared_context (SLSharedContext): The shared context dictionary, providing necessary data
+                                              to determine or generate the batch items.
 
         Returns:
-            An iterable of items, where each item is of type `SLBatchItem`
-            as specified by the concrete subclass.
+            Iterable[SLBatchItem]: An iterable of items, where each item is of type `SLBatchItem`
+                                   as specified by the concrete subclass.
 
         Raises:
             NotImplementedError: If the subclass does not implement this method.
@@ -280,10 +284,11 @@ class BaseBatchNode(
         should be handled within this method's loop.
 
         Args:
-            items_iterable: An iterable of `SLBatchItem` from `pre_execution`.
+            items_iterable (Iterable[SLBatchItem]): An iterable of `SLBatchItem` from `pre_execution`.
 
         Returns:
-            A list of results, one for each item, of type `SLBatchItemExecutionResult`.
+            list[SLBatchItemExecutionResult]: A list of results, one for each item,
+                                              of type `SLBatchItemExecutionResult`.
 
         Raises:
             NotImplementedError: If the subclass does not implement this method.
@@ -294,23 +299,23 @@ class BaseBatchNode(
     def post_execution(  # type: ignore[override]
         self,
         shared_context: SLSharedContext,
-        prepared_items_iterable: Iterable[SLBatchItem],  # This is `prepared_inputs`
-        execution_results_list: list[SLBatchItemExecutionResult],  # This is `execution_outputs`
-    ) -> None:  # SourceLens batch nodes typically don't return an action string
+        prepared_items_iterable: Iterable[SLBatchItem],
+        execution_results_list: list[SLBatchItemExecutionResult],
+    ) -> None:
         """Update the shared context with the results from all batch items.
 
         This method is called once after all items in the batch have been
         processed (or attempted) by the `execution` method.
 
         Args:
-            shared_context: The shared context dictionary to update.
-            prepared_items_iterable: The iterable of items that was originally
-                                     returned by `pre_execution`.
-            execution_results_list: A list containing the execution result for each
-                                    item, as returned by the `execution` method.
+            shared_context (SLSharedContext): The shared context dictionary to update.
+            prepared_items_iterable (Iterable[SLBatchItem]): The iterable of items that was originally
+                                                             returned by `pre_execution`.
+            execution_results_list (list[SLBatchItemExecutionResult]): A list containing the execution result for each
+                                                                      item, as returned by the `execution` method.
 
         Returns:
-            None. This method's primary side effect is modifying `shared_context`.
+            None: This method's primary side effect is modifying `shared_context`.
 
         Raises:
             NotImplementedError: If the subclass does not implement this method.
@@ -321,11 +326,11 @@ class BaseBatchNode(
         """Safely retrieve a required value from the shared context dictionary.
 
         Args:
-            shared_context: The shared context dictionary to query.
-            key: The key of the value to retrieve.
+            shared_context (SLSharedContext): The shared context dictionary to query.
+            key (str): The key of the value to retrieve.
 
         Returns:
-            The value associated with the key. Type is Any; caller should cast or type check.
+            Any: The value associated with the key. Type is Any; caller should cast or type check.
 
         Raises:
             ValueError: If the key is not found or its value is None.
@@ -339,12 +344,24 @@ class BaseBatchNode(
             raise ValueError(error_msg)
         return value
 
+    def _log_debug(self, message: str, *args: object) -> None:
+        """Log a debug message using the node's logger.
+
+        Args:
+            message (str): The message string to log.
+            *args (object): Arguments to be merged into message.
+        """
+        if self._supports_stacklevel:
+            self._logger.debug(message, *args, stacklevel=2)
+        else:  # pragma: no cover
+            self._logger.debug(message, *args)
+
     def _log_info(self, message: str, *args: object) -> None:
         """Log an informational message using the node's logger.
 
         Args:
-            message: The message string to log.
-            *args: Arguments to be merged into message.
+            message (str): The message string to log.
+            *args (object): Arguments to be merged into message.
         """
         if self._supports_stacklevel:
             self._logger.info(message, *args, stacklevel=2)
@@ -355,8 +372,8 @@ class BaseBatchNode(
         """Log a warning message using the node's logger.
 
         Args:
-            message: The message string to log.
-            *args: Arguments to be merged into message.
+            message (str): The message string to log.
+            *args (object): Arguments to be merged into message.
         """
         if self._supports_stacklevel:
             self._logger.warning(message, *args, stacklevel=2)
@@ -367,9 +384,9 @@ class BaseBatchNode(
         """Log an error message, optionally including exception info.
 
         Args:
-            message: The message string to log.
-            *args: Arguments to be merged into message.
-            exc_info: If True, exception information is added. Defaults to False.
+            message (str): The message string to log.
+            *args (object): Arguments to be merged into message.
+            exc_info (bool): If True, exception information is added. Defaults to False.
         """
         if self._supports_stacklevel:
             self._logger.error(message, *args, exc_info=exc_info, stacklevel=2)

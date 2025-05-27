@@ -28,11 +28,10 @@ from typing import Any, Final, Optional
 
 from typing_extensions import TypeAlias
 
+from sourcelens.nodes.base_node import BaseBatchNode, SLSharedContext
 from sourcelens.prompts import ChapterPrompts, WriteChapterContext
 from sourcelens.utils.helpers import get_content_for_indices, sanitize_filename
 from sourcelens.utils.llm_api import LlmApiError, call_llm
-
-from .base_node import BaseBatchNode, SLSharedContext
 
 WriteChapterPreparedItem: TypeAlias = dict[str, Any]
 SingleChapterExecutionResult: TypeAlias = str

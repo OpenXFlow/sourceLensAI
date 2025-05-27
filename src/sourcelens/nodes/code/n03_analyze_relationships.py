@@ -20,12 +20,11 @@ from typing import Any, Final, Optional, Union
 
 from typing_extensions import TypeAlias
 
-from sourcelens.prompts import AbstractionPrompts
+from sourcelens.nodes.base_node import BaseNode, SLSharedContext
+from sourcelens.prompts.code import AbstractionPrompts
 from sourcelens.utils.helpers import get_content_for_indices
 from sourcelens.utils.llm_api import LlmApiError, call_llm
 from sourcelens.utils.validation import ValidationFailure, validate_yaml_dict
-
-from .base_node import BaseNode, SLSharedContext  # Updated import
 
 # Type Aliases with new naming convention
 AbstractionItemInternal: TypeAlias = dict[str, Union[str, list[int]]]  # Internal consistency
