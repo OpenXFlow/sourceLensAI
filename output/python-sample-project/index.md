@@ -1,6 +1,6 @@
 # Tutorial: python_sample_project
 
-The `python_sample_project` orchestrates data processing. The **Main Application** loads data via the *Data Handler*, processes it using the **Item Processor** based on settings from *Configuration Management*, and logs actions through the **Logging** abstraction. The *Data Model* defines the structure of the processed items.
+The `python_sample_project` processes data items by first loading them using **Data Handling** based on *Configuration Management*.  Then, the **Item Processing** component transforms the loaded items. Finally, the processed data may be saved back using **Data Handling**, with **Logging** recording the whole process.
 
 
 **Source Directory:** `C:\_jd_programming\python\11_sourceLens_project\sourceLens\tests\python_sample_project`
@@ -13,15 +13,15 @@ flowchart TD
     A1["Data Model (Item)"]
     A2["Data Handling"]
     A3["Item Processing"]
-    A4["Main Application Orchestration"]
+    A4["Main Application Pipeline"]
     A5["Logging"]
 
-    A4 -->|Loads data using| A2
-    A2 -->|Creates instances of| A1
-    A4 -->|Processes data items using| A3
-    A3 -->|Modifies| A1
-    A4 -->|Reads configuration from| A0
-    A4 -->|Uses for reporting| A5
+    A4 -->|"Depends on configuration"| A0
+    A4 -->|"Uses for data access"| A2
+    A2 -->|"Manages Item objects"| A1
+    A4 -->|"Delegates item processing to"| A3
+    A3 -->|"Processes Item data model"| A1
+    A4 -->|"Utilizes for status updates"| A5
 ```
 
 ## Chapters
@@ -31,9 +31,10 @@ flowchart TD
 3. [Data Handling](03_data-handling.md)
 4. [Item Processing](04_item-processing.md)
 5. [Logging](05_logging.md)
-6. [Main Application Orchestration](06_main-application-orchestration.md)
+6. [Main Application Pipeline](06_main-application-pipeline.md)
 7. [Architecture Diagrams](07_diagrams.md)
 8. [Code Inventory](08_code_inventory.md)
+9. [Project Review](09_project_review.md)
 
 
 ---

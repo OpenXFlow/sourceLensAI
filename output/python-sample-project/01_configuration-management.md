@@ -1,68 +1,107 @@
 Previously, we looked at the [Project Overview](index.md).
 
 # Chapter 1: Configuration Management
-Let's begin exploring this concept. The goal of this chapter is to understand how to manage configuration settings in a Python application, ensuring that the application behaves consistently and predictably across different environments.
-Why do we need configuration management? Imagine you're building a house. You wouldn't want to hardcode the color of the walls or the type of flooring directly into the foundation, right? These are things that might change depending on the owner's preferences or the availability of materials. Similarly, in software, we need a way to manage settings like file paths, database credentials, and processing thresholds, which might vary depending on whether the application is running on a development machine, a testing server, or a production environment.
-Configuration management helps us to externalize these settings from the core application logic. This means that we can change the application's behavior without modifying the code itself, making it more flexible and maintainable. It's like having a central control panel for your application's settings.
-**Key Concepts:**
-*   **Settings:** These are the individual configuration values, such as a file path, a numerical threshold, or a boolean flag.
-*   **Configuration Source:** This is where the settings are stored. It could be a file (like a JSON or INI file), environment variables, a database, or a combination of these.
-*   **Access Mechanism:** This is how the application retrieves the settings from the configuration source. This typically involves a dedicated module or class that encapsulates the logic for loading and providing the settings.
-**How it Works:**
-At a high level, configuration management involves the following steps:
-1.  **Defining Settings:** Identifying the settings that need to be configurable.
-2.  **Choosing a Configuration Source:** Selecting a suitable way to store the settings.
-3.  **Loading Settings:** Reading the settings from the configuration source into the application.
-4.  **Providing Access:** Making the settings available to other parts of the application in a convenient and consistent way.
-**Code Example:**
-Here's a simple example of a configuration module in Python:
+Let's begin exploring this concept. This chapter will introduce you to configuration management within the `python_sample_project` project, explaining what it is, why it's important, and how it's implemented in our codebase.
+### What is Configuration Management?
+Configuration management is all about managing application settings in a structured and centralized way. Think of it like a control panel for your application. Just as a control panel allows you to adjust settings on your computer without altering the underlying operating system, configuration management allows you to change application behavior without modifying the code itself.
+For instance, in our project, we might need to specify the location of our data file (`DATA_FILE_PATH`), or define a threshold value (`PROCESSING_THRESHOLD`) used for data processing. Configuration management provides a way to manage these settings separately from the core logic of the application.
+### Why is it Important?
+There are several reasons why configuration management is a crucial aspect of software development:
+*   **Separation of Concerns:** It cleanly separates configuration from code. This means that configuration changes do not require code changes, and vice versa.
+*   **Flexibility and Adaptability:** It enables easy deployment of the application in different environments (e.g., development, testing, production) with varying settings.  Imagine deploying your application to a test server that uses a smaller dataset – you can configure the `DATA_FILE_PATH` accordingly without altering any of the core application logic.
+*   **Maintainability:** Centralized configuration makes it easier to understand and modify application settings.  You know exactly where to go to change a specific setting, rather than hunting through the codebase.
+*   **Consistency:** It ensures consistent application behavior by providing a single source of truth for configuration values.
+### Configuration in `python_sample_project`
+In `python_sample_project`, we use a dedicated module, `config.py`, to store configuration settings.
+Here's a look at the key elements:
+*   **Constants:** We define configuration values as constants using the `typing.Final` type hint. This indicates that these values are intended to be set once and not changed during runtime.
+*   **Getter Functions:**  We provide functions (e.g., `get_data_path()`, `get_threshold()`) to access these configuration values. This allows for more complex configuration logic if needed (e.g., reading from environment variables).
 ```python
 --- File: config.py ---
-"""Configuration settings for the Sample Project 2.
-This module stores configuration values used by other parts of the application,
-such as file paths or processing parameters.
-"""
+"""Configuration settings for the Sample Project 2."""
 from typing import Final
 # --- Constants for Configuration ---
-# Simulate a path to a data file (used by DataHandler)
 DATA_FILE_PATH: Final[str] = "data/items.json"
-# A processing parameter (used by ItemProcessor)
 PROCESSING_THRESHOLD: Final[int] = 100
-# Example setting for logging level (could be used by main)
 LOG_LEVEL: Final[str] = "INFO"
 def get_data_path() -> str:
-    """Return the configured path for the data file.
-    Returns:
-        str: The path string for the data file.
-    """
-    # In a real app, this might involve more complex logic,
-    # like checking environment variables first.
+    """Return the configured path for the data file."""
     print(f"Config: Providing data file path: {DATA_FILE_PATH}")
     return DATA_FILE_PATH
 def get_threshold() -> int:
-    """Return the configured processing threshold.
-    Returns:
-        int: The configured processing threshold.
-    """
+    """Return the configured processing threshold."""
     print(f"Config: Providing processing threshold: {PROCESSING_THRESHOLD}")
     return PROCESSING_THRESHOLD
 # End of tests/sample_project2/config.py
 ```
-In this example, `DATA_FILE_PATH` and `PROCESSING_THRESHOLD` are configuration settings.  The `get_data_path` and `get_threshold` functions provide access to these settings. In a more complex application, these functions might read the settings from a file or environment variables, adding a layer of abstraction and flexibility.
-**Relationships & Cross-Linking**
-Later on, we'll see how these configuration settings are used in other modules, such as the [Data Handling](03_data-handling.md) and [Item Processing](04_item-processing.md) modules. We will also see how the [Logging](05_logging.md) module can use a configuration setting to determine the appropriate logging level.
-**Simple configuration fetching**
+### How it Works: Usage in `main.py`
+The `main.py` script imports the `config` module and uses its functions to retrieve configuration values. This ensures that the application components use the configured settings.
+```python
+--- File: main.py ---
+"""Main execution script for Sample Project 2."""
+import logging
+from typing import TYPE_CHECKING
+from . import config
+from .data_handler import DataHandler
+from .item_processor import ItemProcessor
+if TYPE_CHECKING:
+    from .models import Item
+def run_processing_pipeline() -> None:
+    """Execute the main data processing pipeline."""
+    logger: logging.Logger = logging.getLogger(__name__)
+    logger.info("Starting Sample Project 2 processing pipeline...")
+    try:
+        # 1. Initialize components using configuration
+        data_path: str = config.get_data_path()
+        threshold: int = config.get_threshold()
+        data_handler = DataHandler(data_source_path=data_path)
+        item_processor = ItemProcessor(threshold=threshold)
+        # ... rest of the pipeline ...
+    except FileNotFoundError as e:
+        logger.critical("Configuration error: Data file path not found. %s", e, exc_info=True)
+    except OSError as e:
+        logger.critical(
+            "An OS or I/O error occurred during pipeline execution: %s",
+            e,
+            exc_info=True,
+        )
+    except (ValueError, TypeError, AttributeError, KeyError) as e:
+        logger.critical("A runtime error occurred during pipeline execution: %s", e, exc_info=True)
+    # Note: No generic `except Exception as e:` to comply with strict BLE001.
+    # Any other unhandled exceptions will terminate the program.
+    finally:
+        logger.info("Sample Project 2 processing pipeline finished.")
+# End of tests/sample_project2/main.py
+```
+This setup promotes modularity.  If, for example, you want to use a different data source, you only need to modify the `DATA_FILE_PATH` in `config.py` (or extend the `get_data_path` to check for environment variables). The rest of the application remains unchanged.
+Here is a diagram illustrating this flow:
 ```mermaid
 sequenceDiagram
-    participant App
+    participant Main
     participant Config
-    App->>Config: get_data_path()
+    participant DataHandler
+    participant ItemProcessor
+    Main->>Config: get_data_path()
     activate Config
-    Config->>Config: Access DATA_FILE_PATH
-    Config-->>App: Data file path
+    Config-->>Main: data_path
     deactivate Config
+    Main->>Config: get_threshold()
+    activate Config
+    Config-->>Main: threshold
+    deactivate Config
+    Main->>DataHandler: DataHandler(data_source_path=data_path)
+    activate DataHandler
+    deactivate DataHandler
+    Main->>ItemProcessor: ItemProcessor(threshold=threshold)
+    activate ItemProcessor
+    deactivate ItemProcessor
 ```
-This sequence diagram shows how the application interacts with the `Config` module to retrieve the data file path. First, the application calls `get_data_path()`. The `Config` module then accesses the `DATA_FILE_PATH` constant and returns the path to the application.
+The diagram illustrates the main application querying the configuration module for key settings, and then using those settings to initialize other components such as the `DataHandler` and `ItemProcessor`.
+### Relationships to Other Components
+The configuration settings directly impact how other modules in the project function:
+*   The `DataHandler` ([Data Handling](03_data-handling.md)) uses the `DATA_FILE_PATH` from `config.py` to determine where to load and save data.
+*   The `ItemProcessor` ([Item Processing](04_item-processing.md)) uses the `PROCESSING_THRESHOLD` from `config.py` to determine which items to process.
+*   The logging level defined in `config.py` (e.g., `LOG_LEVEL`) is used by the [Logging](05_logging.md) module to control the verbosity of log messages.
 This concludes our look at this topic.
 
 Next, we will examine [Data Model (Item)](02_data-model-item.md).

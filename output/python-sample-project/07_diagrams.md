@@ -1,139 +1,199 @@
-Previously, we looked at [Main Application Orchestration](06_main-application-orchestration.md).
+Previously, we looked at [Main Application Pipeline](06_main-application-pipeline.md).
 
 # Architecture Diagrams
 ## Class Diagram
-Key classes in **python_sample_project**, attributes, methods, relationships.
+Key classes and their relationships in **python_sample_project**.
 ```mermaid
 classDiagram
+    class Config {
+        +data_path: str
+        +log_level: str
+    }
     class DataHandler {
-        +load_data(path: str) List[str]
-        +save_data(data: List[str], path: str) void
+        -config: Config
+        +load_data() : list
     }
     class ItemProcessor {
-        +process_item(item: Item) Item
+        +process_item(item: object) : object
     }
-    class Item {
-        +item_id: int
-        +name: str
+    class Model {
     }
-    DataHandler --|> Item : Creates
-    ItemProcessor ..> Item : Uses
+    class Main {
+        -config: Config
+        -data_handler: DataHandler
+        -item_processor: ItemProcessor
+        +run() : void
+    }
+    DataHandler *-- Config : Uses
+    Main *-- Config : Uses
+    Main *-- DataHandler : Uses
+    Main *-- ItemProcessor : Uses
 ```
 ## Package Dependencies
-High-level modular structure of **python_sample_project** and dependencies.
+High-level module and package structure of **python_sample_project**.
 ```mermaid
 graph TD
-    M(main.py) --> C(config.py)
-    M --> DH(data_handler.py)
-    M --> IP(item_processor.py)
-    DH --> MO(models.py)
-    IP --> MO
+    M(main.py)
+    C["config.py"]
+    D(data_handler.py)
+    I(item_processor.py)
+    MO(models.py)
+    I_init(__init__.py)
+    M -->|"imports"| C
+    M -->|"imports"| D
+    M -->|"imports"| I
+    M -->|"imports"| MO
+    D -->|"imports"| MO
+    I -->|"imports"| MO
 ```
 ## Sequence Diagrams
 These diagrams illustrate various interaction scenarios within the application, showcasing the sequence of operations between different components for specific use cases.
-### Application starts, loads configuration, and initializes data handling.
-```mermaid
-sequenceDiagram
-    participant CLI as "Command Line"
-    participant MainApp as "Application"
-    participant Config as "Configuration"
-    participant DataHandler as "Data Handling"
-    CLI->>MainApp: Start Application
-    activate MainApp
-    MainApp->>Config: Load configuration
-    activate Config
-    Config-->>MainApp: Configuration data
-    deactivate Config
-    MainApp->>DataHandler: Initialize data handling
-    activate DataHandler
-    DataHandler-->>MainApp: Data handling initialized
-    deactivate DataHandler
-    deactivate MainApp
-```
-### Data Handler loads and parses data from a file into Item objects.
-```mermaid
-sequenceDiagram
-    participant DataHandler as "Data Handler"
-    participant FileSystem as "File System"
-    participant Item as "Item"
-    DataHandler->>FileSystem: Load data from file
-    activate DataHandler
-    FileSystem-->>DataHandler: Data (raw)
-    loop For each data entry
-        DataHandler->>Item: Create Item object
-        activate Item
-        Item-->>DataHandler: Item object created
-        deactivate Item
-    end
-    DataHandler-->>DataHandler: Parse data into Item objects
-    deactivate DataHandler
-```
-### Item Processor applies processing rules to an Item based on configuration.
-```mermaid
-sequenceDiagram
-    participant Item as "Item"
-    participant Config as "Configuration"
-    participant Processor as "Item Processor"
-    Processor->>Config: Get processing rules
-    activate Processor
-    Config-->>Processor: Rules configuration
-    Processor->>Item: Apply rules
-    alt Item satisfies rule 1
-        Processor->>Item: Process based on rule 1
-    else Item does not satisfy rule 1
-        Processor->>Item: Skip rule 1
-    end
-    alt Item satisfies rule 2
-        Processor->>Item: Process based on rule 2
-    else Item does not satisfy rule 2
-        Processor->>Item: Skip rule 2
-    end
-    Processor-->>Item: Processed Item
-    deactivate Processor
-```
-### Main Application orchestrates the processing of all loaded Item objects, logging progress.
+### Loading data items from a file based on a configuration specified in a configuration file.
 ```mermaid
 sequenceDiagram
     participant MainApp as "Main Application"
-    participant DataHandler as "Item Loader"
-    participant ItemProcessor as "Item Processor"
+    participant ConfigManager as "Configuration Manager"
+    participant DataFile as "Data File"
+    participant DataLoader as "Data Loader"
+    participant DataItem as "Data Item"
+    MainApp->>ConfigManager: Load configuration file
+    activate ConfigManager
+    ConfigManager-->>MainApp: File path, delimiter, ...
+    deactivate ConfigManager
+    MainApp->>DataLoader: Load data using configuration
+    activate DataLoader
+    DataLoader->>DataFile: Open file
+    activate DataFile
+    DataFile-->>DataLoader: File stream
+    deactivate DataFile
+    loop Read each line in file
+        DataLoader->>DataFile: Read line
+        activate DataFile
+        DataFile-->>DataLoader: Data line
+        deactivate DataFile
+        alt Data line is valid
+            DataLoader->>DataItem: Create DataItem from line
+            activate DataItem
+            DataItem-->>DataLoader: DataItem object
+            deactivate DataItem
+            DataLoader-->>MainApp: DataItem object
+        else Data line is invalid
+            DataLoader->>MainApp: Log error
+        end
+    end
+    DataLoader->>DataFile: Close file
+    activate DataFile
+    DataFile-->>DataLoader: Confirmation
+    deactivate DataFile
+    deactivate DataLoader
+```
+### Processing a single data item through the entire pipeline, including transformation and logging.
+```mermaid
+sequenceDiagram
+    participant MainApp as "Main Application"
+    participant DataProcessor as "Data Processor"
+    participant Transformer as "Data Transformer"
     participant Logger as "Logger"
-    MainApp->>DataHandler: Load Items
-    activate DataHandler
-    DataHandler-->>MainApp: Items list
-    deactivate DataHandler
-    loop For each Item in Items list
-        MainApp->>ItemProcessor: Process Item
-        activate ItemProcessor
-        ItemProcessor-->>MainApp: Processing Result
-        deactivate ItemProcessor
-        MainApp->>Logger: Log progress for Item
-        activate Logger
-        Logger-->>MainApp: Log confirmation
-        deactivate Logger
-    end
+    MainApp->>DataProcessor: Receive data item
+    activate DataProcessor
+    DataProcessor->>Transformer: Transform data item
+    activate Transformer
+    Transformer-->>DataProcessor: Transformed data
+    deactivate Transformer
+    DataProcessor->>Logger: Log data processing
+    activate Logger
+    Logger-->>DataProcessor: Log entry created
+    deactivate Logger
+    DataProcessor-->>MainApp: Processed data
+    deactivate DataProcessor
 ```
-### Application encounters an invalid configuration setting and gracefully shuts down.
+### Saving processed data items to a database using Data Handling.
 ```mermaid
 sequenceDiagram
     participant MainApp as "Main Application"
-    participant Config as "Configuration Manager"
-    participant Logger as "Logging Service"
-    MainApp->>Config: Load Configuration
-    activate Config
-    Config-->>MainApp: Configuration Data
-    deactivate Config
-    MainApp->>MainApp: Validate Configuration Data
-    alt Invalid Configuration
-        MainApp->>Logger: Log Error: Invalid configuration detected
-        activate Logger
-        Logger-->>MainApp: Log confirmation
-        deactivate Logger
-        MainApp->>MainApp: Perform Cleanup/Shutdown
-        MainApp->>MainApp: Exit Application
-    else Valid Configuration
-        MainApp->>MainApp: Proceed with Application Logic
+    participant DataHandler
+    participant Database
+    MainApp->>DataHandler: Process data items
+    activate DataHandler
+    DataHandler->>DataHandler: Validate data
+    alt Data valid
+        DataHandler->>Database: Save data items
+        activate Database
+        Database-->>DataHandler: Confirmation
+        deactivate Database
+        DataHandler-->>MainApp: Data saved successfully
+    else Data invalid
+        DataHandler-->>MainApp: Error: Invalid data
     end
+    deactivate DataHandler
+```
+### Handling a data validation error during Item Processing and logging the error.
+```mermaid
+sequenceDiagram
+    participant MainApp as "Main Application"
+    participant ItemProc as "Item Processor"
+    participant Validator as "Data Validator"
+    participant Logger
+    MainApp->>ItemProc: Process item data
+    activate ItemProc
+    ItemProc->>Validator: Validate item data
+    activate Validator
+    alt Data is invalid
+        Validator-->>ItemProc: Validation error
+        deactivate Validator
+        ItemProc->>Logger: Log validation error
+        activate Logger
+        Logger-->>ItemProc: Error logged
+        deactivate Logger
+        ItemProc-->>MainApp: Error: Data validation failed
+        deactivate ItemProc
+    else Data is valid
+        Validator-->>ItemProc: Validated data
+        deactivate Validator
+        ItemProc-->>MainApp: Item processed successfully
+        deactivate ItemProc
+    end
+```
+### Restarting the Main Application Pipeline after a recoverable error, triggered by Configuration Management.
+```mermaid
+sequenceDiagram
+    participant ConfigMgr as "Configuration Manager"
+    participant MainApp as "Main Application"
+    participant ErrorHandler as "Error Handler"
+    participant TaskScheduler as "Task Scheduler"
+    participant Pipeline as "Main Pipeline"
+    participant Logger as "Logger"
+    ConfigMgr->>MainApp: Detects configuration change (e.g., restart flag)
+    activate MainApp
+    MainApp->>ErrorHandler: Check for recoverable error
+    activate ErrorHandler
+    ErrorHandler-->>MainApp: Error Status (Recoverable)
+    deactivate ErrorHandler
+    MainApp->>Logger: Log: "Recoverable error detected, initiating pipeline restart."
+    activate Logger
+    Logger-->>MainApp: Log confirmation
+    deactivate Logger
+    MainApp->>TaskScheduler: Stop Main Pipeline
+    activate TaskScheduler
+    TaskScheduler-->>MainApp: Pipeline stopped
+    deactivate TaskScheduler
+    MainApp->>Pipeline: Shutdown Processes
+    activate Pipeline
+    Pipeline-->>MainApp: Processes Shutdown
+    deactivate Pipeline
+    MainApp->>Pipeline: Initialize new Pipeline instance
+    activate Pipeline
+    Pipeline-->>MainApp: Pipeline initialized
+    deactivate Pipeline
+    MainApp->>TaskScheduler: Schedule Main Pipeline
+    activate TaskScheduler
+    TaskScheduler-->>MainApp: Pipeline scheduled
+    deactivate TaskScheduler
+    MainApp->>Logger: Log: "Pipeline restart complete."
+    activate Logger
+    Logger-->>MainApp: Log confirmation
+    deactivate Logger
+    deactivate MainApp
 ```
 
 Next, we will examine [Code Inventory](08_code_inventory.md).

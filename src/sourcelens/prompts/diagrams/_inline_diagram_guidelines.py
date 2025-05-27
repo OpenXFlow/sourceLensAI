@@ -20,49 +20,51 @@ from typing import Final
 # This text is intended to be part of a larger prompt (e.g., for writing chapters).
 # It provides specific instructions to the LLM on how to correctly format
 # simple, inline Mermaid diagrams if it chooses to include them.
-# Guidelines for Mermaid diagrams embedded in chapters.
-guideline_part1: str = (
-    "If helpful for explaining a core concept, method call flow, or process logic, "
-    "consider embedding a SIMPLE `mermaid` diagram (sequence, activity, graph TD) "
-    "using ```mermaid ... ```. Explain the diagram briefly.\n"
+INLINE_MERMAID_DIAGRAM_GUIDELINES_TEXT: Final[str] = (
+    "If helpful for explaining a core concept, "
+    "method call flow, or process logic, consider embedding a SIMPLE `mermaid` diagram "
+    "(sequence, flowchart, graph TD) using ```mermaid ... ```. Explain the diagram briefly.\n"
     "    **CRITICAL MERMAID SYNTAX (for diagrams inside chapters):**\n"
     "        - **First Line Keyword:** The line *immediately* after ```mermaid MUST be the diagram type keyword "
-    "(e.g., `sequenceDiagram`, `activityDiagram`, `graph TD`). NO leading spaces, comments, or other text "
+    "(e.g., `sequenceDiagram`, `flowchart TD`, `graph TD`). NO leading spaces, comments, or other text "
     "before this keyword on that first line.\n"
-    "        - **Participants (Sequence & others):** Define participants clearly. "
-    "If a participant name contains spaces or special characters (like '.', '(', ')'), "
-    'it MUST be enclosed in double quotes, e.g., `participant "My Component (v1)"`. '
-    'Alternatively, use an alias: `participant MCV1 as "My Component (v1)"`. '
-    "Ensure the entire alias description is quoted.\n"
+    "        - **Participants (Sequence & others):** Define participants clearly. If a participant name contains spaces or special "  # noqa: E501
+    "characters (like '.', '(', ')'), it MUST be enclosed in double quotes, e.g., `participant \"My Component (v1)\"`. "
+    'Alternatively, use an alias: `participant MCV1 as "My Component (v1)"`. Ensure the entire alias description is quoted if it contains spaces/special chars.\n'  # noqa: E501
     "        - **Sequence Diagrams:**\n"
-    "            - Messages: `SENDER->>RECEIVER: Message Text`. Colon MUST be present. Message text must be valid.\n"
-    "            - Control Flow (`alt`, `opt`, `loop`): The line IMMEDIATELY following `alt`, `opt`, `loop` or `else` "
-    "MUST be a valid Mermaid command (e.g., a message, `activate`, or `note`). "
-    "DO NOT leave it blank or start with `end` directly. "
-)
-guideline_part2: str = (
-    "Every `activate Participant` inside a block must have a corresponding `deactivate Participant` "
-    "before the block ends or before transitioning to an `else` or another part of the flow for that participant, "
-    "unless the participant is meant to stay active across blocks.\n"
-    "            - Balanced Activations: `activate ParticipantName`/`deactivate ParticipantName` "
-    "MUST be strictly balanced for each participant.\n"
-    "        - **Activity Diagrams:**\n"
-    "            - **CRITICAL: Start with `activityDiagram` on the very first line after ```mermaid.** "
-    "For example: `activityDiagram\\n    (*) --> Step 1`.\n"
-    "            - Use `(*)` for start/end states if appropriate.\n"
-    "            - Use `-->` for transitions. Use `:` for labels on transitions (e.g., `--> Condition Met`).\n"
-    "            - Conditional logic uses `if (Condition?) then (yes)` and `else (no) ... endif` "
-    "or diamond shapes using `-->|yes|` and `-->|no|` from a condition node "
-    "(e.g., `cond1{{Condition?}}`).\n"
-    "            - Ensure all paths logically flow and terminate correctly "
-    "(e.g., converge before end state if needed).\n"
+    "            - **Messages & Replies:**\n"
+    "                - `SENDER->>RECEIVER: Message Text` (Colon MUST be present, text is required).\n"
+    "                - `RECEIVER-->>SENDER: Reply Text` (Reply text is REQUIRED - use 'OK', 'Success', 'Done', etc. if no specific reply).\n"  # noqa: E501
+    "                - **NEVER leave message arrows empty** - always provide some text after the colon.\n"
+    "            - **VERY IMPORTANT - New Lines for Commands:**\n"
+    "                - Each distinct command (`activate`, `deactivate`, `alt`, `loop`, `opt`, `par`, `else`, `end`, `note`) "  # noqa: E501
+    "MUST be on its **OWN SEPARATE LINE** and correctly indented.\n"
+    "                - After any message arrow (e.g., `A->>B: text` or `B-->>A: reply`), the NEXT command "
+    "(like `activate B` or `deactivate A`) MUST start on a **NEW LINE**.\n"
+    "                - **Correct Example:**\n"
+    "                    `A->>B: Request data`\n"
+    "                    `activate B`\n"
+    "                    `B-->>A: Data response`\n"
+    "                    `deactivate B`\n"
+    "                - **Incorrect Example (DO NOT DO THIS):**\n"
+    "                    `A->>B: Request data activate B`\n"
+    "                    `B-->>A: deactivate B`  # Missing reply text!\n"
+    "            - **Control Flow (`alt`, `opt`, `loop`, `par`):** The line IMMEDIATELY following `alt Condition`, `opt Text`, "  # noqa: E501
+    "`loop Text`, `par Action` or `else` MUST be a valid, indented Mermaid command on a NEW LINE (e.g., a message, `activate`, or `note`). "  # noqa: E501
+    "DO NOT leave it blank or start with `end` directly on the next line without an action. `end` must also be on its own new line.\n"  # noqa: E501
+    "            - **Balanced Activations:** `activate ParticipantName`/`deactivate ParticipantName` MUST be strictly balanced for each participant.\n"  # noqa: E501
+    "        - **Flowchart/Activity Diagrams:**\n"
+    "            - **CRITICAL: Start with `flowchart TD` (top-down) or `flowchart LR` (left-right) on the very first line after ```mermaid.** "  # noqa: E501
+    'Example: `flowchart TD\\n    Start --> "Step 1"`.\n'
+    "            - Use `Start([Start])` and `End([End])` for start/end states, or simple node names.\n"
+    "            - Use `-->` for transitions. Use `-->|Label Text|` for edge labels (avoid quotes in labels when possible).\n"  # noqa: E501
+    "            - Decision nodes: Use `{Decision Text}` for diamond shapes (decisions/conditions).\n"
+    "            - Process nodes: Use `[Process Text]` for rectangular shapes (actions/processes).\n"
+    '            - Subgraphs: Use `subgraph ID ["Title"]` and `end` to group related nodes.\n'
+    "            - Ensure all paths logically flow and terminate correctly.\n"
     "        - **General Code Purity:** Generate ONLY valid Mermaid syntax. "
-    "ABSOLUTELY NO inline comments (like `// my comment`) or any text other than valid Mermaid syntax "
-    "within the diagram code. Standard Mermaid comments `%% comment on its own line` are acceptable if necessary "
-    "but try to avoid them for GitHub rendering unless essential.\n"
-    "        - **General:** Avoid overly complex styling or labels inside chapters. Keep diagrams focused."
+    "ABSOLUTELY NO inline comments (like `// comment` or `# comment`) within the diagram code "
+    "(between diagram keyword and final ```). Standard Mermaid comments `%% comment` are okay if on their own line.\n"
+    "        - **General:** Keep inline diagrams SIMPLE and FOCUSED. Explain them briefly in the text."
 )
-
-INLINE_MERMAID_DIAGRAM_GUIDELINES_TEXT: Final[str] = guideline_part1 + guideline_part2
-
 # End of src/sourcelens/prompts/diagrams/_inline_diagram_guidelines.py

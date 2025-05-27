@@ -18,9 +18,11 @@
 This node operates in a batch mode, where each item in the batch corresponds
 to a chapter to be written. It uses an LLM to generate the content for each
 chapter based on its corresponding abstraction, context from other chapters,
-and relevant code snippets.
+and relevant code snippets. It now includes per-item retry logic for LLM calls.
 """
 
+import time
+import warnings
 from collections.abc import Iterable
 from typing import Any, Final, Optional
 
@@ -28,21 +30,14 @@ from typing_extensions import TypeAlias
 
 from sourcelens.prompts import ChapterPrompts, WriteChapterContext
 from sourcelens.utils.helpers import get_content_for_indices, sanitize_filename
-from sourcelens.utils.llm_api import LlmApiError, call_llm  # Keep LlmApiError for specific handling
+from sourcelens.utils.llm_api import LlmApiError, call_llm
 
-from .base_node import BaseBatchNode, SLSharedContext  # Updated import
+from .base_node import BaseBatchNode, SLSharedContext
 
-# Renamed Type Aliases
-WriteChapterPreparedItem: TypeAlias = dict[str, Any]  # Renamed from WriteChapterPrepItem
-"""Type alias for the data item prepared for a single chapter's generation."""
-SingleChapterExecutionResult: TypeAlias = str  # Renamed from _SingleChapterExecResult
-"""Internal type alias for the execution result of processing one chapter item."""
-
-# Type for the 'execution' method of this BatchNode
+WriteChapterPreparedItem: TypeAlias = dict[str, Any]
+SingleChapterExecutionResult: TypeAlias = str
 WriteChaptersExecutionResultList: TypeAlias = list[SingleChapterExecutionResult]
-"""Type alias for the execution result of the entire batch, list of chapter contents or errors."""
 
-# Internal type consistency
 FileDataOptionalContentInternal: TypeAlias = tuple[str, Optional[str]]
 FileDataListOptionalContentInternal: TypeAlias = list[FileDataOptionalContentInternal]
 FileDataStrictContentInternal: TypeAlias = tuple[str, str]
@@ -69,8 +64,7 @@ class WriteChapters(BaseBatchNode[WriteChapterPreparedItem, SingleChapterExecuti
     The `pre_execution` method prepares an iterable of items, each representing
     the context for a single chapter. The `execution` method iterates through
     these items, calling an LLM for each to generate chapter content.
-    Retry logic from the parent `Node` applies to the `execution` method
-    as a whole (i.e., to the entire batch of chapters).
+    This node implements per-item retry logic for LLM calls internally.
     """
 
     def _prepare_chapter_metadata(
@@ -78,14 +72,20 @@ class WriteChapters(BaseBatchNode[WriteChapterPreparedItem, SingleChapterExecuti
     ) -> tuple[dict[int, ChapterMetadataInternal], list[str]]:
         """Prepare metadata for each chapter based on abstractions and order.
 
+        Generates filenames, chapter numbers, and a markdown list of all chapters
+        for inclusion in prompts.
+
         Args:
-            abstractions: The list of all identified abstractions.
-            chapter_order: A list of integer indices specifying the order.
+            abstractions: The list of all identified abstractions for the project.
+            chapter_order: A list of integer indices specifying the pedagogical
+                           order of chapters, corresponding to indices in `abstractions`.
 
         Returns:
             A tuple containing:
-                - A dictionary mapping abstraction_index to `ChapterMetadataInternal`.
-                - A list of Markdown-formatted chapter links.
+                - A dictionary mapping original abstraction_index to its
+                  `ChapterMetadataInternal` (name, number, filename).
+                - A list of Markdown-formatted strings, each representing a link
+                  to a chapter in the planned tutorial structure.
         """
         chapter_metadata_map: dict[int, ChapterMetadataInternal] = {}
         all_chapters_listing_md: list[str] = []
@@ -121,7 +121,7 @@ class WriteChapters(BaseBatchNode[WriteChapterPreparedItem, SingleChapterExecuti
             all_chapters_listing_md.append(f"{chapter_num}. [{chapter_name}]({filename})")
         return chapter_metadata_map, all_chapters_listing_md
 
-    def _prepare_single_chapter_item(  # Helper for pre_execution
+    def _prepare_single_chapter_item(
         self,
         chapter_index_in_order: int,
         abstraction_index: int,
@@ -135,23 +135,27 @@ class WriteChapters(BaseBatchNode[WriteChapterPreparedItem, SingleChapterExecuti
         llm_config: LlmConfigDictTyped,
         cache_config: CacheConfigDictTyped,
     ) -> WriteChapterPreparedItem:
-        """Prepare the data item (context) for a single chapter.
+        """Prepare the data item (context) for generating a single chapter.
+
+        This involves gathering the specific abstraction details, relevant code snippets,
+        and contextual information about neighboring chapters.
 
         Args:
-            chapter_index_in_order: 0-based index in `chapter_order`.
-            abstraction_index: Index from the main `abstractions` list.
-            abstractions: Full list of abstractions.
-            files_data: Full list of (filepath, Optional[content]) tuples.
-            project_name: Name of the project.
-            chapter_metadata_map: Map from abstraction_index to `ChapterMetadataInternal`.
-            chapter_order: Ordered list of abstraction indices.
-            full_chapter_structure_md: Markdown string listing all chapters.
-            language: Target language for the chapter.
-            llm_config: LLM API configuration.
-            cache_config: LLM cache configuration.
+            chapter_index_in_order: 0-based index of the current chapter in the `chapter_order` list.
+            abstraction_index: The index of the core abstraction for this chapter from the main `abstractions` list.
+            abstractions: The full list of identified abstractions.
+            files_data: The full list of (filepath, Optional[content]) tuples for the project.
+            project_name: The name of the project.
+            chapter_metadata_map: A map from abstraction_index to `ChapterMetadataInternal`.
+            chapter_order: The ordered list of abstraction indices representing chapter sequence.
+            full_chapter_structure_md: A Markdown string listing all planned chapters (for context).
+            language: The target language for the chapter content.
+            llm_config: Configuration for the LLM API.
+            cache_config: Configuration for LLM caching.
 
         Returns:
-            A `WriteChapterPreparedItem` dictionary for processing one chapter.
+            A dictionary (`WriteChapterPreparedItem`) containing all necessary context
+            for the `_process_single_chapter_item` method to generate one chapter.
         """
         abstraction_details: AbstractionItemInternal = abstractions[abstraction_index]
         related_file_indices_any: Any = abstraction_details.get("files", [])
@@ -204,7 +208,7 @@ class WriteChapters(BaseBatchNode[WriteChapterPreparedItem, SingleChapterExecuti
             abstraction_name=current_chapter_name,
             abstraction_description=str(abstraction_details.get("description", "N/A")),
             full_chapter_structure=full_chapter_structure_md,
-            previous_context_info="Refer to the 'Overall Tutorial Structure' for context.",  # Placeholder
+            previous_context_info="Refer to the 'Overall Tutorial Structure' for context.",
             file_context_str=file_context_str,
             language=language,
             prev_chapter_meta=prev_chapter_meta,  # type: ignore[arg-type]
@@ -214,19 +218,29 @@ class WriteChapters(BaseBatchNode[WriteChapterPreparedItem, SingleChapterExecuti
             "prompt_context": prompt_ctx,
             "llm_config": llm_config,
             "cache_config": cache_config,
-            "chapter_num_for_log": current_chapter_num,  # For logging in execution
-            "abstraction_name_for_log": current_chapter_name,  # For logging
+            "chapter_num_for_log": current_chapter_num,
+            "abstraction_name_for_log": current_chapter_name,
         }
         return prepared_item
 
     def pre_execution(self, shared_context: SLSharedContext) -> Iterable[WriteChapterPreparedItem]:  # type: ignore[override]
-        """Prepare an iterable of dictionaries, one for each chapter.
+        """Prepare an iterable of data items, each for generating one chapter.
+
+        This method retrieves necessary data (abstractions, chapter order, file contents,
+        configurations) from the `shared_context`. It then constructs metadata for
+        each chapter (like name, number, filename) and assembles a `WriteChapterContext`
+        object for each. These context objects, along with LLM configurations,
+        are yielded one by one for batch processing by the `execution` method.
 
         Args:
-            shared_context: The shared context dictionary.
+            shared_context: The shared context dictionary containing data from
+                            previous pipeline nodes.
 
         Yields:
-            `WriteChapterPreparedItem` dictionaries for each chapter to be generated.
+            `WriteChapterPreparedItem` dictionaries, each containing all necessary
+            information and context to generate a single tutorial chapter.
+            If prerequisites (like chapter order or abstractions) are missing,
+            it may yield no items.
         """
         self._log_info("Preparing data for writing chapters individually...")
         try:
@@ -238,7 +252,6 @@ class WriteChapters(BaseBatchNode[WriteChapterPreparedItem, SingleChapterExecuti
             cache_config_any: Any = self._get_required_shared(shared_context, "cache_config")
             language_any: Any = shared_context.get("language", DEFAULT_LANGUAGE_CODE)
 
-            # Type assertions
             chapter_order: ChapterOrderListInternal = chapter_order_any if isinstance(chapter_order_any, list) else []
             abstractions: AbstractionsListInternal = abstractions_any if isinstance(abstractions_any, list) else []
             files_data: FileDataListOptionalContentInternal = files_data_any if isinstance(files_data_any, list) else []
@@ -247,13 +260,13 @@ class WriteChapters(BaseBatchNode[WriteChapterPreparedItem, SingleChapterExecuti
             cache_config: CacheConfigDictTyped = cache_config_any if isinstance(cache_config_any, dict) else {}
             language: str = str(language_any) if isinstance(language_any, str) else DEFAULT_LANGUAGE_CODE
 
-        except ValueError:  # From _get_required_shared
+        except ValueError:
             self._log_error("WriteChapters.pre_execution: Failed due to missing essential shared data.", exc_info=True)
-            return  # Yield nothing
+            return
 
         if not chapter_order or not abstractions:
             self._log_warning("No chapter order or abstractions available. No chapters will be written.")
-            return  # Yield nothing
+            return
 
         chapter_metadata_map, all_chapters_listing_md_list = self._prepare_chapter_metadata(abstractions, chapter_order)
         full_chapter_structure_md: str = "\n".join(all_chapters_listing_md_list)
@@ -291,17 +304,83 @@ class WriteChapters(BaseBatchNode[WriteChapterPreparedItem, SingleChapterExecuti
             num_items_prepared += 1
         self._log_info("Prepared %d chapter items for execution.", num_items_prepared)
 
-    def _process_single_chapter_item(self, item: WriteChapterPreparedItem) -> SingleChapterExecutionResult:
-        """Generate content for a single chapter. Helper for `execution` method.
+    def _call_llm_for_chapter_with_retry(
+        self,
+        prompt_context: WriteChapterContext,
+        llm_config: LlmConfigDictTyped,
+        cache_config: CacheConfigDictTyped,
+        chapter_num_log: Any,
+        abstraction_name_log: Any,
+    ) -> str:
+        """Call LLM for a single chapter, with internal retry logic using node's settings.
 
-        This method contains the logic for calling the LLM and formatting its response
-        for one chapter. It includes its own error handling for LLM calls.
+        This method attempts to call the LLM up to `self.max_retries` times,
+        waiting `self.wait` seconds between attempts if an `LlmApiError` occurs.
 
         Args:
-            item: A `WriteChapterPreparedItem` dictionary.
+            prompt_context: The context for formatting the chapter prompt.
+            llm_config: Configuration for the LLM API.
+            cache_config: Configuration for LLM caching.
+            chapter_num_log: The chapter number, for logging purposes.
+            abstraction_name_log: The abstraction name, for logging purposes.
 
         Returns:
-            A string with Markdown content or an error message string.
+            The raw string content from the LLM if successful, or a formatted
+            error message string if all retry attempts fail.
+        """
+        prompt_str = ChapterPrompts.format_write_chapter_prompt(prompt_context)
+        last_exception: Optional[LlmApiError] = None
+
+        for attempt in range(self.max_retries):  # self.max_retries from CoreNode
+            try:
+                return call_llm(prompt_str, llm_config, cache_config)
+            except LlmApiError as e_llm_item:
+                last_exception = e_llm_item
+                self._log_error(
+                    "LLM call failed for Chapter %s ('%s'), attempt %d/%d: %s",
+                    str(chapter_num_log),
+                    str(abstraction_name_log),
+                    attempt + 1,
+                    self.max_retries,
+                    e_llm_item,
+                )
+                if attempt == self.max_retries - 1:  # Last attempt
+                    break
+                if self.wait > 0:  # self.wait from CoreNode
+                    warn_msg_l1 = (
+                        f"Node {self.__class__.__name__}, Chapter {str(chapter_num_log)} "
+                        f"LLM call failed on attempt {attempt + 1}/{self.max_retries}."
+                    )
+                    warn_msg_l2 = f" Retrying after {self.wait}s. Error: {e_llm_item!s}"
+                    warnings.warn(warn_msg_l1 + warn_msg_l2, UserWarning, stacklevel=2)
+                    time.sleep(self.wait)
+        # If all retries failed
+        if last_exception:
+            return (
+                f"{ERROR_MESSAGE_PREFIX} LLM API error for chapter "
+                f"{str(chapter_num_log)} ('{str(abstraction_name_log)}') after {self.max_retries} attempts. "
+                f"Last error: {last_exception!s}"
+            )
+        # Fallback if loop completes without LlmApiError but no success (should be rare)
+        return (
+            f"{ERROR_MESSAGE_PREFIX} Unknown LLM error for chapter "
+            f"{str(chapter_num_log)} ('{str(abstraction_name_log)}') after {self.max_retries} attempts."
+        )
+
+    def _process_single_chapter_item(self, item: WriteChapterPreparedItem) -> SingleChapterExecutionResult:
+        """Generate Markdown content for a single chapter.
+
+        This method extracts necessary parameters from the prepared `item`,
+        calls the LLM (with retry logic handled by `_call_llm_for_chapter_with_retry`),
+        and formats the LLM's response, ensuring a correct H1 heading.
+
+        Args:
+            item: A `WriteChapterPreparedItem` dictionary containing all context
+                  and configurations for generating one chapter.
+
+        Returns:
+            A string, either the formatted Markdown content of the chapter or
+            an error message string if generation failed.
         """
         try:
             prompt_context_any: Any = item["prompt_context"]
@@ -320,109 +399,88 @@ class WriteChapters(BaseBatchNode[WriteChapterPreparedItem, SingleChapterExecuti
             self._log_error("Invalid structure in chapter prep item. Error: %s", str(e_params), exc_info=True)
             return f"{ERROR_MESSAGE_PREFIX} Internal error: Invalid prep item structure ({e_params!s})."
 
-        self._log_info("Writing Chapter %s: '%s' using LLM...", str(chapter_num_log), str(abstraction_name_log))
-        try:
-            prompt_str = ChapterPrompts.format_write_chapter_prompt(prompt_context)
-            raw_llm_content = call_llm(prompt_str, llm_config, cache_config)
+        self._log_info(
+            "Writing Chapter %s: '%s' using LLM (max_retries_per_item=%d)...",
+            str(chapter_num_log),
+            str(abstraction_name_log),
+            self.max_retries,  # Using inherited max_retries for per-item logic
+        )
 
-            # Format LLM response (e.g., ensure H1 heading)
-            chapter_content = str(raw_llm_content or "").strip()
-            expected_heading = f"# Chapter {prompt_context.chapter_num}: {prompt_context.abstraction_name}"
+        raw_llm_content = self._call_llm_for_chapter_with_retry(
+            prompt_context, llm_config, cache_config, chapter_num_log, abstraction_name_log
+        )
 
-            if not chapter_content:
-                self._log_warning(
-                    "LLM returned empty content for Chapter %d ('%s').",
-                    prompt_context.chapter_num,
-                    prompt_context.abstraction_name,
-                )
-                return f"{ERROR_MESSAGE_PREFIX} Empty content for Chapter {prompt_context.chapter_num}."
+        if raw_llm_content.startswith(ERROR_MESSAGE_PREFIX):  # Error already formatted by retry helper
+            return raw_llm_content
 
-            if not chapter_content.startswith(f"# Chapter {prompt_context.chapter_num}"):
-                self._log_warning(
-                    "Chapter %d ('%s') response missing/incorrect H1. Attempting to prepend.",
-                    prompt_context.chapter_num,
-                    prompt_context.abstraction_name,
-                )
-                lines = chapter_content.split("\n", 1)
-                if lines and lines[0].strip().startswith("#"):  # If there's another H1, replace it
-                    content_after_h1 = lines[1] if len(lines) > 1 and lines[1].strip() else ""
-                    chapter_content = expected_heading + ("\n\n" + content_after_h1 if content_after_h1 else "")
-                else:  # No H1 found, prepend ours
-                    chapter_content = f"{expected_heading}\n\n{chapter_content}"
-            elif not chapter_content.startswith(expected_heading):  # H1 exists but differs
-                self._log_warning(
-                    "Chapter %d ('%s') H1 differs from expected. Overwriting.",
-                    prompt_context.chapter_num,
-                    prompt_context.abstraction_name,
-                )
-                first_newline_idx = chapter_content.find("\n")
-                chapter_content = (
-                    expected_heading + chapter_content[first_newline_idx:]
-                    if first_newline_idx != -1
-                    else expected_heading
-                )
+        chapter_content = str(raw_llm_content or "").strip()
+        expected_heading = f"# Chapter {prompt_context.chapter_num}: {prompt_context.abstraction_name}"
 
-            self._log_info("Successfully generated content for Chapter %d.", prompt_context.chapter_num)
-            return chapter_content.strip()
-        except LlmApiError as e_llm_item:  # Catch LLM error for this specific item
-            self._log_error(
-                "LLM call failed for Chapter %s ('%s'): %s",
-                str(chapter_num_log),
-                str(abstraction_name_log),
-                e_llm_item,
-                exc_info=False,  # No full stack for retries
+        if not chapter_content:
+            self._log_warning(
+                "LLM returned empty content for Chapter %d ('%s').",
+                prompt_context.chapter_num,
+                prompt_context.abstraction_name,
             )
-            # Propagate LlmApiError to allow the main Node's retry mechanism to catch it
-            # if this `execution` method is called within Node's retry loop.
-            # Since this is a helper, we might want to return an error string
-            # and let the main `execution` method decide on overall batch failure.
-            # For now, let's return an error string. The outer retry (if any) is for the whole batch.
-            return (
-                f"{ERROR_MESSAGE_PREFIX} LLM API error for chapter "
-                f"{str(chapter_num_log)} ('{str(abstraction_name_log)}'): {e_llm_item!s}"
+            return f"{ERROR_MESSAGE_PREFIX} Empty content for Chapter {prompt_context.chapter_num}."
+
+        # Ensure correct H1 heading
+        if not chapter_content.startswith(f"# Chapter {prompt_context.chapter_num}"):
+            self._log_warning(
+                "Chapter %d ('%s') response missing/incorrect H1. Attempting to prepend.",
+                prompt_context.chapter_num,
+                prompt_context.abstraction_name,
             )
-        except (TypeError, ValueError, KeyError) as e_unexpected:  # Catch common expected errors for this item
-            self._log_error(
-                "Unexpected error during single chapter processing for Chapter %s ('%s'): %s",
-                str(chapter_num_log),
-                str(abstraction_name_log),
-                e_unexpected,
-                exc_info=True,
+            lines = chapter_content.split("\n", 1)
+            if lines and lines[0].strip().startswith("#"):  # If another H1 exists, replace it
+                content_after_h1 = lines[1] if len(lines) > 1 and lines[1].strip() else ""
+                chapter_content = expected_heading + ("\n\n" + content_after_h1 if content_after_h1 else "")
+            else:  # No H1, prepend ours
+                chapter_content = f"{expected_heading}\n\n{chapter_content}"
+        elif not chapter_content.startswith(expected_heading):  # H1 exists but differs
+            self._log_warning(
+                "Chapter %d ('%s') H1 differs from expected. Overwriting.",
+                prompt_context.chapter_num,
+                prompt_context.abstraction_name,
             )
-            return (
-                f"{ERROR_MESSAGE_PREFIX} Unexpected problem generating chapter "
-                f"{str(chapter_num_log)} ('{str(abstraction_name_log)}'): {e_unexpected!s}"
+            first_newline_idx = chapter_content.find("\n")
+            chapter_content = (
+                expected_heading + chapter_content[first_newline_idx:] if first_newline_idx != -1 else expected_heading
             )
+
+        self._log_info("Successfully generated content for Chapter %d.", prompt_context.chapter_num)
+        return chapter_content.strip()
 
     def execution(  # type: ignore[override]
         self, items_iterable: Iterable[WriteChapterPreparedItem]
     ) -> WriteChaptersExecutionResultList:
         """Generate Markdown content for each chapter item in the batch.
 
-        This method iterates through the prepared items (each representing a chapter)
-        and calls a helper method (`_process_single_chapter_item`) to generate
-        content for each one. The retry logic from the parent `Node` class
-        applies to this `execution` method as a whole (i.e., to the entire batch).
-        If an individual chapter generation fails within `_process_single_chapter_item`
-        and returns an error string, that error string becomes part of the result list.
+        This method iterates through the `WriteChapterPreparedItem` objects yielded
+        by `pre_execution`. For each item, it calls `_process_single_chapter_item`
+        to generate the chapter content, which includes internal retry logic for
+        LLM calls. The results (chapter content strings or error messages) are
+        collected into a list.
+
+        The retry mechanism inherited from the parent `Node` class applies to this
+        `execution` method as a whole. If this method itself were to raise a
+        recoverable exception (which is unlikely given current `_process_single_chapter_item`
+        error handling), the entire batch processing would be retried.
 
         Args:
             items_iterable: An iterable of `WriteChapterPreparedItem` dictionaries,
                             each containing context for one chapter.
 
         Returns:
-            A list of strings, where each string is the Markdown content for a
-            chapter or an error message if generation for that chapter failed.
+            A list of strings, where each string is either the successfully
+            generated Markdown content for a chapter or a formatted error
+            message if generation for that specific chapter failed after retries.
         """
         self._log_info("Executing batch generation of chapters...")
         results: WriteChaptersExecutionResultList = []
         item_count = 0
         for item in items_iterable:
             item_count += 1
-            # _process_single_chapter_item includes its own try-except for LlmApiError
-            # and other exceptions, returning an error string.
-            # If _process_single_chapter_item were to re-raise LlmApiError,
-            # the Node's retry would apply to the whole batch.
             chapter_content_or_error = self._process_single_chapter_item(item)
             results.append(chapter_content_or_error)
 
@@ -432,24 +490,21 @@ class WriteChapters(BaseBatchNode[WriteChapterPreparedItem, SingleChapterExecuti
     def post_execution(  # type: ignore[override]
         self,
         shared_context: SLSharedContext,
-        prepared_items_iterable: Iterable[WriteChapterPreparedItem],  # This is `prepared_inputs`
-        execution_results_list: WriteChaptersExecutionResultList,  # This is `execution_outputs`
+        prepared_items_iterable: Iterable[WriteChapterPreparedItem],
+        execution_results_list: WriteChaptersExecutionResultList,
     ) -> None:
-        """Update the shared context with the list of generated chapter content.
+        """Update the shared context with the list of generated chapter content or error messages.
 
         Args:
             shared_context: The shared context dictionary to update.
-            prepared_items_iterable: The iterable of items from `pre_execution` (unused).
-            execution_results_list: A list of strings (Markdown content or error messages).
+            prepared_items_iterable: The iterable of items that were prepared (unused here).
+            execution_results_list: A list of strings, where each string is either
+                                    the Markdown content for a chapter or an error
+                                    message if generation for that chapter failed.
         """
         del prepared_items_iterable  # Mark as unused
 
-        # The execution_results_list already contains either chapter content or error strings.
-        # No need to further check for ERROR_MESSAGE_PREFIX here for replacement,
-        # as that's handled by _process_single_chapter_item.
-        # We store the list as is; CombineTutorial can decide how to handle error strings.
         shared_context["chapters"] = execution_results_list
-
         valid_chapter_count = sum(
             1 for content in execution_results_list if not content.startswith(ERROR_MESSAGE_PREFIX)
         )
