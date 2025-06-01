@@ -21,40 +21,35 @@ scenarios can then be used to generate sequence diagrams or other visualizations
 """
 
 import logging
-from typing import Any, Final, Union
+from typing import TYPE_CHECKING, Any, Final, Union
 
 from typing_extensions import TypeAlias
 
-from sourcelens.nodes.base_node import BaseNode, SLSharedContext  # Updated import
+from sourcelens.nodes.base_node import BaseNode, SLSharedContext
 from sourcelens.prompts import ScenarioPrompts
 from sourcelens.utils.llm_api import LlmApiError, call_llm
 from sourcelens.utils.validation import ValidationFailure, validate_yaml_list
 
-# Renamed Type Aliases
+if TYPE_CHECKING:
+    # Type aliases for resolved configurations from shared_context["config"]
+    ResolvedConfigDict: TypeAlias = dict[str, Any]
+    ResolvedLlmConfigDict: TypeAlias = dict[str, Any]
+    ResolvedCacheConfigDict: TypeAlias = dict[str, Any]
+    ResolvedDiagramGenerationConfig: TypeAlias = dict[str, Any]
+    ResolvedSequenceDiagramConfig: TypeAlias = dict[str, Any]
+
+
 IdentifyScenariosPreparedInputs: TypeAlias = dict[str, Any]
-"""Type alias for the prepared inputs for this node."""
 ScenarioList: TypeAlias = list[str]
-"""Type alias for a list of scenario description strings."""
 IdentifyScenariosExecutionResult: TypeAlias = ScenarioList
-"""Type alias for the execution result, which is a list of scenarios."""
 
-
-# Internal type consistency for data from shared_context
 AbstractionItemInternal: TypeAlias = dict[str, Any]
 AbstractionsListInternal: TypeAlias = list[AbstractionItemInternal]
 RelationshipDetailInternal: TypeAlias = dict[str, Any]
 RelationshipsDictInternal: TypeAlias = dict[str, Union[str, list[RelationshipDetailInternal]]]
 
-ConfigDictTyped: TypeAlias = dict[str, Any]
-OutputConfigDictTyped: TypeAlias = dict[str, Any]
-DiagramConfigDictTyped: TypeAlias = dict[str, Any]
-SeqConfigDictTyped: TypeAlias = dict[str, Any]
-LlmConfigDictTyped: TypeAlias = dict[str, Any]
-CacheConfigDictTyped: TypeAlias = dict[str, Any]
 
-
-module_logger: logging.Logger = logging.getLogger(__name__)
-
+module_logger: logging.Logger = logging.getLogger(__name__)  # Node-specific logger
 
 DEFAULT_MAX_SCENARIOS_TO_IDENTIFY: Final[int] = 5
 MAX_RAW_OUTPUT_SNIPPET_LEN_SCENARIOS: Final[int] = 500
@@ -66,27 +61,52 @@ class IdentifyScenariosNode(BaseNode[IdentifyScenariosPreparedInputs, IdentifySc
     def pre_execution(self, shared_context: SLSharedContext) -> IdentifyScenariosPreparedInputs:
         """Prepare context for the scenario identification LLM prompt.
 
+        This method retrieves necessary configurations for diagram generation
+        (especially sequence diagrams) and data about identified abstractions
+        and relationships from the `shared_context`. If sequence diagrams are
+        disabled or essential data is missing, it prepares to skip execution.
+
         Args:
-            shared_context: The shared context dictionary.
+            shared_context: The shared context dictionary. Expected to contain:
+                            "config" (the fully resolved application configuration),
+                            "abstractions", "relationships", "project_name",
+                            "llm_config" (resolved for the current mode),
+                            "cache_config".
 
         Returns:
-            A dictionary containing data for the `execution` method, or an
-            indicator to skip execution if prerequisites are not met.
+            A dictionary containing data for the `execution` method. If conditions
+            for scenario identification are not met (e.g., sequence diagrams disabled,
+            no abstractions), it returns `{"skip": True, "reason": ...}`.
+
+        Raises:
+            ValueError: If essential data (like "config") is missing from `shared_context`.
         """
         self._log_info("Preparing context for identifying interaction scenarios...")
         try:
-            config_any: Any = self._get_required_shared(shared_context, "config")
-            config: ConfigDictTyped = config_any if isinstance(config_any, dict) else {}
-            output_config_any: Any = config.get("output", {})
-            output_config: OutputConfigDictTyped = output_config_any if isinstance(output_config_any, dict) else {}
-            diagram_config_raw: Any = output_config.get("diagram_generation", {})
-            diagram_config: DiagramConfigDictTyped = diagram_config_raw if isinstance(diagram_config_raw, dict) else {}
-            seq_config_raw: Any = diagram_config.get("include_sequence_diagrams", {})
-            seq_config: SeqConfigDictTyped = seq_config_raw if isinstance(seq_config_raw, dict) else {}
+            # Retrieve the fully resolved configuration
+            resolved_config_val: Any = self._get_required_shared(shared_context, "config")
+            resolved_config: "ResolvedConfigDict" = resolved_config_val if isinstance(resolved_config_val, dict) else {}  # type: ignore[assignment]
 
-            if not seq_config.get("enabled", False):
-                self._log_info("Sequence diagram generation is disabled. Skipping scenario identification.")
-                return {"skip": True, "reason": "Sequence diagrams disabled in config"}
+            # Determine current operation mode to correctly access diagram_generation settings
+            current_operation_mode = str(shared_context.get("current_operation_mode", "code"))
+            analysis_config_key = f"{current_operation_mode}_analysis"  # e.g. "code_analysis"
+            mode_specific_config: dict[str, Any] = resolved_config.get(analysis_config_key, {})
+
+            diagram_config_raw: Any = mode_specific_config.get("diagram_generation", {})
+            diagram_config: "ResolvedDiagramGenerationConfig" = (
+                diagram_config_raw if isinstance(diagram_config_raw, dict) else {}
+            )  # type: ignore[assignment]
+            self._log_debug("Diagram config received by IdentifyScenariosNode: %s", diagram_config)
+
+            seq_config_raw: Any = diagram_config.get("sequence_diagrams", {})
+            seq_config: "ResolvedSequenceDiagramConfig" = seq_config_raw if isinstance(seq_config_raw, dict) else {}  # type: ignore[assignment]
+            self._log_debug("Sequence diagram specific config in IdentifyScenariosNode: %s", seq_config)
+
+            if not seq_config.get("enabled", False):  # Default to False if key missing
+                self._log_info(
+                    "Sequence diagram generation is disabled per resolved config. Skipping scenario identification."
+                )
+                return {"skip": True, "reason": "Sequence diagrams disabled in resolved config"}
 
             abstractions_any: Any = self._get_required_shared(shared_context, "abstractions")
             abstractions: AbstractionsListInternal = abstractions_any if isinstance(abstractions_any, list) else []
@@ -95,23 +115,25 @@ class IdentifyScenariosNode(BaseNode[IdentifyScenariosPreparedInputs, IdentifySc
                 return {"skip": True, "reason": "No abstractions available"}
 
             relationships_any: Any = self._get_required_shared(shared_context, "relationships")
-            relationships: RelationshipsDictInternal = relationships_any if isinstance(relationships_any, dict) else {}
+            relationships: RelationshipsDictInternal = relationships_any if isinstance(relationships_any, dict) else {}  # type: ignore[assignment]
             project_name_any: Any = self._get_required_shared(shared_context, "project_name")
             project_name: str = str(project_name_any) if isinstance(project_name_any, str) else "Unknown Project"
-            llm_config_any: Any = self._get_required_shared(shared_context, "llm_config")
-            llm_config: LlmConfigDictTyped = llm_config_any if isinstance(llm_config_any, dict) else {}
-            cache_config_any: Any = self._get_required_shared(shared_context, "cache_config")
-            cache_config: CacheConfigDictTyped = cache_config_any if isinstance(cache_config_any, dict) else {}
 
-            max_scenarios_cfg: Any = seq_config.get("max_diagrams", DEFAULT_MAX_SCENARIOS_TO_IDENTIFY)
+            # LLM and cache config are taken from shared_context, already resolved for the current mode
+            llm_config_val: Any = self._get_required_shared(shared_context, "llm_config")
+            llm_config: "ResolvedLlmConfigDict" = llm_config_val if isinstance(llm_config_val, dict) else {}  # type: ignore[assignment]
+            cache_config_val: Any = self._get_required_shared(shared_context, "cache_config")
+            cache_config: "ResolvedCacheConfigDict" = cache_config_val if isinstance(cache_config_val, dict) else {}  # type: ignore[assignment]
+
+            max_scenarios_cfg_val: Any = seq_config.get("max_diagrams_to_generate", DEFAULT_MAX_SCENARIOS_TO_IDENTIFY)
             max_scenarios: int = (
-                int(max_scenarios_cfg)
-                if isinstance(max_scenarios_cfg, (int, float)) and max_scenarios_cfg >= 0  # Allow float if whole number
+                int(max_scenarios_cfg_val)
+                if isinstance(max_scenarios_cfg_val, (int, float)) and max_scenarios_cfg_val >= 0
                 else DEFAULT_MAX_SCENARIOS_TO_IDENTIFY
             )
             if max_scenarios <= 0:
                 self._log_info("Max scenarios is configured to %d. Skipping scenario identification.", max_scenarios)
-                return {"skip": True, "reason": f"Max scenarios set to {max_scenarios}"}
+                return {"skip": True, "reason": f"Max scenarios for sequence diagrams set to {max_scenarios}"}
 
             abstraction_listing_parts: list[str] = [
                 f"- {i} # {str(abstr_item.get('name', f'Unnamed Abstraction {i}'))}"
@@ -126,13 +148,13 @@ class IdentifyScenariosNode(BaseNode[IdentifyScenariosPreparedInputs, IdentifySc
                 "project_name": project_name,
                 "abstraction_listing": abstraction_listing,
                 "context_summary": context_summary,
-                "num_abstractions": len(abstractions),  # Though not directly used in prompt, useful for context
+                "num_abstractions": len(abstractions),
                 "max_scenarios": max_scenarios,
                 "llm_config": llm_config,
                 "cache_config": cache_config,
             }
             return prepared_inputs
-        except ValueError as e_val:  # Specific error for _get_required_shared
+        except ValueError as e_val:
             self._log_error("Scenario ID pre_execution failed due to missing essential shared data: %s", e_val)
             return {"skip": True, "reason": f"Missing essential shared data: {e_val!s}"}
         except (KeyError, TypeError) as e_struct:
@@ -144,10 +166,16 @@ class IdentifyScenariosNode(BaseNode[IdentifyScenariosPreparedInputs, IdentifySc
 
         Args:
             prepared_inputs: The dictionary returned by the `pre_execution` method.
+                             It contains data for prompting the LLM, including a "skip" flag.
 
         Returns:
             A list of scenario description strings. Returns an empty list if
-            skipped, or if LLM call or validation fails.
+            execution was skipped (due to `prepared_inputs["skip"]` being True),
+            or if the LLM call or subsequent YAML validation fails.
+
+        Raises:
+            LlmApiError: If the LLM API call itself fails after retries (to be
+                         handled by the `Node`'s `execution_fallback`).
         """
         if prepared_inputs.get("skip", True):
             reason_any: Any = prepared_inputs.get("reason", "N/A")
@@ -158,8 +186,8 @@ class IdentifyScenariosNode(BaseNode[IdentifyScenariosPreparedInputs, IdentifySc
         abstraction_listing: str = prepared_inputs["abstraction_listing"]
         context_summary: str = prepared_inputs["context_summary"]
         max_scenarios: int = prepared_inputs["max_scenarios"]
-        llm_config: LlmConfigDictTyped = prepared_inputs["llm_config"]  # type: ignore[assignment]
-        cache_config: CacheConfigDictTyped = prepared_inputs["cache_config"]  # type: ignore[assignment]
+        llm_config: "ResolvedLlmConfigDict" = prepared_inputs["llm_config"]  # type: ignore[assignment]
+        cache_config: "ResolvedCacheConfigDict" = prepared_inputs["cache_config"]  # type: ignore[assignment]
 
         self._log_info("Identifying up to %d key scenarios for '%s' using LLM...", max_scenarios, project_name)
         prompt = ScenarioPrompts.format_identify_scenarios_prompt(
@@ -170,19 +198,17 @@ class IdentifyScenariosNode(BaseNode[IdentifyScenariosPreparedInputs, IdentifySc
         )
         response_raw: str
         try:
-            response_raw = call_llm(prompt, llm_config, cache_config)
-        except LlmApiError as e_llm:
-            self._log_error("LLM API call failed during scenario identification: %s", e_llm, exc_info=True)
-            return []
+            response_raw = call_llm(prompt, llm_config, cache_config)  # Can raise LlmApiError
+        except LlmApiError:  # Re-raise to be caught by Node's retry/fallback
+            self._log_error("LLM API call failed during scenario identification. Error will be re-raised.")
+            raise
 
         try:
-            list_item_schema = {"type": "string", "minLength": 5}  # Scenarios should have some length
-            # The list itself doesn't need minItems/maxItems from LLM, we'll cap it later.
+            list_item_schema = {"type": "string", "minLength": 5}
             scenario_list_raw_any: list[Any] = validate_yaml_list(
                 raw_llm_output=response_raw,
                 list_schema={"type": "array", "items": list_item_schema},
             )
-            # Ensure all items are strings and stripped
             validated_scenarios: ScenarioList = [
                 s.strip() for s in scenario_list_raw_any if isinstance(s, str) and s.strip()
             ]
@@ -192,7 +218,7 @@ class IdentifyScenariosNode(BaseNode[IdentifyScenariosPreparedInputs, IdentifySc
             elif not validated_scenarios:
                 self._log_warning("LLM response did not contain any valid scenarios matching schema.")
             self._log_info("Identified and validated %d scenarios.", len(validated_scenarios))
-            return validated_scenarios[:max_scenarios]  # Cap the number of scenarios
+            return validated_scenarios[:max_scenarios]
         except ValidationFailure as e_val:
             self._log_error("YAML validation/parsing failed for scenarios: %s", e_val)
             if e_val.raw_output:
@@ -200,10 +226,34 @@ class IdentifyScenariosNode(BaseNode[IdentifyScenariosPreparedInputs, IdentifySc
                 if len(e_val.raw_output) > MAX_RAW_OUTPUT_SNIPPET_LEN_SCENARIOS:
                     snippet += "..."
                 module_logger.warning("Problematic raw LLM output snippet for scenarios:\n---\n%s\n---", snippet)
-            return []
-        except (TypeError, ValueError) as e_proc:  # Catch specific processing errors
+            return []  # Return empty on validation failure; Node's fallback won't help here.
+        except (TypeError, ValueError) as e_proc:
             self._log_error("Error processing identified scenarios from LLM response: %s", e_proc, exc_info=True)
             return []
+
+    def execution_fallback(
+        self, prepared_inputs: IdentifyScenariosPreparedInputs, exc: Exception
+    ) -> IdentifyScenariosExecutionResult:
+        """Handle fallback if all LLM execution attempts fail for scenario identification.
+
+        This is called by the parent `Node` class if `execution` (which calls the LLM)
+        repeatedly raises an `LlmApiError`.
+
+        Args:
+            prepared_inputs: The data from the `pre_execution` phase.
+            exc: The final exception (typically `LlmApiError`) from `execution`.
+
+        Returns:
+            An empty list, as no scenarios could be identified.
+        """
+        project_name = str(prepared_inputs.get("project_name", "Unknown Project"))
+        self._log_error(
+            "All LLM attempts to identify scenarios for '%s' failed. Last error: %s. Returning empty list.",
+            project_name,
+            exc,
+            exc_info=True,
+        )
+        return []
 
     def post_execution(
         self,
@@ -216,10 +266,10 @@ class IdentifyScenariosNode(BaseNode[IdentifyScenariosPreparedInputs, IdentifySc
         Args:
             shared_context: The shared context dictionary to update.
             prepared_inputs: Result from the `pre_execution` phase.
-            execution_outputs: List of scenario strings from the `execution` phase.
+            execution_outputs: List of scenario strings from the `execution` phase,
+                               or an empty list if skipped or failed.
         """
         self._logger.debug("--- IdentifyScenariosNode.post_execution ---")
-        # Example of logging existing state before update for debugging complex flows
         abstractions_count = len(shared_context.get("abstractions", []))
         order_count = len(shared_context.get("chapter_order", []))
         chapters_count = len(shared_context.get("chapters", []))
@@ -229,28 +279,30 @@ class IdentifyScenariosNode(BaseNode[IdentifyScenariosPreparedInputs, IdentifySc
         )
         self._logger.debug(log_msg_before)
 
-        shared_context.setdefault("identified_scenarios", [])  # Ensure key exists
+        shared_context.setdefault("identified_scenarios", [])
         if not prepared_inputs.get("skip", True):
-            shared_context["identified_scenarios"] = execution_outputs
-            self._log_info("Stored %d identified scenarios in shared context.", len(execution_outputs))
+            # Ensure execution_outputs is a list, even if empty from fallback
+            scenarios_to_store = execution_outputs if isinstance(execution_outputs, list) else []
+            shared_context["identified_scenarios"] = scenarios_to_store
+            self._log_info("Stored %d identified scenarios in shared context.", len(scenarios_to_store))
         else:
             reason = str(prepared_inputs.get("reason", "N/A"))
             log_msg = (
                 f"Scenario identification was skipped in pre_execution (Reason: {reason}). "
-                "'identified_scenarios' remains default or unchanged."
+                "'identified_scenarios' remains default or unchanged (currently: "
+                f"{len(shared_context.get('identified_scenarios', []))})."
             )
             self._log_info(log_msg)
 
         scenarios_len_after = len(shared_context.get("identified_scenarios", []))
         self._logger.debug("Shared context AFTER update (identified_scenarios count: %d)", scenarios_len_after)
-        # Log other key states again if useful for tracing issues
         self._logger.debug(
             "Shared context AFTER update (abstractions: %d, chapter_order: %d, chapters: %d)",
-            len(shared_context.get("abstractions", [])),  # Re-fetch in case they changed (unlikely here)
+            len(shared_context.get("abstractions", [])),
             len(shared_context.get("chapter_order", [])),
             len(shared_context.get("chapters", [])),
         )
         self._logger.debug("--- End IdentifyScenariosNode.post_execution ---")
 
 
-# End of src/sourcelens/nodes/n05_identify_scenarios.py
+# End of src/sourcelens/nodes/code/n05_identify_scenarios.py

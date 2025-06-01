@@ -19,6 +19,7 @@
 from .._common import SequenceDiagramContext
 
 
+# https://mermaid.js.org/syntax/sequenceDiagram.html
 def format_sequence_diagram_prompt(context: SequenceDiagramContext) -> str:
     """Format a prompt for the LLM to generate a robust, error-free Mermaid sequence diagram.
 
@@ -30,75 +31,161 @@ def format_sequence_diagram_prompt(context: SequenceDiagramContext) -> str:
         A formatted multi-line string constituting the complete prompt.
         Returns an error message if the diagram format is not "mermaid".
     """
-    if context.diagram_format != "mermaid":
-        return "Diagram format for sequence diagrams must be 'mermaid'."
+    if context.diagram_format.lower() != "mermaid":
+        return "Error: Diagram format must be 'mermaid'."
 
+    # Enhanced Core Instructions with clearer activation rules
     instructions: str = (
-        "**Instructions for Generating Mermaid Sequence Diagram (`sequenceDiagram`):**\n"
-        "1. **Start Diagram Correctly:**\n"
-        "   - Begin exactly with `sequenceDiagram`. NO extra text or `mermaid` fences before it.\n"
-        "2. **Participant Declaration:**\n"
-        "   - Use `participant Name` format.\n"
-        '   - If using spaces, enclose names in **double quotes** (`participant "Main Application"`).\n'
-        '   - Prefer aliases for clarity: `participant MainApp as "Main Application"`.\n'
-        "3. **Message Formatting:**\n"
-        "   - Use `Sender->>Receiver: Message Text` for synchronous calls.\n"
-        "   - Use `Sender->Receiver: Message Text` for asynchronous calls.\n"
-        "   - Use `Receiver-->>Sender: Return Value` for responses.\n"
-        "4. **Activation & Deactivation Rules (`activate` / `deactivate`):**\n"
-        "   - A participant **must always be activated before deactivation**.\n"
-        "   - Ensure a **balanced number** of activations & deactivations.\n"
-        "   - **In conditional blocks (`alt`, `opt`, etc.):**\n"
-        "     - Activate within a branch if a participant is used **only** in that branch.\n"
-        "     - Deactivate **inside** the branch before it ends.\n"
-        "     - If the participant spans multiple branches, deactivate **after** `end`.\n"
-        "5. **Control Flow (`alt`, `opt`, `loop`, `par`):**\n"
-        "   - Always close with `end`. Ensure the first line after `alt`, `else`, `opt`, `loop`, or `par` is valid.\n"
-        "6. **Notes (`note`):**\n"
-        "   - Use `note right of Participant: Note text` or `note over P1,P2: Note text`.\n"
-        "7. **Output Cleanliness:**\n"
-        "   - **No unsupported elements (`try`, `catch`, `finally`).**\n"
-        "   - **No extra comments (`//` or `#`).** Use `%% Mermaid comment` if necessary.\n"
+        "**STRICT Rules for Error-Free Mermaid Sequence Diagram:**\n\n"
+        "**1. DIAGRAM START:**\n"
+        "   - First line MUST be exactly `sequenceDiagram`\n"
+        "   - No extra text, comments, or formatting before this line\n\n"
+        "**2. PARTICIPANTS:**\n"
+        "   - Use simple names: `participant User`, `participant API`\n"
+        "   - Avoid quotes, spaces, or special characters in names\n"
+        "   - Declare all participants at the start (optional but recommended)\n\n"
+        "**3. MESSAGE SYNTAX:**\n"
+        "   - Synchronous call: `A->>B: Message`\n"
+        "   - Response/return: `B-->>A: Response`\n"
+        "   - Async call: `A-)B: Async message`\n"
+        "   - Self-call: `A->>A: Internal process`\n\n"
+        "**4. ACTIVATION RULES (CRITICAL - READ CAREFULLY):**\n"
+        "   - Rule #1: A participant can ONLY be activated if it's currently INACTIVE\n"
+        "   - Rule #2: A participant can ONLY be deactivated if it's currently ACTIVE\n"
+        "   - Rule #3: Each activate MUST have exactly ONE matching deactivate\n"
+        "   - Rule #4: Track state mentally: INACTIVE → activate → ACTIVE → deactivate → INACTIVE\n\n"
+        "**5. ALT/ELSE BLOCK RULES (MOST COMMON ERROR SOURCE):**\n"
+        "   - SAFE APPROACH: Avoid activate/deactivate inside alt/else blocks entirely\n"
+        "   - IF you must activate inside alt/else:\n"
+        "     * Activate in ONE branch only\n"
+        "     * Deactivate in the SAME branch\n"
+        "     * NEVER deactivate the same participant in multiple branches\n"
+        "   - PREFERRED: Do all activation/deactivation outside alt/else blocks\n\n"
+        "**6. OTHER CONTROL STRUCTURES:**\n"
+        "   - Same rules apply for `loop`, `par`, `opt`, `critical` blocks\n"
+        "   - Always close blocks with `end`\n"
+        "   - Keep activation logic simple within these blocks\n\n"
+        "**7. VALIDATION CHECKLIST:**\n"
+        "   - Count activates vs deactivates for each participant (must be equal)\n"
+        "   - Ensure no participant is activated twice without deactivation\n"
+        "   - Ensure no participant is deactivated when already inactive\n"
+        "   - Check that all control blocks end with `end`"
     )
 
+    # Improved examples with different patterns
     example_output: str = (
-        "**Example (Error-free `alt/else` block with proper activation/deactivation):**\n"
+        "**EXAMPLE 1 - SAFE PATTERN (No activation in alt blocks):**\n"
+        "```\n"
         "sequenceDiagram\n"
-        '    participant App as "Main Application"\n'
-        '    participant Config as "Configuration Manager"\n'
-        '    participant Logger as "Logger"\n\n'
-        "    App->>Config: Load pipeline configuration\n"
-        "    activate Config\n\n"
-        "    alt Configuration file invalid\n"
-        "        Config-->>App: Error\n"
-        "        deactivate Config\n"
-        "        App->>Logger: Log error\n"
-        "        activate Logger\n"
-        "        Logger-->>App: Error logged\n"
-        "        deactivate Logger\n"
-        "    else Configuration file valid\n"
-        "        Config-->>App: Configuration data\n"
+        "    participant User\n"
+        "    participant API\n"
+        "    participant Database\n"
+        "    participant Logger\n"
+        "\n"
+        "    User->>API: Send request\n"
+        "    activate API\n"
+        "    \n"
+        "    API->>Database: Query data\n"
+        "    activate Database\n"
+        "    \n"
+        "    alt Success case\n"
+        "        Database-->>API: Return data\n"
+        "        API-->>User: Success response\n"
+        "    else Error case\n"
+        "        Database-->>API: Error\n"
+        "        API->>Logger: Log error\n"
+        "        Logger-->>API: Logged\n"
+        "        API-->>User: Error response\n"
         "    end\n"
-        "    deactivate Config\n"
+        "    \n"
+        "    deactivate Database\n"
+        "    deactivate API\n"
+        "```\n\n"
+        "**EXAMPLE 2 - ADVANCED PATTERN (Careful activation in branches):**\n"
+        "```\n"
+        "sequenceDiagram\n"
+        "    participant User\n"
+        "    participant API\n"
+        "    participant Cache\n"
+        "    participant Database\n"
+        "\n"
+        "    User->>API: Request data\n"
+        "    activate API\n"
+        "    \n"
+        "    API->>Cache: Check cache\n"
+        "    \n"
+        "    alt Cache hit\n"
+        "        Cache-->>API: Cached data\n"
+        "        API-->>User: Return cached data\n"
+        "    else Cache miss\n"
+        "        Cache-->>API: No data\n"
+        "        API->>Database: Query database\n"
+        "        activate Database\n"
+        "        Database-->>API: Fresh data\n"
+        "        deactivate Database\n"
+        "        API-->>User: Return fresh data\n"
+        "    end\n"
+        "    \n"
+        "    deactivate API\n"
+        "```\n\n"
+        "**EXAMPLE 3 - LOOP PATTERN:**\n"
+        "```\n"
+        "sequenceDiagram\n"
+        "    participant Client\n"
+        "    participant Server\n"
+        "    participant Database\n"
+        "\n"
+        "    Client->>Server: Start batch process\n"
+        "    activate Server\n"
+        "    \n"
+        "    loop Process each item\n"
+        "        Server->>Database: Process item\n"
+        "        Database-->>Server: Item processed\n"
+        "    end\n"
+        "    \n"
+        "    Server-->>Client: Batch complete\n"
+        "    deactivate Server\n"
+        "```"
     )
 
+    # Enhanced critical reminders with common pitfalls
     critical_reminder: str = (
-        "\n**CRITICAL REMINDER:**\n"
-        "- Follow **strict activation/deactivation rules**. Never deactivate an inactive participant.\n"
-        "- Participants **only involved in one branch** of an `alt` block should be activated and deactivated **inside** that branch.\n"
-        "- If a participant’s role spans multiple branches, deactivate it **after** the `end` statement.\n"
+        "\n**🚨 CRITICAL ERROR PREVENTION:**\n\n"
+        "**COMMON MISTAKES TO AVOID:**\n"
+        "1. ❌ Activating already active participant\n"
+        "2. ❌ Deactivating already inactive participant\n"
+        "3. ❌ Deactivating same participant in multiple alt/else branches\n"
+        "4. ❌ Forgetting to close control blocks with `end`\n"
+        "5. ❌ Mismatched activate/deactivate pairs\n\n"
+        "**GOLDEN RULES:**\n"
+        "✅ When in doubt, avoid activation inside alt/else/loop blocks\n"
+        "✅ Use the 'SAFE PATTERN' from Example 1 above\n"
+        "✅ Always do: INACTIVE → activate → ACTIVE → deactivate → INACTIVE\n"
+        "✅ Count your activates and deactivates - they must match!\n"
+        "✅ Test mentally: 'Is this participant currently active or inactive?'\n\n"
+        "**RESPONSE FORMAT:**\n"
+        "- Start IMMEDIATELY with `sequenceDiagram`\n"
+        "- No markdown code blocks, no explanatory text\n"
+        "- Just the pure Mermaid diagram code"
     )
 
+    # Enhanced prompt composition
     prompt_lines: list[str] = [
-        f"Generate a **Mermaid `sequenceDiagram`** for project '{context.project_name}' "
-        f"illustrating the scenario: **'{context.scenario_name}'**.",
-        f"\n**Scenario Description:**\n{context.scenario_description}",
-        "\n**Task:** Construct the sequence diagram **strictly following the scenario** while ensuring correctness.",
-        f"\n{instructions}\n\n{example_output}",
-        critical_reminder,
+        "🎯 **TASK:** Generate a bulletproof Mermaid sequence diagram for:",
+        f"   • Project: '{context.project_name}'",
+        f"   • Scenario: '{context.scenario_name}'",
+        f"\n📋 **SCENARIO DETAILS:**\n{context.scenario_description}",
+        f"\n{instructions}",
+        f"\n{example_output}",
+        f"{critical_reminder}",
+        "\n" + "=" * 80,
+        "🚀 **GENERATE THE DIAGRAM NOW:**",
+        "Your response must contain ONLY the Mermaid diagram code, starting with `sequenceDiagram`.",
+        "Follow the SAFE PATTERN from Example 1 to avoid activation errors.",
+        "=" * 80,
     ]
 
     return "\n".join(prompt_lines)
 
 
-# End of src/sourcelens/prompts/diagrams/sequence_diagram_prompts.py
+# End of src/sourcelens/prompts/code/diagrams/sequence_diagram_prompts.py

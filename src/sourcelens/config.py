@@ -15,12 +15,10 @@
 
 """Load, validate, and process configuration for the SourceLens application.
 
-This module handles reading settings from a JSON file, validating the structure
-against a defined JSON schema, resolving secrets from environment variables,
-selecting active LLM and language profiles, applying default values, and ensuring
-necessary directories (cache, logs) exist. It provides a single, validated
-configuration dictionary for the application. Includes detailed schema definitions
-for all configurable sections.
+This module handles reading settings from a JSON file, validating against a schema,
+resolving secrets from environment variables, and processing active profiles
+for code and web analysis modes. It provides a structured configuration object
+for the application.
 """
 
 import copy
@@ -49,209 +47,319 @@ if TYPE_CHECKING:
 
 # --- Type Aliases ---
 ConfigDict: TypeAlias = dict[str, Any]
-ProviderConfigDict: TypeAlias = dict[str, Any]
+LlmProfileDict: TypeAlias = dict[str, Any]
 LanguageProfileDict: TypeAlias = dict[str, Any]
+CommonOutputSettingsDict: TypeAlias = dict[str, Any]
+LoggingConfigDict: TypeAlias = dict[str, Any]
+CacheSettingsDict: TypeAlias = dict[str, Any]
+LlmDefaultOptionsDict: TypeAlias = dict[str, Any]
+SourceOptionsDict: TypeAlias = dict[str, Any]
+CodeDiagramGenerationDict: TypeAlias = dict[str, Any]
+CodeOutputOptionsDict: TypeAlias = dict[str, Any]
+WebCrawlerOptionsDict: TypeAlias = dict[str, Any]
+WebOutputOptionsDict: TypeAlias = dict[str, Any]
+ResolvedCodeAnalysisConfig: TypeAlias = dict[str, Any]
+ResolvedWebAnalysisConfig: TypeAlias = dict[str, Any]
+
 
 # --- Constants ---
-DEFAULT_CACHE_FILE: Final[str] = ".cache/llm_cache.json"
+DEFAULT_OUTPUT_NAME_FALLBACK: Final[str] = "sourcelens_output"
+AUTO_DETECT_OUTPUT_NAME: Final[str] = "auto-generated"
+DEFAULT_MAIN_OUTPUT_DIR: Final[str] = "output"
+DEFAULT_GENERATED_TEXT_LANGUAGE: Final[str] = "english"
 DEFAULT_LOG_DIR: Final[str] = "logs"
-DEFAULT_OUTPUT_DIR: Final[str] = "output"
-DEFAULT_LANGUAGE: Final[str] = "english"
-DEFAULT_MAX_FILE_SIZE: Final[int] = 150000
-DEFAULT_LLM_RETRIES: Final[int] = 3
-DEFAULT_LLM_WAIT: Final[int] = 10
-DEFAULT_SOURCE_INDEX_PARSER: Final[str] = "none"
-DEFAULT_USER_AGENT: Final[str] = "SourceLensBot/0.1 (https://github.com/darijo2yahoocom/sourceLensAI)"
+DEFAULT_LOG_LEVEL: Final[str] = "INFO"
+DEFAULT_USE_LLM_CACHE: Final[bool] = True
+DEFAULT_LLM_CACHE_FILE: Final[str] = ".cache/llm_cache.json"
+DEFAULT_LLM_MAX_RETRIES: Final[int] = 3
+DEFAULT_LLM_RETRY_WAIT_SECONDS: Final[int] = 10
+
+DEFAULT_CODE_ANALYSIS_ENABLED: Final[bool] = True
+DEFAULT_GITHUB_TOKEN_ENV_VAR: Final[str] = "GITHUB_TOKEN"
+DEFAULT_CODE_MAX_FILE_SIZE_BYTES: Final[int] = 150000
+DEFAULT_CODE_USE_RELATIVE_PATHS: Final[bool] = True
+DEFAULT_CODE_DIAGRAMS_ENABLED: Final[bool] = True
+DEFAULT_CODE_DIAGRAM_FORMAT: Final[str] = "mermaid"
+DEFAULT_CODE_INCLUDE_FILE_STRUCTURE_DIAGRAM: Final[bool] = True
+DEFAULT_CODE_SEQ_DIAGRAMS_ENABLED: Final[bool] = True
+DEFAULT_CODE_SEQ_DIAGRAMS_MAX: Final[int] = 5
+DEFAULT_CODE_INCLUDE_SOURCE_INDEX: Final[bool] = True
+DEFAULT_CODE_INCLUDE_PROJECT_REVIEW: Final[bool] = True
+
+DEFAULT_WEB_ANALYSIS_ENABLED: Final[bool] = True
+DEFAULT_WEB_OUTPUT_SUBDIR_NAME: Final[str] = "crawled_web_content"
 DEFAULT_WEB_PROCESSING_MODE: Final[str] = "minimalistic"
+DEFAULT_WEB_MAX_DEPTH_RECURSIVE: Final[int] = 2
+DEFAULT_WEB_USER_AGENT: Final[str] = "SourceLensBot/0.1 (https://github.com/darijo2yahoocom/sourceLensAI)"
+DEFAULT_WEB_RESPECT_ROBOTS: Final[bool] = True
+DEFAULT_WEB_MAX_CONCURRENT_REQUESTS: Final[int] = 3
+DEFAULT_WEB_PAGE_TIMEOUT_MS: Final[int] = 30000
+DEFAULT_WEB_WORD_COUNT_THRESHOLD_MARKDOWN: Final[int] = 50
+DEFAULT_WEB_INCLUDE_CONTENT_INVENTORY: Final[bool] = True
+DEFAULT_WEB_INCLUDE_CONTENT_REVIEW: Final[bool] = True
 
+DEFAULT_LANGUAGE_PARSER_TYPE: Final[str] = "llm"
 
-ENV_VAR_GOOGLE_PROJECT: Final[str] = "GOOGLE_CLOUD_PROJECT"
-ENV_VAR_GOOGLE_REGION: Final[str] = "GOOGLE_CLOUD_REGION"
-ENV_VAR_GITHUB_TOKEN: Final[str] = "GITHUB_TOKEN"
 ENV_VAR_GEMINI_KEY: Final[str] = "GEMINI_API_KEY"
-ENV_VAR_VERTEX_CREDS: Final[str] = "GOOGLE_APPLICATION_CREDENTIALS"
 ENV_VAR_ANTHROPIC_KEY: Final[str] = "ANTHROPIC_API_KEY"
 ENV_VAR_OPENAI_KEY: Final[str] = "OPENAI_API_KEY"
 ENV_VAR_PERPLEXITY_KEY: Final[str] = "PERPLEXITY_API_KEY"
+ENV_VAR_VERTEX_CREDS: Final[str] = "GOOGLE_APPLICATION_CREDENTIALS"
+ENV_VAR_GOOGLE_PROJECT: Final[str] = "GOOGLE_CLOUD_PROJECT"
+ENV_VAR_GOOGLE_REGION: Final[str] = "GOOGLE_CLOUD_REGION"
+
 
 # --- JSON Schema Definitions ---
-LLM_PROVIDER_SCHEMA: ConfigDict = {
+
+COMMON_OUTPUT_SETTINGS_SCHEMA: ConfigDict = {
     "type": "object",
     "properties": {
-        "is_active": {"type": "boolean"},
-        "is_local_llm": {"type": "boolean"},
-        "provider": {"type": "string"},
-        "model": {"type": "string"},
-        "api_key": {"type": ["string", "null"]},
-        "api_base_url": {"type": ["string", "null"]},
-        "vertex_project": {"type": ["string", "null"]},
-        "vertex_location": {"type": ["string", "null"]},
-    },
-    "required": ["is_active", "is_local_llm", "provider", "model"],
-    "additionalProperties": False,
-}
-LANGUAGE_PROFILE_SCHEMA: ConfigDict = {
-    "type": "object",
-    "properties": {
-        "is_active": {"type": "boolean"},
-        "language": {"type": "string"},
-        "default_include_patterns": {"type": "array", "items": {"type": "string"}, "default": []},
-        "max_file_size_bytes": {"type": ["integer", "null"], "minimum": 0, "default": None},
-        "use_relative_paths": {"type": ["boolean", "null"], "default": None},
-        "source_index_parser": {
-            "type": "string",
-            "enum": ["ast", "llm", "none"],
-            "default": DEFAULT_SOURCE_INDEX_PARSER,
-            "description": ("Parser for detailed source index: 'ast' (Python only), 'llm', or 'none'."),
-        },
-    },
-    "required": ["is_active", "language", "source_index_parser"],
-    "additionalProperties": False,
-}
-SEQUENCE_DIAGRAM_SCHEMA: ConfigDict = {
-    "type": "object",
-    "properties": {
-        "enabled": {"type": "boolean", "default": False},
-        "max_diagrams": {"type": "integer", "minimum": 1, "default": 5},
-    },
-    "additionalProperties": False,
-    "default": {"enabled": False, "max_diagrams": 5},
-}
-DIAGRAM_GENERATION_SCHEMA: ConfigDict = {
-    "type": "object",
-    "properties": {
-        "format": {"type": "string", "enum": ["mermaid"], "default": "mermaid"},
-        "include_relationship_flowchart": {"type": "boolean", "default": True},
-        "include_class_diagram": {"type": "boolean", "default": False},
-        "include_package_diagram": {"type": "boolean", "default": False},
-        "include_sequence_diagrams": SEQUENCE_DIAGRAM_SCHEMA,
+        "default_output_name": {"type": ["string", "null"], "default": AUTO_DETECT_OUTPUT_NAME},
+        "main_output_directory": {"type": "string", "default": DEFAULT_MAIN_OUTPUT_DIR},
+        "generated_text_language": {"type": "string", "default": DEFAULT_GENERATED_TEXT_LANGUAGE},
     },
     "additionalProperties": False,
     "default": {
-        "format": "mermaid",
-        "include_relationship_flowchart": True,
-        "include_class_diagram": False,
-        "include_package_diagram": False,
-        "include_sequence_diagrams": SEQUENCE_DIAGRAM_SCHEMA["default"],
-    },
-}
-OUTPUT_SCHEMA: ConfigDict = {
-    "type": "object",
-    "properties": {
-        "base_dir": {"type": "string", "default": DEFAULT_OUTPUT_DIR},
-        "language": {"type": "string", "default": DEFAULT_LANGUAGE},
-        "diagram_generation": DIAGRAM_GENERATION_SCHEMA,
-        "include_source_index": {
-            "type": "boolean",
-            "default": False,
-            "description": "Globally controls if the source index (code_inventory.md) should be generated.",
-        },
-        "include_project_review": {
-            "type": "boolean",
-            "default": False,
-            "description": "Globally controls if the AI-generated project review chapter should be generated.",
-        },
-    },
-    "additionalProperties": False,
-    "default": {
-        "base_dir": DEFAULT_OUTPUT_DIR,
-        "language": DEFAULT_LANGUAGE,
-        "diagram_generation": DIAGRAM_GENERATION_SCHEMA["default"],
-        "include_source_index": False,
-        "include_project_review": False,
+        "default_output_name": AUTO_DETECT_OUTPUT_NAME,
+        "main_output_directory": DEFAULT_MAIN_OUTPUT_DIR,
+        "generated_text_language": DEFAULT_GENERATED_TEXT_LANGUAGE,
     },
 }
 
-WEB_CRAWLER_OPTIONS_SCHEMA: ConfigDict = {
+LOGGING_SCHEMA: ConfigDict = {
     "type": "object",
     "properties": {
-        "default_output_subdir_name": {"type": "string", "default": "crawled_web_content"},
-        "max_depth_recursive": {"type": "integer", "minimum": 0, "default": 2},
-        "user_agent": {"type": "string", "default": DEFAULT_USER_AGENT},
-        "respect_robots_txt": {"type": "boolean", "default": True},
-        "max_concurrent_requests": {"type": "integer", "minimum": 1, "default": 3},
+        "log_dir": {"type": "string", "default": DEFAULT_LOG_DIR},
+        "log_level": {
+            "type": "string",
+            "enum": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+            "default": DEFAULT_LOG_LEVEL,
+        },
+    },
+    "additionalProperties": False,
+    "default": {"log_dir": DEFAULT_LOG_DIR, "log_level": DEFAULT_LOG_LEVEL},
+}
+
+CACHE_SETTINGS_SCHEMA: ConfigDict = {
+    "type": "object",
+    "properties": {
+        "use_llm_cache": {"type": "boolean", "default": DEFAULT_USE_LLM_CACHE},
+        "llm_cache_file": {"type": "string", "default": DEFAULT_LLM_CACHE_FILE},
+    },
+    "additionalProperties": False,
+    "default": {"use_llm_cache": DEFAULT_USE_LLM_CACHE, "llm_cache_file": DEFAULT_LLM_CACHE_FILE},
+}
+
+LLM_DEFAULT_OPTIONS_SCHEMA: ConfigDict = {
+    "type": "object",
+    "properties": {
+        "max_retries": {"type": "integer", "minimum": 0, "default": DEFAULT_LLM_MAX_RETRIES},
+        "retry_wait_seconds": {"type": "integer", "minimum": 0, "default": DEFAULT_LLM_RETRY_WAIT_SECONDS},
+    },
+    "additionalProperties": False,
+    "default": {"max_retries": DEFAULT_LLM_MAX_RETRIES, "retry_wait_seconds": DEFAULT_LLM_RETRY_WAIT_SECONDS},
+}
+
+COMMON_SCHEMA: ConfigDict = {
+    "type": "object",
+    "properties": {
+        "common_output_settings": COMMON_OUTPUT_SETTINGS_SCHEMA,
+        "logging": LOGGING_SCHEMA,
+        "cache_settings": CACHE_SETTINGS_SCHEMA,
+        "llm_default_options": LLM_DEFAULT_OPTIONS_SCHEMA,
+    },
+    "required": ["common_output_settings", "logging", "cache_settings", "llm_default_options"],
+    "additionalProperties": False,
+}
+
+CODE_ANALYSIS_SOURCE_OPTIONS_SCHEMA: ConfigDict = {
+    "type": "object",
+    "properties": {
+        "max_file_size_bytes": {"type": "integer", "minimum": 0, "default": DEFAULT_CODE_MAX_FILE_SIZE_BYTES},
+        "use_relative_paths": {"type": "boolean", "default": DEFAULT_CODE_USE_RELATIVE_PATHS},
+        "default_exclude_patterns": {"type": "array", "items": {"type": "string"}, "default": []},
+    },
+    "additionalProperties": False,
+    "default": {
+        "max_file_size_bytes": DEFAULT_CODE_MAX_FILE_SIZE_BYTES,
+        "use_relative_paths": DEFAULT_CODE_USE_RELATIVE_PATHS,
+        "default_exclude_patterns": [],
+    },
+}
+
+CODE_ANALYSIS_DIAGRAM_GENERATION_SEQUENCE_SCHEMA: ConfigDict = {
+    "type": "object",
+    "properties": {
+        "enabled": {"type": "boolean", "default": DEFAULT_CODE_SEQ_DIAGRAMS_ENABLED},
+        "max_diagrams_to_generate": {"type": "integer", "minimum": 0, "default": DEFAULT_CODE_SEQ_DIAGRAMS_MAX},
+    },
+    "additionalProperties": False,
+    "default": {
+        "enabled": DEFAULT_CODE_SEQ_DIAGRAMS_ENABLED,
+        "max_diagrams_to_generate": DEFAULT_CODE_SEQ_DIAGRAMS_MAX,
+    },
+}
+
+CODE_ANALYSIS_DIAGRAM_GENERATION_SCHEMA: ConfigDict = {
+    "type": "object",
+    "properties": {
+        "enabled": {"type": "boolean", "default": DEFAULT_CODE_DIAGRAMS_ENABLED},
+        "format": {"type": "string", "enum": ["mermaid"], "default": DEFAULT_CODE_DIAGRAM_FORMAT},
+        "include_relationship_flowchart": {"type": "boolean", "default": True},
+        "include_class_diagram": {"type": "boolean", "default": True},
+        "include_package_diagram": {"type": "boolean", "default": True},
+        "include_file_structure_diagram": {"type": "boolean", "default": DEFAULT_CODE_INCLUDE_FILE_STRUCTURE_DIAGRAM},
+        "sequence_diagrams": CODE_ANALYSIS_DIAGRAM_GENERATION_SEQUENCE_SCHEMA,
+    },
+    "additionalProperties": False,
+    "default": {
+        "enabled": DEFAULT_CODE_DIAGRAMS_ENABLED,
+        "format": DEFAULT_CODE_DIAGRAM_FORMAT,
+        "include_relationship_flowchart": True,
+        "include_class_diagram": True,
+        "include_package_diagram": True,
+        "include_file_structure_diagram": DEFAULT_CODE_INCLUDE_FILE_STRUCTURE_DIAGRAM,
+        "sequence_diagrams": CODE_ANALYSIS_DIAGRAM_GENERATION_SEQUENCE_SCHEMA["default"],
+    },
+}
+
+CODE_ANALYSIS_OUTPUT_OPTIONS_SCHEMA: ConfigDict = {
+    "type": "object",
+    "properties": {
+        "include_source_index": {"type": "boolean", "default": DEFAULT_CODE_INCLUDE_SOURCE_INDEX},
+        "include_project_review": {"type": "boolean", "default": DEFAULT_CODE_INCLUDE_PROJECT_REVIEW},
+    },
+    "additionalProperties": False,
+    "default": {
+        "include_source_index": DEFAULT_CODE_INCLUDE_SOURCE_INDEX,
+        "include_project_review": DEFAULT_CODE_INCLUDE_PROJECT_REVIEW,
+    },
+}
+
+CODE_ANALYSIS_SCHEMA: ConfigDict = {
+    "type": "object",
+    "properties": {
+        "enabled": {"type": "boolean", "default": DEFAULT_CODE_ANALYSIS_ENABLED},
+        "github_token_env_var": {"type": ["string", "null"], "default": DEFAULT_GITHUB_TOKEN_ENV_VAR},
+        "github_token": {"type": ["string", "null"], "default": None},
+        "active_language_profile_id": {"type": "string"},
+        "source_options": CODE_ANALYSIS_SOURCE_OPTIONS_SCHEMA,
+        "diagram_generation": CODE_ANALYSIS_DIAGRAM_GENERATION_SCHEMA,
+        "output_options": CODE_ANALYSIS_OUTPUT_OPTIONS_SCHEMA,
+        "active_llm_provider_id": {"type": "string"},
+    },
+    "required": ["active_language_profile_id", "active_llm_provider_id"],
+    "additionalProperties": False,
+}
+
+WEB_ANALYSIS_CRAWLER_OPTIONS_SCHEMA: ConfigDict = {
+    "type": "object",
+    "properties": {
+        "default_output_subdir_name": {"type": "string", "default": DEFAULT_WEB_OUTPUT_SUBDIR_NAME},
         "processing_mode": {
             "type": "string",
             "enum": ["minimalistic", "llm_extended"],
             "default": DEFAULT_WEB_PROCESSING_MODE,
-            "description": (
-                "Controls how crawled web content is processed: "
-                "'minimalistic' just saves Markdown files; "
-                "'llm_extended' attempts to process them through the full LLM pipeline."
-            ),
+        },
+        "max_depth_recursive": {"type": "integer", "minimum": 0, "default": DEFAULT_WEB_MAX_DEPTH_RECURSIVE},
+        "user_agent": {"type": "string", "default": DEFAULT_WEB_USER_AGENT},
+        "respect_robots_txt": {"type": "boolean", "default": DEFAULT_WEB_RESPECT_ROBOTS},
+        "max_concurrent_requests": {"type": "integer", "minimum": 1, "default": DEFAULT_WEB_MAX_CONCURRENT_REQUESTS},
+        "default_page_timeout_ms": {"type": "integer", "minimum": 0, "default": DEFAULT_WEB_PAGE_TIMEOUT_MS},
+        "word_count_threshold_for_markdown": {
+            "type": "integer",
+            "minimum": 0,
+            "default": DEFAULT_WEB_WORD_COUNT_THRESHOLD_MARKDOWN,
         },
     },
     "additionalProperties": False,
     "default": {
-        "default_output_subdir_name": "crawled_web_content",
-        "max_depth_recursive": 2,
-        "user_agent": DEFAULT_USER_AGENT,
-        "respect_robots_txt": True,
-        "max_concurrent_requests": 3,
+        "default_output_subdir_name": DEFAULT_WEB_OUTPUT_SUBDIR_NAME,
         "processing_mode": DEFAULT_WEB_PROCESSING_MODE,
+        "max_depth_recursive": DEFAULT_WEB_MAX_DEPTH_RECURSIVE,
+        "user_agent": DEFAULT_WEB_USER_AGENT,
+        "respect_robots_txt": DEFAULT_WEB_RESPECT_ROBOTS,
+        "max_concurrent_requests": DEFAULT_WEB_MAX_CONCURRENT_REQUESTS,
+        "default_page_timeout_ms": DEFAULT_WEB_PAGE_TIMEOUT_MS,
+        "word_count_threshold_for_markdown": DEFAULT_WEB_WORD_COUNT_THRESHOLD_MARKDOWN,
     },
 }
 
-CONFIG_SCHEMA: ConfigDict = {
+WEB_ANALYSIS_OUTPUT_OPTIONS_SCHEMA: ConfigDict = {
     "type": "object",
     "properties": {
-        "project": {
-            "type": "object",
-            "properties": {"default_name": {"type": ["string", "null"], "default": None}},
-            "additionalProperties": False,
-            "default": {"default_name": None},
-        },
-        "source": {
-            "type": "object",
-            "properties": {
-                "default_exclude_patterns": {"type": "array", "items": {"type": "string"}, "default": []},
-                "max_file_size_bytes": {"type": "integer", "minimum": 0, "default": DEFAULT_MAX_FILE_SIZE},
-                "use_relative_paths": {"type": "boolean", "default": True},
-                "language_profiles": {"type": "array", "minItems": 1, "items": LANGUAGE_PROFILE_SCHEMA},
-            },
-            "required": ["language_profiles"],
-            "additionalProperties": False,
-        },
-        "output": OUTPUT_SCHEMA,
-        "logging": {
-            "type": "object",
-            "properties": {
-                "log_dir": {"type": "string", "default": DEFAULT_LOG_DIR},
-                "log_level": {
-                    "type": "string",
-                    "enum": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-                    "default": "INFO",
-                },
-            },
-            "additionalProperties": False,
-            "default": {"log_dir": DEFAULT_LOG_DIR, "log_level": "INFO"},
-        },
-        "cache": {
-            "type": "object",
-            "properties": {"llm_cache_file": {"type": "string", "default": DEFAULT_CACHE_FILE}},
-            "additionalProperties": False,
-            "default": {"llm_cache_file": DEFAULT_CACHE_FILE},
-        },
-        "github": {
-            "type": "object",
-            "properties": {"token": {"type": ["string", "null"], "default": None}},
-            "additionalProperties": False,
-            "default": {"token": None},
-        },
-        "llm": {
-            "type": "object",
-            "properties": {
-                "max_retries": {"type": "integer", "minimum": 0, "default": DEFAULT_LLM_RETRIES},
-                "retry_wait_seconds": {"type": "integer", "minimum": 0, "default": DEFAULT_LLM_WAIT},
-                "use_cache": {"type": "boolean", "default": True},
-                "providers": {"type": "array", "minItems": 1, "items": LLM_PROVIDER_SCHEMA},
-            },
-            "required": ["providers"],
-            "additionalProperties": False,
-        },
-        "web_crawler_options": WEB_CRAWLER_OPTIONS_SCHEMA,
+        "include_content_inventory": {"type": "boolean", "default": DEFAULT_WEB_INCLUDE_CONTENT_INVENTORY},
+        "include_content_review": {"type": "boolean", "default": DEFAULT_WEB_INCLUDE_CONTENT_REVIEW},
     },
-    "required": ["source", "llm"],
+    "additionalProperties": False,
+    "default": {
+        "include_content_inventory": DEFAULT_WEB_INCLUDE_CONTENT_INVENTORY,
+        "include_content_review": DEFAULT_WEB_INCLUDE_CONTENT_REVIEW,
+    },
+}
+
+WEB_ANALYSIS_SCHEMA: ConfigDict = {
+    "type": "object",
+    "properties": {
+        "enabled": {"type": "boolean", "default": DEFAULT_WEB_ANALYSIS_ENABLED},
+        "active_llm_provider_id": {"type": "string"},
+        "crawler_options": WEB_ANALYSIS_CRAWLER_OPTIONS_SCHEMA,
+        "output_options": WEB_ANALYSIS_OUTPUT_OPTIONS_SCHEMA,
+    },
+    "required": ["active_llm_provider_id"],
+    "additionalProperties": False,
+}
+
+LANGUAGE_PROFILE_SCHEMA_ITEM: ConfigDict = {
+    "type": "object",
+    "properties": {
+        "profile_id": {"type": "string"},
+        "language_name_for_llm": {"type": "string"},
+        "parser_type": {"type": "string", "enum": ["ast", "llm", "none"], "default": DEFAULT_LANGUAGE_PARSER_TYPE},
+        "include_patterns": {"type": "array", "items": {"type": "string"}, "default": []},
+    },
+    "required": ["profile_id", "language_name_for_llm", "parser_type"],
+    "additionalProperties": False,
+}
+
+LLM_PROFILE_SCHEMA_ITEM: ConfigDict = {
+    "type": "object",
+    "properties": {
+        "provider_id": {"type": "string"},
+        "is_local_llm": {"type": "boolean"},
+        "provider": {"type": "string"},
+        "model": {"type": "string"},
+        "api_key_env_var": {"type": ["string", "null"], "default": None},
+        "api_key": {"type": ["string", "null"], "default": None},
+        "api_base_url": {"type": ["string", "null"], "default": None},
+        "vertex_project_env_var": {"type": ["string", "null"], "default": None},
+        "vertex_location_env_var": {"type": ["string", "null"], "default": None},
+        "vertex_project": {"type": ["string", "null"], "default": None},
+        "vertex_location": {"type": ["string", "null"], "default": None},
+    },
+    "required": ["provider_id", "is_local_llm", "provider", "model"],
+    "additionalProperties": False,
+}
+
+PROFILES_SCHEMA: ConfigDict = {
+    "type": "object",
+    "properties": {
+        "language_profiles": {"type": "array", "minItems": 1, "items": LANGUAGE_PROFILE_SCHEMA_ITEM},
+        "llm_profiles": {"type": "array", "minItems": 1, "items": LLM_PROFILE_SCHEMA_ITEM},
+    },
+    "required": ["language_profiles", "llm_profiles"],
+    "additionalProperties": False,
+}
+
+ROOT_CONFIG_SCHEMA: ConfigDict = {
+    "type": "object",
+    "properties": {
+        "common": COMMON_SCHEMA,
+        "code_analysis": CODE_ANALYSIS_SCHEMA,
+        "web_analysis": WEB_ANALYSIS_SCHEMA,
+        "profiles": PROFILES_SCHEMA,
+    },
+    "required": ["common", "code_analysis", "web_analysis", "profiles"],
     "additionalProperties": False,
 }
 
@@ -264,7 +372,15 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 
 class ConfigLoader:
-    """Handles loading, validation, and processing of application configuration."""
+    """Handles loading, validation, and processing of application configuration.
+
+    This class is responsible for reading a JSON configuration file,
+    validating its structure against a predefined schema, applying default
+    values, resolving environment variables for sensitive data (like API keys),
+    and selecting active profiles for different analysis modes (code, web).
+    The final output is a processed configuration dictionary that the rest of
+    the application can use.
+    """
 
     _config_data: ConfigDict
     _config_path: Path
@@ -273,22 +389,28 @@ class ConfigLoader:
         """Initialize the ConfigLoader.
 
         Args:
-            config_path_str (str): Path to the JSON configuration file.
+            config_path_str (str): The path to the JSON configuration file.
         """
         self._config_path = Path(config_path_str).resolve()
         self._config_data = {}
 
     def _ensure_jsonschema_available(self) -> None:
-        """Raise ImportError if jsonschema is not available."""
+        """Raise ImportError if jsonschema is not installed or its components are missing.
+
+        Raises:
+            ImportError: If the 'jsonschema' library is not available.
+        """
         if not JSONSCHEMA_AVAILABLE:
             raise ImportError("The 'jsonschema' library is required for config validation. Please install it.")
 
     def _read_config_file(self) -> None:
-        """Read and parse the JSON configuration file into self._config_data.
+        """Read and parse the JSON configuration file into `self._config_data`.
 
         Raises:
-            FileNotFoundError: If the configuration file is not found.
-            ConfigError: If the file cannot be read or contains invalid JSON.
+            FileNotFoundError: If the configuration file specified by `self._config_path`
+                               is not found.
+            ConfigError: If the file cannot be read due to an OS error (e.g., permissions)
+                         or if it contains invalid JSON syntax.
         """
         if not self._config_path.is_file():
             raise FileNotFoundError(f"Configuration file not found: '{self._config_path}'")
@@ -301,11 +423,18 @@ class ConfigLoader:
             raise ConfigError(f"Could not read configuration file '{self._config_path}': {e!s}") from e
 
     def _validate_schema(self) -> None:
-        """Validate the loaded configuration data against the main JSON schema.
+        """Validate the loaded configuration data against the `ROOT_CONFIG_SCHEMA`.
+
+        Uses the `jsonschema` library for validation if available.
 
         Raises:
-            ConfigError: If schema validation fails.
-            RuntimeError: If jsonschema components are unexpectedly unavailable.
+            ConfigError: If schema validation fails, providing details about the
+                         location and nature of the validation error.
+            RuntimeError: If `jsonschema` components (validator function or
+                          `ValidationError` exception) are unexpectedly unavailable
+                          despite an initial successful import check. This indicates
+                          an issue with the `jsonschema` installation or environment.
+            ImportError: If the `jsonschema` library itself is not installed.
         """
         self._ensure_jsonschema_available()
         if (
@@ -314,407 +443,489 @@ class ConfigLoader:
             or not hasattr(jsonschema, "exceptions")
             or not hasattr(jsonschema.exceptions, "ValidationError")  # type: ignore[union-attr]
         ):
+            # This should ideally not be reached if _ensure_jsonschema_available passes.
             raise RuntimeError("jsonschema components not available for validation despite initial check.")
 
         try:
-            # Mypy is appeased by using the direct attribute access after the hasattr checks.
+            # jsonschema.exceptions.ValidationError is the correct type here.
             validation_error_type: type[ValidationError] = jsonschema.exceptions.ValidationError  # type: ignore[union-attr]
-            jsonschema_validate_func(instance=self._config_data, schema=CONFIG_SCHEMA)
+            jsonschema_validate_func(instance=self._config_data, schema=ROOT_CONFIG_SCHEMA)
             logger.debug("Configuration schema validation passed for %s.", self._config_path.name)
-        except validation_error_type as e_val_err:  # type: ignore[misc]
-            # The 'type: ignore[misc]' is for the broad exception type being caught,
-            # which is dynamic based on jsonschema availability.
+        except validation_error_type as e_val_err:  # type: ignore[misc] # For jsonschema.exceptions.ValidationError
             path_str = " -> ".join(map(str, e_val_err.path)) if e_val_err.path else "root"
             err_msg = f"Config error in '{self._config_path.name}' at '{path_str}': {e_val_err.message}"
             logger.debug(
-                "Schema validation failed. Instance: %s. Path: %s. Schema: %s",
+                "Schema validation failed. Instance: %s. Path: %s. Validator: %s. Schema path: %s",
                 e_val_err.instance,
                 path_str,
-                e_val_err.schema,
+                e_val_err.validator,
+                " -> ".join(map(str, e_val_err.schema_path)),
             )
             raise ConfigError(err_msg) from e_val_err
         except Exception as e:  # Catch any other unexpected error during validation
             raise ConfigError(f"Unexpected error during schema validation: {e!s}") from e
 
-    def _resolve_api_key(
-        self, provider_name: Optional[str], current_key: Optional[str]
-    ) -> tuple[Optional[str], Optional[str]]:
-        """Resolve API key from config or environment variables.
-
-        Args:
-            provider_name (Optional[str]): The name of the LLM provider.
-            current_key (Optional[str]): The API key currently set in the configuration.
-
-        Returns:
-            tuple[Optional[str], Optional[str]]: A tuple containing the resolved API key
-                                                 (or None) and the name of the environment
-                                                 variable checked (or None).
-        """
-        if current_key is not None:
-            return current_key, None
-        env_var_map: dict[str, str] = {
-            "gemini": ENV_VAR_GEMINI_KEY,
-            "vertexai": ENV_VAR_VERTEX_CREDS,
-            "anthropic": ENV_VAR_ANTHROPIC_KEY,
-            "openai": ENV_VAR_OPENAI_KEY,
-            "perplexity": ENV_VAR_PERPLEXITY_KEY,
-        }
-        env_key_name = env_var_map.get(str(provider_name)) if provider_name else None
-        if env_key_name and (api_key_from_env := os.environ.get(env_key_name)):
-            logger.info("Loaded LLM API key for provider '%s' from env var '%s'.", provider_name, env_key_name)
-            return api_key_from_env, env_key_name
-        if env_key_name:
-            logger.debug("Environment variable '%s' not set for provider '%s'.", env_key_name, provider_name)
-        return None, env_key_name
-
-    def _validate_local_llm_config(self, provider_cfg: ProviderConfigDict) -> None:
-        """Validate config for local OpenAI-compatible LLMs.
-
-        Args:
-            provider_cfg (ProviderConfigDict): The configuration for the local LLM provider.
-
-        Raises:
-            ConfigError: If 'api_base_url' is missing or invalid.
-        """
-        provider: str = str(provider_cfg.get("provider", "local_llm"))
-        api_base_url: Any = provider_cfg.get("api_base_url")
-        if not api_base_url or not isinstance(api_base_url, str):
-            raise ConfigError(f"For local provider '{provider}': Missing or invalid 'api_base_url'.")
-        if provider_cfg.get("api_key"):
-            logger.info("API key provided for local provider '%s'. Ensure this is supported.", provider)
-
-    def _validate_vertexai_config(self, provider_cfg: ProviderConfigDict, checked_env_var: Optional[str]) -> None:
-        """Validate config for Vertex AI.
-
-        Updates `provider_cfg` with values from environment variables if not set.
-
-        Args:
-            provider_cfg (ProviderConfigDict): The configuration for the Vertex AI provider.
-            checked_env_var (Optional[str]): The environment variable checked for API key/creds.
-
-        Raises:
-            ConfigError: If 'vertex_project' or 'vertex_location' are missing and not
-                         found in environment variables.
-        """
-        provider: str = str(provider_cfg.get("provider", "vertexai"))
-        api_key_or_creds_any: Any = provider_cfg.get("api_key")
-        api_key_or_creds: Optional[str] = str(api_key_or_creds_any) if api_key_or_creds_any else None
-
-        env_var_msg: str = ""
-        if not api_key_or_creds:
-            env_var_msg = f" or environment variable '{checked_env_var}'" if checked_env_var else ""
-            logger.warning("Vertex AI: No API key/creds path in config%s. Using ADC.", env_var_msg)
-
-        if not provider_cfg.get("vertex_project"):
-            if proj_env := os.environ.get(ENV_VAR_GOOGLE_PROJECT):
-                provider_cfg["vertex_project"] = proj_env
-                logger.info("Loaded Vertex AI project '%s' from env var '%s'.", proj_env, ENV_VAR_GOOGLE_PROJECT)
-            else:
-                raise ConfigError(
-                    f"Provider '{provider}': Missing 'vertex_project' and env var '{ENV_VAR_GOOGLE_PROJECT}'."
-                )
-        if not provider_cfg.get("vertex_location"):
-            if loc_env := os.environ.get(ENV_VAR_GOOGLE_REGION):
-                provider_cfg["vertex_location"] = loc_env
-                logger.info("Loaded Vertex AI location '%s' from env var '%s'.", loc_env, ENV_VAR_GOOGLE_REGION)
-            else:
-                raise ConfigError(
-                    f"Provider '{provider}': Missing 'vertex_location' and env var '{ENV_VAR_GOOGLE_REGION}'."
-                )
-
-    def _validate_standard_cloud_config(self, provider_cfg: ProviderConfigDict, checked_env_var: Optional[str]) -> None:
-        """Validate config for standard cloud LLMs needing an API key.
-
-        Args:
-            provider_cfg (ProviderConfigDict): Configuration for the cloud LLM provider.
-            checked_env_var (Optional[str]): The environment variable checked for the API key.
-
-        Raises:
-            ConfigError: If 'api_key' is missing.
-        """
-        provider = str(provider_cfg.get("provider", "Unknown Cloud Provider"))
-        if not provider_cfg.get("api_key"):
-            env_msg = f" and env var '{checked_env_var}' was not set" if checked_env_var else ""
-            raise ConfigError(f"Cloud provider '{provider}': Missing 'api_key' in config{env_msg}.")
-        if api_base_url := provider_cfg.get("api_base_url"):
-            logger.warning(
-                "Cloud provider '%s': 'api_base_url' ('%s') is set but likely unused.", provider, api_base_url
-            )
-
-    def _validate_active_llm_config(self, active_llm_cfg: ProviderConfigDict) -> None:
-        """Validate the chosen active LLM provider's configuration.
-
-        Args:
-            active_llm_cfg (ProviderConfigDict): The configuration for the active LLM.
-
-        Raises:
-            ValueError: If 'provider' key is missing or not a string.
-            ConfigError: For other configuration issues specific to the provider type.
-        """
-        provider_any: Any = active_llm_cfg.get("provider")
-        if not isinstance(provider_any, str):
-            raise ValueError("Active LLM provider config missing 'provider' name or it's not a string.")
-        provider: str = provider_any
-        is_local: bool = bool(active_llm_cfg.get("is_local_llm", False))
-        current_api_key: Optional[str] = str(active_llm_cfg.get("api_key")) if active_llm_cfg.get("api_key") else None
-        checked_env_var: Optional[str] = None
-
-        logger.debug("Validating active LLM provider config: %s", provider)
-        if not is_local:
-            resolved_key, checked_env_var = self._resolve_api_key(provider, current_api_key)
-            active_llm_cfg["api_key"] = resolved_key
-
-        if is_local:
-            self._validate_local_llm_config(active_llm_cfg)
-        elif provider == "vertexai":
-            self._validate_vertexai_config(active_llm_cfg, checked_env_var)
-        else:
-            self._validate_standard_cloud_config(active_llm_cfg, checked_env_var)
-        logger.debug("Active LLM provider config validation successful for: %s", provider)
-
-    def _validate_github_token(self) -> None:
-        """Validate GitHub token presence, updating `self._config_data`."""
-        github_cfg_any: Any = self._config_data.get("github", {})
-        github_cfg: ConfigDict = github_cfg_any if isinstance(github_cfg_any, dict) else {}
-        self._config_data["github"] = github_cfg
-
-        if github_cfg.get("token") is None:
-            logger.debug("GitHub token not in config. Checking env var '%s'.", ENV_VAR_GITHUB_TOKEN)
-            if env_github_token := os.environ.get(ENV_VAR_GITHUB_TOKEN):
-                github_cfg["token"] = env_github_token
-                logger.info("Loaded GitHub token from env var '%s'.", ENV_VAR_GITHUB_TOKEN)
-            else:
-                logger.warning(
-                    "No GitHub token in config or env var '%s'. Private repo access may be affected.",
-                    ENV_VAR_GITHUB_TOKEN,
-                )
-        else:
-            logger.debug("GitHub token found in configuration file.")
-
     def _ensure_directory_exists(self, dir_path_str: Optional[str], dir_purpose: str, default_path: str) -> None:
-        """Ensure a directory exists, creating it if necessary.
+        """Ensure a specified directory exists, creating it if necessary.
+
+        Logs the outcome of the operation. If `dir_path_str` is None or empty,
+        the `default_path` is used.
 
         Args:
-            dir_path_str (Optional[str]): The path string for the directory from config.
-            dir_purpose (str): A description of the directory's purpose (for logging).
-            default_path (str): The default path to use if `dir_path_str` is None or empty.
+            dir_path_str: The path string for the directory from the configuration.
+            dir_purpose: A human-readable description of the directory's purpose (for logging).
+            default_path: The default path string to use if `dir_path_str` is invalid.
         """
         path_to_use_str = dir_path_str if isinstance(dir_path_str, str) and dir_path_str.strip() else default_path
-        if not path_to_use_str:
-            logger.error(
-                "Cannot ensure %s directory: No valid path provided (path was '%s').", dir_purpose, path_to_use_str
-            )
+        if not path_to_use_str:  # Should not happen if default_path is always valid
+            logger.error("Cannot ensure %s directory: No valid path for '%s'.", dir_purpose, dir_path_str)
             return
         try:
             path_to_use = Path(path_to_use_str)
-            target_for_mkdir = path_to_use.parent if dir_purpose == "LLM cache" and path_to_use.suffix else path_to_use
+            # For cache file, ensure its parent directory exists. For log dir, ensure the dir itself.
+            target_for_mkdir = (
+                path_to_use.parent if dir_purpose == "LLM cache file" and path_to_use.suffix else path_to_use
+            )
 
-            if target_for_mkdir != Path():
+            if target_for_mkdir != Path():  # Avoid trying to mkdir on '.' or if path_to_use is empty
                 target_for_mkdir.mkdir(parents=True, exist_ok=True)
                 logger.debug("Ensured %s directory structure exists for: %s", dir_purpose, target_for_mkdir.resolve())
         except OSError as e:
             logger.error(
                 "Could not create/ensure %s directory for '%s': %s", dir_purpose, path_to_use_str, e, exc_info=True
             )
-        except Exception as e_unexp:
+        except Exception as e_unexp:  # Catch any other unexpected error
             logger.error(
                 "Unexpected error ensuring %s dir for '%s': %s", dir_purpose, path_to_use_str, e_unexp, exc_info=True
             )
 
-    def _apply_defaults_and_validate_sections(self) -> None:
-        """Apply default values from schema and run specific validations.
+    def _apply_defaults_and_populate_common(self) -> None:
+        """Apply default values from the schema to the 'common' section and its subsections.
 
-        Ensures top-level sections exist, applies their defaults if defined in schema,
-        and handles directory creation for logging and caching.
+        This method ensures that the 'common' section and its nested dictionaries
+        (like 'common_output_settings', 'logging', 'cache_settings', 'llm_default_options')
+        exist in `self._config_data`. If they or any of their fields are missing,
+        their default values as defined in their respective schemas are applied.
+        It also calls `_ensure_directory_exists` for log and cache paths.
         """
         cfg = self._config_data
+        common_cfg: ConfigDict = cfg.setdefault("common", {})  # Ensures 'common' key exists
+        common_schema_props = COMMON_SCHEMA.get("properties", {})  # Schema for 'common'
 
-        for section_key, section_schema in CONFIG_SCHEMA["properties"].items():
-            if section_key not in cfg and "default" in section_schema:
-                cfg[section_key] = copy.deepcopy(section_schema["default"])
-            elif section_key not in cfg and section_schema.get("type") == "object":
-                cfg[section_key] = {}
+        # Process 'common_output_settings'
+        common_output_cfg: CommonOutputSettingsDict = common_cfg.setdefault("common_output_settings", {})
+        output_defaults = common_schema_props.get("common_output_settings", {}).get("default", {})
+        for key, default_val in output_defaults.items():
+            common_output_cfg.setdefault(key, default_val)
 
-        project_s: ConfigDict = cfg.get("project", {})  # type: ignore[assignment]
-        project_s.setdefault("default_name", CONFIG_SCHEMA["properties"]["project"]["default"]["default_name"])  # type: ignore[index]
+        # Process 'logging'
+        logging_cfg: LoggingConfigDict = common_cfg.setdefault("logging", {})
+        logging_defaults = common_schema_props.get("logging", {}).get("default", {})
+        for key, default_val in logging_defaults.items():
+            logging_cfg.setdefault(key, default_val)
+        self._ensure_directory_exists(logging_cfg.get("log_dir"), "logging directory", DEFAULT_LOG_DIR)
 
-        output_s: ConfigDict = cfg.get("output", {})  # type: ignore[assignment]
-        output_s.setdefault("base_dir", OUTPUT_SCHEMA["default"]["base_dir"])  # type: ignore[index]
-        output_s.setdefault("language", OUTPUT_SCHEMA["default"]["language"])  # type: ignore[index]
-        output_s.setdefault("include_source_index", OUTPUT_SCHEMA["default"]["include_source_index"])  # type: ignore[index]
-        output_s.setdefault("include_project_review", OUTPUT_SCHEMA["default"]["include_project_review"])  # type: ignore[index]
+        # Process 'cache_settings'
+        cache_cfg: CacheSettingsDict = common_cfg.setdefault("cache_settings", {})
+        cache_defaults = common_schema_props.get("cache_settings", {}).get("default", {})
+        for key, default_val in cache_defaults.items():
+            cache_cfg.setdefault(key, default_val)
+        self._ensure_directory_exists(cache_cfg.get("llm_cache_file"), "LLM cache file", DEFAULT_LLM_CACHE_FILE)
 
-        diag_gen_s: ConfigDict = output_s.get("diagram_generation", {})  # type: ignore[assignment]
-        if not isinstance(diag_gen_s, dict) or not diag_gen_s:
-            diag_gen_s = copy.deepcopy(DIAGRAM_GENERATION_SCHEMA["default"])  # type: ignore[index]
-        output_s["diagram_generation"] = diag_gen_s
-        diag_gen_s.setdefault("format", DIAGRAM_GENERATION_SCHEMA["default"]["format"])  # type: ignore[index]
+        # Process 'llm_default_options'
+        llm_opts_cfg: LlmDefaultOptionsDict = common_cfg.setdefault("llm_default_options", {})
+        llm_opts_defaults = common_schema_props.get("llm_default_options", {}).get("default", {})
+        for key, default_val in llm_opts_defaults.items():
+            llm_opts_cfg.setdefault(key, default_val)
 
-        logging_s: ConfigDict = cfg.get("logging", {})  # type: ignore[assignment]
-        logging_s.setdefault("log_dir", CONFIG_SCHEMA["properties"]["logging"]["default"]["log_dir"])  # type: ignore[index]
-        logging_s.setdefault("log_level", CONFIG_SCHEMA["properties"]["logging"]["default"]["log_level"])  # type: ignore[index]
-        self._ensure_directory_exists(str(logging_s.get("log_dir")), "logging", DEFAULT_LOG_DIR)
+    def _apply_defaults_to_analysis_section(self, section_key: str, section_schema: ConfigDict) -> None:
+        """Apply default values from schema to a specific analysis section (code or web).
 
-        cache_s: ConfigDict = cfg.get("cache", {})  # type: ignore[assignment]
-        cache_s.setdefault("llm_cache_file", CONFIG_SCHEMA["properties"]["cache"]["default"]["llm_cache_file"])  # type: ignore[index]
-        self._ensure_directory_exists(str(cache_s.get("llm_cache_file")), "LLM cache", DEFAULT_CACHE_FILE)
+        Ensures the specified analysis section (e.g., 'code_analysis') and its
+        sub-sections (e.g., 'source_options', 'diagram_generation') exist in
+        `self._config_data`. If they or their fields are missing, default values
+        from their respective schemas are applied.
 
-        self._validate_github_token()
-
-        web_crawler_s: ConfigDict = cfg.get("web_crawler_options", {})  # type: ignore[assignment]
-        default_web_opts: dict[str, Any] = WEB_CRAWLER_OPTIONS_SCHEMA.get("default", {})  # type: ignore[assignment]
-        for key, default_val in default_web_opts.items():
-            web_crawler_s.setdefault(key, default_val)
-        cfg["web_crawler_options"] = web_crawler_s
-
-    def _process_llm_config(self) -> None:
-        """Process the LLM section, select active provider, and validate.
-
-        Raises:
-            ConfigError: If LLM configuration is missing, invalid, or no active provider found.
+        Args:
+            section_key: The key of the analysis section in `self._config_data`
+                         (e.g., "code_analysis", "web_analysis").
+            section_schema: The JSON schema definition for this analysis section.
         """
-        llm_section_any: Any = self._config_data.get("llm", {})
-        llm_section: ConfigDict = llm_section_any if isinstance(llm_section_any, dict) else {}
-        if not llm_section:
-            raise ConfigError("Config error: 'llm' section is missing or not a dictionary.")
+        cfg = self._config_data
+        analysis_cfg: ConfigDict = cfg.setdefault(section_key, {})  # Ensures the top-level section key exists
+        analysis_schema_props = section_schema.get("properties", {})
 
-        provider_configs_any: Any = llm_section.get("providers", [])
-        provider_configs: list[Any] = provider_configs_any if isinstance(provider_configs_any, list) else []
-        if not provider_configs:
-            raise ConfigError("Config error: 'llm.providers' must be a non-empty list.")
+        for sub_key, sub_schema_definition in analysis_schema_props.items():
+            # If sub-key is missing and schema has a default for it
+            if sub_key not in analysis_cfg and "default" in sub_schema_definition:
+                analysis_cfg[sub_key] = copy.deepcopy(sub_schema_definition["default"])
+            # If sub-key is missing and it's supposed to be an object, create an empty one
+            elif sub_key not in analysis_cfg and sub_schema_definition.get("type") == "object":
+                analysis_cfg[sub_key] = {}
+            # If sub-key exists and is an object, and schema has defaults for its properties
+            elif isinstance(analysis_cfg.get(sub_key), dict) and "default" in sub_schema_definition:
+                # This handles cases where a sub-object (like 'diagram_generation') itself has a default block
+                # in the schema, and we need to merge these defaults into the existing sub-object.
+                current_sub_object_cfg: ConfigDict = analysis_cfg[sub_key]
+                default_values_for_sub_object: ConfigDict = sub_schema_definition["default"]
+                for def_k, def_v in default_values_for_sub_object.items():
+                    current_sub_object_cfg.setdefault(def_k, def_v)
+            # This also needs to handle nested objects within the sub_key, like sequence_diagrams
+            elif isinstance(analysis_cfg.get(sub_key), dict) and "properties" in sub_schema_definition:
+                # Recursively apply defaults for nested objects if necessary, or handle explicitly
+                nested_obj_cfg: ConfigDict = analysis_cfg[sub_key]
+                nested_obj_schema_props = sub_schema_definition.get("properties", {})
+                for nested_prop_key, nested_prop_schema in nested_obj_schema_props.items():
+                    if nested_prop_key not in nested_obj_cfg and "default" in nested_prop_schema:
+                        nested_obj_cfg[nested_prop_key] = copy.deepcopy(nested_prop_schema["default"])
 
-        active_provider_configs = [
-            p_cfg for p_cfg in provider_configs if isinstance(p_cfg, dict) and p_cfg.get("is_active") is True
-        ]
-        if not active_provider_configs:
-            raise ConfigError("No active LLM provider in 'llm.providers'. Set one 'is_active: true'.")
-        if len(active_provider_configs) > 1:
-            raise ConfigError("Multiple active LLM providers. Set only one 'is_active: true'.")
+    def _resolve_value_from_env(self, env_var_name: Optional[str], value_purpose: str) -> Optional[str]:
+        """Resolve a value from an environment variable.
 
-        active_provider_config: ProviderConfigDict = active_provider_configs[0]
-        if not all(k in active_provider_config for k in ("provider", "model", "is_local_llm")):
-            raise ConfigError(f"Active LLM provider config missing required keys: {active_provider_config}")
+        If `env_var_name` is provided and the corresponding environment variable
+        is set and non-empty, its value is returned. Otherwise, None is returned.
 
-        self._validate_active_llm_config(active_provider_config)
-
-        final_llm_config: ConfigDict = {
-            "max_retries": llm_section.get("max_retries", DEFAULT_LLM_RETRIES),
-            "retry_wait_seconds": llm_section.get("retry_wait_seconds", DEFAULT_LLM_WAIT),
-            "use_cache": llm_section.get("use_cache", True),
-            **active_provider_config,
-        }
-        self._config_data["llm"] = final_llm_config
-
-    def _find_active_language_profile(self) -> LanguageProfileDict:
-        """Find and return the active language profile.
+        Args:
+            env_var_name: The name of the environment variable to look up.
+                          If None or empty, the function returns None.
+            value_purpose: A string describing what this value is for (e.g., "GitHub token"),
+                           used for logging.
 
         Returns:
-            LanguageProfileDict: The active language profile.
+            The string value of the environment variable if found and non-empty,
+            otherwise None.
+        """
+        if env_var_name and isinstance(env_var_name, str) and env_var_name.strip():
+            env_val = os.environ.get(env_var_name.strip())
+            if env_val:  # Check if not None and not empty string
+                logger.info("Loaded %s from environment variable '%s'.", value_purpose, env_var_name)
+                return env_val
+            logger.debug("Environment variable '%s' for %s not set or is empty.", env_var_name, value_purpose)
+        elif env_var_name:  # If env_var_name was provided but was e.g. an empty string after strip
+            logger.debug("Invalid environment variable name provided for %s: '%s'", value_purpose, env_var_name)
+        return None
+
+    def _resolve_github_token(self) -> Optional[str]:
+        """Resolve the GitHub token.
+
+        It first checks for a token directly specified in `code_analysis.github_token`.
+        If not found or is null/empty, it attempts to load it from the environment
+        variable specified in `code_analysis.github_token_env_var`.
+
+        Returns:
+            The resolved GitHub token as a string, or None if not found or configured.
+        """
+        code_analysis_cfg: ConfigDict = self._config_data.get("code_analysis", {})
+        direct_token_val: Any = code_analysis_cfg.get("github_token")
+        direct_token: Optional[str] = str(direct_token_val) if isinstance(direct_token_val, str) else None
+
+        if direct_token and direct_token.strip():
+            logger.info("Using GitHub token directly from 'code_analysis.github_token'.")
+            return direct_token
+
+        env_var_name_val: Any = code_analysis_cfg.get("github_token_env_var")
+        env_var_name: Optional[str] = str(env_var_name_val) if isinstance(env_var_name_val, str) else None
+        return self._resolve_value_from_env(env_var_name, "GitHub token")
+
+    def _resolve_llm_profile_settings(self, llm_profile: LlmProfileDict) -> None:
+        """Resolve API key and Vertex AI settings for a given LLM profile.
+
+        This method modifies the `llm_profile` dictionary in-place.
+        For API keys, it first checks `llm_profile["api_key"]`. If null or empty,
+        it uses `llm_profile["api_key_env_var"]` to get the key from `os.environ`.
+        Similar logic is applied for Vertex AI's `vertex_project` and `vertex_location`.
+
+        Args:
+            llm_profile: The LLM profile dictionary to process.
+                         Expected to be a deep copy if modification is not desired on original.
 
         Raises:
-            ConfigError: If 'source' section or 'language_profiles' are missing/invalid,
-                         or if no active profile is found or multiple are active.
+            ConfigError: If Vertex AI specific settings (project or location) are
+                         required but not found either directly in the profile or
+                         via their specified environment variables.
         """
-        source_section_any: Any = self._config_data.get("source", {})
-        source_section: ConfigDict = source_section_any if isinstance(source_section_any, dict) else {}
-        if not source_section:
-            raise ConfigError("Config error: 'source' section missing or not a dictionary.")
+        provider_id = str(llm_profile.get("provider_id", "unknown_provider"))
 
-        lang_profiles_any: Any = source_section.get("language_profiles", [])
-        lang_profiles: list[Any] = lang_profiles_any if isinstance(lang_profiles_any, list) else []
-        if not lang_profiles:
-            raise ConfigError("Config error: 'source.language_profiles' must be a non-empty list.")
+        # Resolve API Key
+        if not llm_profile.get("api_key"):  # If api_key is not directly set or is null/empty
+            api_key_env_var_val: Any = llm_profile.get("api_key_env_var")
+            api_key_env_var: Optional[str] = str(api_key_env_var_val) if isinstance(api_key_env_var_val, str) else None
+            api_key_from_env = self._resolve_value_from_env(api_key_env_var, f"API key for LLM profile '{provider_id}'")
+            if api_key_from_env:
+                llm_profile["api_key"] = api_key_from_env
+            elif not llm_profile.get("is_local_llm") and llm_profile.get("provider") != "vertexai":
+                logger.warning(
+                    "API key for cloud LLM profile '%s' (provider: %s) not found in config or env var '%s'. "
+                    "Functionality may be limited.",
+                    provider_id,
+                    llm_profile.get("provider"),
+                    api_key_env_var,
+                )
 
-        active_profiles = [p for p in lang_profiles if isinstance(p, dict) and p.get("is_active") is True]
-        if not active_profiles:
-            raise ConfigError("No active language profile in 'source.language_profiles'.")
-        if len(active_profiles) > 1:
-            raise ConfigError("Multiple active language profiles. Set only one 'is_active: true'.")
+        # Resolve Vertex AI specific settings
+        if llm_profile.get("provider") == "vertexai":
+            if not llm_profile.get("vertex_project"):
+                vertex_project_env_var_val: Any = llm_profile.get("vertex_project_env_var")
+                vertex_project_env_var: Optional[str] = (
+                    str(vertex_project_env_var_val) if isinstance(vertex_project_env_var_val, str) else None
+                )
 
-        active_profile: LanguageProfileDict = active_profiles[0]
-        req_keys = ("language", "default_include_patterns", "source_index_parser")
-        if not all(k in active_profile for k in req_keys):
-            missing = [k for k in req_keys if k not in active_profile]
-            raise ConfigError(f"Active language profile missing keys: {', '.join(missing)}. Profile: {active_profile}")
-        return active_profile
+                vertex_project_from_env = self._resolve_value_from_env(
+                    vertex_project_env_var, f"Vertex project for LLM profile '{provider_id}'"
+                )
+                if vertex_project_from_env:
+                    llm_profile["vertex_project"] = vertex_project_from_env
+                else:
+                    msg = (
+                        f"Vertex AI project missing for profile '{provider_id}' (checked direct config "
+                        f"and env var: '{vertex_project_env_var}')."
+                    )
+                    logger.error(msg)
+                    raise ConfigError(msg)
 
-    def _process_source_config(self) -> None:
-        """Process the source section, select active language profile, and apply overrides.
+            if not llm_profile.get("vertex_location"):
+                vertex_location_env_var_val: Any = llm_profile.get("vertex_location_env_var")
+                vertex_location_env_var: Optional[str] = (
+                    str(vertex_location_env_var_val) if isinstance(vertex_location_env_var_val, str) else None
+                )
+                vertex_location_from_env = self._resolve_value_from_env(
+                    vertex_location_env_var, f"Vertex location for LLM profile '{provider_id}'"
+                )
+                if vertex_location_from_env:
+                    llm_profile["vertex_location"] = vertex_location_from_env
+                else:
+                    msg = (
+                        f"Vertex AI location missing for profile '{provider_id}' (checked direct config "
+                        f"and env var: '{vertex_location_env_var}')."
+                    )
+                    logger.error(msg)
+                    raise ConfigError(msg)
+
+    def _get_active_llm_config(self, active_llm_provider_id: str) -> LlmProfileDict:
+        """Retrieve and process the configuration for the specified active LLM provider.
+
+        Finds the LLM profile matching `active_llm_provider_id`, resolves its
+        API key and any provider-specific settings (like Vertex AI project/location)
+        from environment variables if necessary, and then merges these with the
+        common LLM default options (e.g., retries, wait times).
+
+        Args:
+            active_llm_provider_id: The `provider_id` of the LLM profile to activate.
+
+        Returns:
+            A dictionary representing the fully resolved configuration for the
+            active LLM provider.
 
         Raises:
-            ConfigError: If 'source' section is missing or other processing errors occur.
+            ConfigError: If the specified `active_llm_provider_id` is not found
+                         in the `profiles.llm_profiles` list, or if required
+                         settings for that provider (e.g., Vertex AI project)
+                         cannot be resolved.
         """
-        source_section_any: Any = self._config_data.get("source", {})
-        source_section: ConfigDict = source_section_any if isinstance(source_section_any, dict) else {}
-        if not source_section:
-            raise ConfigError("Config error: 'source' section is missing or not a dictionary.")
+        profiles_cfg: ConfigDict = self._config_data.get("profiles", {})
+        llm_profiles_list_val: Any = profiles_cfg.get("llm_profiles", [])
+        llm_profiles: list[LlmProfileDict] = llm_profiles_list_val if isinstance(llm_profiles_list_val, list) else []
 
-        active_profile = self._find_active_language_profile()
+        active_llm_profile_orig: Optional[LlmProfileDict] = next(
+            (p for p in llm_profiles if isinstance(p, dict) and p.get("provider_id") == active_llm_provider_id), None
+        )
+        if not active_llm_profile_orig:
+            msg = f"Active LLM provider_id '{active_llm_provider_id}' not found in profiles.llm_profiles."
+            raise ConfigError(msg)
 
-        final_source_config: ConfigDict = {
-            "default_exclude_patterns": source_section.get("default_exclude_patterns", []),
-            "max_file_size_bytes": source_section.get("max_file_size_bytes", DEFAULT_MAX_FILE_SIZE),
-            "use_relative_paths": source_section.get("use_relative_paths", True),
-        }
-        final_source_config.update(active_profile)
+        # Work on a deep copy to avoid modifying the original _config_data structure during resolution
+        active_llm_profile = copy.deepcopy(active_llm_profile_orig)
+        self._resolve_llm_profile_settings(active_llm_profile)  # Modifies active_llm_profile in-place
 
-        if "max_file_size_bytes" in active_profile:
-            final_source_config["max_file_size_bytes"] = active_profile["max_file_size_bytes"]
-        if "use_relative_paths" in active_profile:
-            final_source_config["use_relative_paths"] = active_profile["use_relative_paths"]
+        common_section: ConfigDict = self._config_data.get("common", {})
+        llm_default_opts_val: Any = common_section.get("llm_default_options", {})
+        common_llm_opts: LlmDefaultOptionsDict = llm_default_opts_val if isinstance(llm_default_opts_val, dict) else {}
 
-        final_source_config.pop("is_active", None)
-        self._config_data["source"] = final_source_config
-        logger.debug("Processed source config using active lang profile: %s", active_profile.get("language"))
+        # Merge common defaults with the specific active profile; profile settings take precedence
+        final_llm_config: LlmProfileDict = {**common_llm_opts, **active_llm_profile}
+        return final_llm_config
+
+    def _process_code_analysis_config(self) -> None:
+        """Process and resolve the 'code_analysis' configuration section.
+
+        If code analysis is enabled, this method resolves the GitHub token,
+        finds the active language profile, merges it with common source options,
+        and determines the active LLM configuration for code analysis.
+        The resolved settings are stored in `self._config_data["code_analysis_resolved"]`.
+        If disabled, a minimal entry indicating this is stored.
+
+        Raises:
+            ConfigError: If required IDs (language profile, LLM provider) are missing
+                         or not found in their respective profile lists.
+        """
+        code_analysis_cfg_orig: ConfigDict = self._config_data.get("code_analysis", {})
+        if not code_analysis_cfg_orig.get("enabled", False):  # Default is from schema if key missing
+            logger.info("Code analysis is disabled in configuration.")
+            self._config_data["code_analysis_resolved"] = {"enabled": False}
+            return
+
+        resolved_github_token = self._resolve_github_token()
+
+        profiles_cfg: ConfigDict = self._config_data.get("profiles", {})
+        lang_profiles_list_val: Any = profiles_cfg.get("language_profiles", [])
+        language_profiles: list[LanguageProfileDict] = (
+            lang_profiles_list_val if isinstance(lang_profiles_list_val, list) else []
+        )
+        active_lang_profile_id_val: Any = code_analysis_cfg_orig.get("active_language_profile_id")
+        active_lang_profile_id: Optional[str] = (
+            str(active_lang_profile_id_val) if isinstance(active_lang_profile_id_val, str) else None
+        )
+
+        if not active_lang_profile_id:
+            raise ConfigError("Missing 'active_language_profile_id' in 'code_analysis' section.")
+
+        active_lang_profile: Optional[LanguageProfileDict] = next(
+            (p for p in language_profiles if isinstance(p, dict) and p.get("profile_id") == active_lang_profile_id),
+            None,
+        )
+        if not active_lang_profile:
+            raise ConfigError(f"Lang profile ID '{active_lang_profile_id}' not found in profiles.language_profiles.")
+
+        source_options_val: Any = code_analysis_cfg_orig.get("source_options", {})
+        source_options_base: SourceOptionsDict = source_options_val if isinstance(source_options_val, dict) else {}
+        # Merge base source_options with active language profile; profile settings take precedence
+        resolved_source_config: ConfigDict = {**source_options_base, **active_lang_profile}
+
+        active_llm_id_code_val: Any = code_analysis_cfg_orig.get("active_llm_provider_id")
+        active_llm_id_code: Optional[str] = (
+            str(active_llm_id_code_val) if isinstance(active_llm_id_code_val, str) else None
+        )
+        if not active_llm_id_code:
+            raise ConfigError("Missing 'active_llm_provider_id' in 'code_analysis' section.")
+        resolved_llm_config_code = self._get_active_llm_config(active_llm_id_code)
+
+        self._config_data["code_analysis_resolved"] = ResolvedCodeAnalysisConfig(
+            enabled=True,
+            github_token=resolved_github_token,
+            source_config=resolved_source_config,
+            diagram_generation=code_analysis_cfg_orig.get("diagram_generation", {}),
+            output_options=code_analysis_cfg_orig.get("output_options", {}),
+            llm_config=resolved_llm_config_code,
+        )
+        logger.debug("Resolved code_analysis config: %s", self._config_data["code_analysis_resolved"])
+
+    def _process_web_analysis_config(self) -> None:
+        """Process and resolve the 'web_analysis' configuration section.
+
+        If web analysis is enabled, this method determines the active LLM
+        configuration for web tasks. The resolved settings are stored in
+        `self._config_data["web_analysis_resolved"]`. If disabled, a minimal
+        entry indicating this is stored.
+
+        Raises:
+            ConfigError: If the required `active_llm_provider_id` is missing
+                         or not found in LLM profiles.
+        """
+        web_analysis_cfg_orig: ConfigDict = self._config_data.get("web_analysis", {})
+        if not web_analysis_cfg_orig.get("enabled", False):  # Default is from schema if key missing
+            logger.info("Web analysis is disabled in configuration.")
+            self._config_data["web_analysis_resolved"] = {"enabled": False}
+            return
+
+        active_llm_id_web_val: Any = web_analysis_cfg_orig.get("active_llm_provider_id")
+        active_llm_id_web: Optional[str] = (
+            str(active_llm_id_web_val) if isinstance(active_llm_id_web_val, str) else None
+        )
+
+        if not active_llm_id_web:
+            raise ConfigError("Missing 'active_llm_provider_id' in 'web_analysis' section.")
+        resolved_llm_config_web = self._get_active_llm_config(active_llm_id_web)
+
+        self._config_data["web_analysis_resolved"] = ResolvedWebAnalysisConfig(
+            enabled=True,
+            crawler_options=web_analysis_cfg_orig.get("crawler_options", {}),
+            output_options=web_analysis_cfg_orig.get("output_options", {}),
+            llm_config=resolved_llm_config_web,
+        )
+        logger.debug("Resolved web_analysis config: %s", self._config_data["web_analysis_resolved"])
 
     def process(self) -> ConfigDict:
-        """Load, validate, and process the configuration.
+        """Load, validate, and process the entire application configuration.
+
+        This is the main public method of the `ConfigLoader`. It orchestrates
+        reading the config file, validating its schema, applying default values
+        to all sections, and then processing the `code_analysis` and `web_analysis`
+        sections to resolve active profiles and environment-dependent settings.
 
         Returns:
-            ConfigDict: The fully processed and validated configuration dictionary.
+            A `ConfigDict` containing the fully processed and resolved configuration.
+            This dictionary has a top-level structure including 'common',
+            'code_analysis' (resolved), 'web_analysis' (resolved), and
+            'profiles_original'.
 
         Raises:
-            ConfigError: If any step of configuration loading or processing fails.
             FileNotFoundError: If the configuration file is not found.
-            ImportError: If jsonschema is required but not installed.
+            ConfigError: If there's an error in JSON syntax, schema validation,
+                         or if required profile IDs are missing/invalid.
+            ImportError: If `jsonschema` is required for validation but not installed.
+            RuntimeError: For unexpected issues with `jsonschema` components.
         """
         logger.info("Loading configuration from: %s", self._config_path)
         self._read_config_file()
         self._validate_schema()
-        self._apply_defaults_and_validate_sections()
-        self._process_llm_config()
-        self._process_source_config()
+
+        self._apply_defaults_and_populate_common()
+        self._apply_defaults_to_analysis_section("code_analysis", CODE_ANALYSIS_SCHEMA)
+        self._apply_defaults_to_analysis_section("web_analysis", WEB_ANALYSIS_SCHEMA)
+
+        self._process_code_analysis_config()
+        self._process_web_analysis_config()
+
+        final_config_to_return: ConfigDict = {
+            "common": self._config_data.get("common", {}),
+            "code_analysis": self._config_data.get("code_analysis_resolved", {"enabled": False}),
+            "web_analysis": self._config_data.get("web_analysis_resolved", {"enabled": False}),
+            "profiles_original": self._config_data.get("profiles", {}),  # For inspection or dynamic use
+        }
 
         logger.info("Configuration loaded and processed successfully.")
         if logger.isEnabledFor(logging.DEBUG):
             try:
-                log_config_copy = json.loads(json.dumps(self._config_data))
-                if "llm" in log_config_copy and isinstance(log_config_copy["llm"], dict):
-                    log_config_copy["llm"]["api_key"] = "***REDACTED***"
-                if "github" in log_config_copy and isinstance(log_config_copy["github"], dict):
-                    log_config_copy["github"]["token"] = "***REDACTED***"
+                log_config_copy = json.loads(json.dumps(final_config_to_return))
+                # Redact sensitive info from resolved sections for logging
+                code_analysis_log = log_config_copy.get("code_analysis", {})
+                if isinstance(code_analysis_log.get("llm_config"), dict):
+                    code_analysis_log["llm_config"]["api_key"] = "***REDACTED***"
+                if "github_token" in code_analysis_log:  # github_token is top-level in resolved
+                    code_analysis_log["github_token"] = "***REDACTED***"
+
+                web_analysis_log = log_config_copy.get("web_analysis", {})
+                if isinstance(web_analysis_log.get("llm_config"), dict):
+                    web_analysis_log["llm_config"]["api_key"] = "***REDACTED***"
+
                 logger.debug("Final processed config data: %s", json.dumps(log_config_copy, indent=2))
             except (TypeError, ValueError) as dump_error:
                 logger.debug("Could not serialize final config for debug logging: %s", dump_error)
-        return self._config_data
+
+        return final_config_to_return
 
 
 def load_config(config_path_str: str = "config.json") -> ConfigDict:
     """Load, validate, process, and return the application configuration.
 
-    This function instantiates and uses `ConfigLoader` to perform the work.
+    This is a convenience function that instantiates and uses the `ConfigLoader`
+    class to perform the comprehensive configuration loading and processing tasks.
 
     Args:
-        config_path_str (str): The path string to the configuration JSON file.
-                               Defaults to "config.json".
+        config_path_str (str): The path string to the JSON configuration file.
+                               Defaults to "config.json" in the current working directory.
 
     Returns:
-        ConfigDict: The fully processed and validated configuration dictionary.
+        A `ConfigDict` representing the fully processed, validated, and resolved
+        application configuration, ready for use by other parts of the application.
 
     Raises:
-        ConfigError: If any step of configuration loading or processing fails.
-        FileNotFoundError: If the configuration file is not found.
-        ImportError: If jsonschema is required but not installed.
+        ConfigError: If any step of configuration loading, schema validation,
+                     or processing (e.g., resolving active profiles, environment
+                     variables) fails.
+        FileNotFoundError: If the specified configuration file is not found.
+        ImportError: If the `jsonschema` library (a dependency for schema
+                     validation) is required but not installed.
     """
     loader = ConfigLoader(config_path_str)
     return loader.process()

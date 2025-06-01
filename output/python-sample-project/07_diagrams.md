@@ -1,33 +1,22 @@
-Previously, we looked at [Main Application Pipeline](06_main-application-pipeline.md).
+Previously, we looked at [Main Application Orchestration](06_main-application-orchestration.md).
 
 # Architecture Diagrams
 ## Class Diagram
 Key classes and their relationships in **python_sample_project**.
 ```mermaid
 classDiagram
-    class Config {
-        +data_path: str
-        +log_level: str
-    }
     class DataHandler {
-        -config: Config
-        +load_data() : list
+        +load_data(path: str) : bool
     }
     class ItemProcessor {
-        +process_item(item: object) : object
+        +process_item(item: Item) : bool
     }
-    class Model {
+    class Item {
+        +item_id: int
+        +name: str
     }
-    class Main {
-        -config: Config
-        -data_handler: DataHandler
-        -item_processor: ItemProcessor
-        +run() : void
-    }
-    DataHandler *-- Config : Uses
-    Main *-- Config : Uses
-    Main *-- DataHandler : Uses
-    Main *-- ItemProcessor : Uses
+    ItemProcessor ..> Item : Uses
+    DataHandler ..> Item : Manages
 ```
 ## Package Dependencies
 High-level module and package structure of **python_sample_project**.
@@ -37,163 +26,104 @@ graph TD
     C["config.py"]
     D(data_handler.py)
     I(item_processor.py)
-    MO(models.py)
-    I_init(__init__.py)
+    Mo(models.py)
     M -->|"imports"| C
     M -->|"imports"| D
     M -->|"imports"| I
-    M -->|"imports"| MO
-    D -->|"imports"| MO
-    I -->|"imports"| MO
+    M -->|"imports"| Mo
+    D -->|"imports"| Mo
+    I -->|"imports"| Mo
 ```
 ## Sequence Diagrams
 These diagrams illustrate various interaction scenarios within the application, showcasing the sequence of operations between different components for specific use cases.
-### Loading data items from a file based on a configuration specified in a configuration file.
+### The application starts, loads configuration, and initializes components.
 ```mermaid
 sequenceDiagram
-    participant MainApp as "Main Application"
-    participant ConfigManager as "Configuration Manager"
-    participant DataFile as "Data File"
-    participant DataLoader as "Data Loader"
-    participant DataItem as "Data Item"
-    MainApp->>ConfigManager: Load configuration file
-    activate ConfigManager
-    ConfigManager-->>MainApp: File path, delimiter, ...
-    deactivate ConfigManager
-    MainApp->>DataLoader: Load data using configuration
-    activate DataLoader
-    DataLoader->>DataFile: Open file
-    activate DataFile
-    DataFile-->>DataLoader: File stream
-    deactivate DataFile
-    loop Read each line in file
-        DataLoader->>DataFile: Read line
-        activate DataFile
-        DataFile-->>DataLoader: Data line
-        deactivate DataFile
-        alt Data line is valid
-            DataLoader->>DataItem: Create DataItem from line
-            activate DataItem
-            DataItem-->>DataLoader: DataItem object
-            deactivate DataItem
-            DataLoader-->>MainApp: DataItem object
-        else Data line is invalid
-            DataLoader->>MainApp: Log error
-        end
-    end
-    DataLoader->>DataFile: Close file
-    activate DataFile
-    DataFile-->>DataLoader: Confirmation
-    deactivate DataFile
-    deactivate DataLoader
+    participant App
+    participant ConfigLoader
+    participant ComponentInitializer
+    App->>ConfigLoader: Load configuration
+    activate ConfigLoader
+    ConfigLoader-->>App: Configuration data
+    deactivate ConfigLoader
+    App->>ComponentInitializer: Initialize components
+    activate ComponentInitializer
+    ComponentInitializer-->>App: Components initialized
+    deactivate ComponentInitializer
 ```
-### Processing a single data item through the entire pipeline, including transformation and logging.
+### Data is loaded from a specified source using Data Handling.
 ```mermaid
 sequenceDiagram
-    participant MainApp as "Main Application"
-    participant DataProcessor as "Data Processor"
-    participant Transformer as "Data Transformer"
-    participant Logger as "Logger"
-    MainApp->>DataProcessor: Receive data item
-    activate DataProcessor
-    DataProcessor->>Transformer: Transform data item
-    activate Transformer
-    Transformer-->>DataProcessor: Transformed data
-    deactivate Transformer
-    DataProcessor->>Logger: Log data processing
-    activate Logger
-    Logger-->>DataProcessor: Log entry created
-    deactivate Logger
-    DataProcessor-->>MainApp: Processed data
-    deactivate DataProcessor
+    participant User
+    participant DataHandling
+    participant DataSource
+    User->>DataHandling: Request data load
+    activate DataHandling
+    DataHandling->>DataSource: Fetch data
+    activate DataSource
+    DataSource-->>DataHandling: Data loaded
+    deactivate DataSource
+    DataHandling-->>User: Data load complete
+    deactivate DataHandling
 ```
-### Saving processed data items to a database using Data Handling.
+### A single Item undergoes processing and modification.
 ```mermaid
 sequenceDiagram
-    participant MainApp as "Main Application"
-    participant DataHandler
-    participant Database
-    MainApp->>DataHandler: Process data items
-    activate DataHandler
-    DataHandler->>DataHandler: Validate data
-    alt Data valid
-        DataHandler->>Database: Save data items
-        activate Database
-        Database-->>DataHandler: Confirmation
-        deactivate Database
-        DataHandler-->>MainApp: Data saved successfully
-    else Data invalid
-        DataHandler-->>MainApp: Error: Invalid data
-    end
-    deactivate DataHandler
+    participant User
+    participant ItemProcessor
+    participant ItemStorage
+    User->>ItemProcessor: Request to process Item
+    activate ItemProcessor
+    ItemProcessor->>ItemStorage: Retrieve Item
+    activate ItemStorage
+    ItemStorage-->>ItemProcessor: Item Data
+    deactivate ItemStorage
+    ItemProcessor->>ItemProcessor: Perform processing on Item
+    ItemProcessor->>ItemStorage: Update Item
+    activate ItemStorage
+    ItemStorage-->>ItemProcessor: Item Updated
+    deactivate ItemStorage
+    ItemProcessor-->>User: Item processing complete
+    deactivate ItemProcessor
 ```
-### Handling a data validation error during Item Processing and logging the error.
+### The application attempts to load data, encounters an error, and logs the issue.
 ```mermaid
 sequenceDiagram
-    participant MainApp as "Main Application"
-    participant ItemProc as "Item Processor"
-    participant Validator as "Data Validator"
+    participant Application
+    participant DataStore
     participant Logger
-    MainApp->>ItemProc: Process item data
-    activate ItemProc
-    ItemProc->>Validator: Validate item data
-    activate Validator
-    alt Data is invalid
-        Validator-->>ItemProc: Validation error
-        deactivate Validator
-        ItemProc->>Logger: Log validation error
-        activate Logger
-        Logger-->>ItemProc: Error logged
-        deactivate Logger
-        ItemProc-->>MainApp: Error: Data validation failed
-        deactivate ItemProc
-    else Data is valid
-        Validator-->>ItemProc: Validated data
-        deactivate Validator
-        ItemProc-->>MainApp: Item processed successfully
-        deactivate ItemProc
+    Application->>DataStore: Attempt to load data
+    activate DataStore
+    alt Success
+        DataStore-->>Application: Data loaded
+        Application->>Application: Process data
+    else Failure
+        DataStore-->>Application: Error occurred
+        Application->>Logger: Log error
+        Logger-->>Application: Logged
     end
+    deactivate DataStore
 ```
-### Restarting the Main Application Pipeline after a recoverable error, triggered by Configuration Management.
+### Processed data is saved back to a specified destination using Data Handling.
 ```mermaid
 sequenceDiagram
-    participant ConfigMgr as "Configuration Manager"
-    participant MainApp as "Main Application"
-    participant ErrorHandler as "Error Handler"
-    participant TaskScheduler as "Task Scheduler"
-    participant Pipeline as "Main Pipeline"
-    participant Logger as "Logger"
-    ConfigMgr->>MainApp: Detects configuration change (e.g., restart flag)
-    activate MainApp
-    MainApp->>ErrorHandler: Check for recoverable error
-    activate ErrorHandler
-    ErrorHandler-->>MainApp: Error Status (Recoverable)
-    deactivate ErrorHandler
-    MainApp->>Logger: Log: "Recoverable error detected, initiating pipeline restart."
-    activate Logger
-    Logger-->>MainApp: Log confirmation
-    deactivate Logger
-    MainApp->>TaskScheduler: Stop Main Pipeline
-    activate TaskScheduler
-    TaskScheduler-->>MainApp: Pipeline stopped
-    deactivate TaskScheduler
-    MainApp->>Pipeline: Shutdown Processes
-    activate Pipeline
-    Pipeline-->>MainApp: Processes Shutdown
-    deactivate Pipeline
-    MainApp->>Pipeline: Initialize new Pipeline instance
-    activate Pipeline
-    Pipeline-->>MainApp: Pipeline initialized
-    deactivate Pipeline
-    MainApp->>TaskScheduler: Schedule Main Pipeline
-    activate TaskScheduler
-    TaskScheduler-->>MainApp: Pipeline scheduled
-    deactivate TaskScheduler
-    MainApp->>Logger: Log: "Pipeline restart complete."
-    activate Logger
-    Logger-->>MainApp: Log confirmation
-    deactivate Logger
-    deactivate MainApp
+    participant User
+    participant DataHandler
+    participant Destination
+    User->>DataHandler: Process data
+    activate DataHandler
+    DataHandler->>DataHandler: Process data internally
+    DataHandler->>Destination: Save processed data
+    activate Destination
+    alt Success
+        Destination-->>DataHandler: Save successful
+        DataHandler-->>User: Data saved successfully
+    else Failure
+        Destination-->>DataHandler: Save failed
+        DataHandler-->>User: Data save failed
+    end
+    deactivate Destination
+    deactivate DataHandler
 ```
 
 Next, we will examine [Code Inventory](08_code_inventory.md).
@@ -201,4 +131,4 @@ Next, we will examine [Code Inventory](08_code_inventory.md).
 
 ---
 
-*Generated by [SourceLens AI](https://github.com/darijo2yahoocom/sourceLensAI) using LLM: `gemini` (cloud) - model: `gemini-2.0-flash` | Language Profile: `python`*
+*Generated by [SourceLens AI](https://github.com/darijo2yahoocom/sourceLensAI) using LLM: `gemini` (cloud) - model: `gemini-2.0-flash` | Language Profile: `Python`*

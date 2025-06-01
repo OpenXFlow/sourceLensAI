@@ -16,10 +16,9 @@
 """Defines the main processing pipeline (Flow) for SourceLens.
 
 Instantiates and connects the various processing nodes using the internal
-SourceLens flow engine to generate tutorials from source code or to fetch
-web content. For web content fetching, it can operate in a minimalistic
-mode (save files only) or an extended mode (save files and perform LLM-based
-analysis of the web content).
+SourceLens flow engine to generate tutorials from source code or to process
+web content. For web content, it adapts based on the 'processing_mode'
+configured (minimalistic vs. LLM-extended).
 """
 
 import logging
@@ -29,50 +28,51 @@ from typing_extensions import TypeAlias
 
 if TYPE_CHECKING:
     from sourcelens.core.flow_engine_sync import Flow as SourceLensFlow
-    from sourcelens.nodes import BaseNode as SourceLensBaseNode  # Assuming nodes.__init__ exports BaseNode
+    from sourcelens.nodes.base_node import BaseNode as SourceLensBaseNode
 else:
-    SourceLensFlow: Any = None
-    SourceLensBaseNode: Any = None
+    SourceLensFlow = None
+    SourceLensBaseNode = None
 
 
 from sourcelens.nodes import (
-    # Code Analysis Nodes
     AnalyzeRelationships,
-    AnalyzeWebRelationships,  # n03
+    AnalyzeWebRelationships,
     CombineTutorial,
-    CombineWebSummary,  # n08
+    CombineWebSummary,
     FetchCode,
-    # Web Content Analysis Nodes (using new n0x_ prefix)
     FetchWebPage,
     GenerateDiagramsNode,
     GenerateProjectReview,
     GenerateSourceIndexNode,
-    GenerateWebInventory,  # n06
-    GenerateWebReview,  # n07
+    GenerateWebInventory,
+    GenerateWebReview,
     IdentifyAbstractions,
     IdentifyScenariosNode,
     IdentifyWebConcepts,
     OrderChapters,
-    OrderWebChapters,  # n04
+    OrderWebChapters,
     WriteChapters,
-    WriteWebChapters,  # n05
+    WriteWebChapters,
 )
 
 SharedContextDict: TypeAlias = dict[str, Any]
 LlmConfigDict: TypeAlias = dict[str, Any]
 CacheConfigDict: TypeAlias = dict[str, Any]
+CodeAnalysisConfigDict: TypeAlias = dict[str, Any]
+WebAnalysisConfigDict: TypeAlias = dict[str, Any]
 
 logger: logging.Logger = logging.getLogger(__name__)
 
 
 def _configure_llm_node_params(llm_config: LlmConfigDict) -> tuple[int, int]:
-    """Extract LLM retry and wait parameters from the configuration.
+    """Extract LLM retry and wait parameters from the LLM configuration.
 
     Args:
-        llm_config (LlmConfigDict): Configuration dictionary for the LLM provider.
+        llm_config: Configuration dictionary for the LLM provider.
+                    Expected keys: 'max_retries', 'retry_wait_seconds'.
 
     Returns:
-        tuple[int, int]: A tuple containing (max_retries, retry_wait_seconds).
+        A tuple containing (max_retries, retry_wait_seconds).
     """
     max_r_llm_any: Any = llm_config.get("max_retries", 3)
     r_wait_llm_any: Any = llm_config.get("retry_wait_seconds", 10)
@@ -82,24 +82,37 @@ def _configure_llm_node_params(llm_config: LlmConfigDict) -> tuple[int, int]:
 
 
 def _create_code_analysis_flow(
-    llm_config: LlmConfigDict,
-    cache_config: CacheConfigDict,
+    code_analysis_config: CodeAnalysisConfigDict,
+    _common_cache_config: CacheConfigDict,
 ) -> "SourceLensFlow":
     """Create and configure the pipeline for code analysis and tutorial generation.
 
+    This function sets up a sequence of processing nodes tailored for analyzing
+    source code. It initializes each node, including LLM-based nodes with
+    appropriate retry and wait parameters derived from the `code_analysis_config`.
+    The cache configuration is available in the `initial_context` that nodes will receive.
+
     Args:
-        llm_config (LlmConfigDict): Configuration for the LLM provider.
-        cache_config (CacheConfigDict): Configuration for LLM caching.
+        code_analysis_config: The resolved configuration dictionary specific to
+                              code analysis. This includes the LLM settings
+                              (provider, model, API keys resolved from env if needed,
+                              retries, wait times) and other code-specific options.
+        _common_cache_config: The common cache settings from the configuration
+                             (e.g., cache file path, whether to use cache).
+                             Marked as unused here as nodes get it from shared_context.
 
     Returns:
-        SourceLensFlow: An instance of the configured `SourceLensFlow` for code analysis.
+        An instance of `SourceLensFlow` representing the configured pipeline
+        for code analysis, with `FetchCode` as the starting node.
 
     Raises:
-        RuntimeError: If the core Flow component cannot be imported.
+        RuntimeError: If the core `Flow` component from `sourcelens.core.flow_engine_sync`
+                      cannot be imported at runtime.
     """
-    del cache_config
+    del _common_cache_config
     logger.info("Configuring flow for code analysis and tutorial generation.")
-    max_r_llm, r_wait_llm = _configure_llm_node_params(llm_config)
+    llm_config_code: LlmConfigDict = code_analysis_config.get("llm_config", {})
+    max_r_llm, r_wait_llm = _configure_llm_node_params(llm_config_code)
     logger.info("Initializing LLM-based code analysis nodes with max_retries=%d, retry_wait=%d", max_r_llm, r_wait_llm)
 
     fetch_code = FetchCode()
@@ -125,7 +138,6 @@ def _create_code_analysis_flow(
         >> gen_proj_rev
         >> comb_tut
     )
-
     flow_description = (
         "Flow sequence (code analysis): FetchCode -> IdentifyAbstractions -> AnalyzeRelationships -> "
         "OrderChapters -> IdentifyScenariosNode -> GenerateDiagramsNode -> "
@@ -145,55 +157,55 @@ def _create_code_analysis_flow(
     return ActualSourceLensFlow(start=fetch_code)
 
 
-def _create_web_content_flow(
-    llm_config: LlmConfigDict,
-    cache_config: CacheConfigDict,
-    initial_context: SharedContextDict,
+def _create_web_analysis_flow(
+    web_analysis_config: WebAnalysisConfigDict,
+    _common_cache_config: CacheConfigDict,
 ) -> "SourceLensFlow":
     """Create and configure the pipeline for web content processing.
 
+    This function sets up a sequence of processing nodes for web content.
+    If `processing_mode` in `crawler_options` is "llm_extended", it configures
+    a full pipeline including LLM-based analysis nodes. If "minimalistic",
+    only the `FetchWebPage` node is run. LLM nodes are initialized with
+    retry parameters from `web_analysis_config`.
+
     Args:
-        llm_config (LlmConfigDict): Configuration for the LLM provider.
-        cache_config (CacheConfigDict): Configuration for LLM caching.
-        initial_context (SharedContextDict): The initial shared context.
+        web_analysis_config: The resolved configuration dictionary specific to
+                             web analysis. This includes LLM settings, crawler options,
+                             and web-specific output options.
+        _common_cache_config: The common cache settings (marked as unused).
 
     Returns:
-        SourceLensFlow: An instance of the configured `SourceLensFlow` for web content.
+        An instance of `SourceLensFlow` representing the configured pipeline
+        for web content analysis, with `FetchWebPage` as the starting node.
 
     Raises:
-        RuntimeError: If the core Flow component cannot be imported.
+        RuntimeError: If the core `Flow` component from `sourcelens.core.flow_engine_sync`
+                      cannot be imported at runtime.
     """
-    del cache_config
-    config_data_val: Any = initial_context.get("config", {})
-    config_data: dict[str, Any] = config_data_val if isinstance(config_data_val, dict) else {}
-    web_opts_val: Any = config_data.get("web_crawler_options", {})
-    web_opts: dict[str, Any] = web_opts_val if isinstance(web_opts_val, dict) else {}
-    processing_mode: str = str(web_opts.get("processing_mode", "minimalistic"))
-    logger.info("Web crawl operation. Processing mode: '%s'", processing_mode)
+    del _common_cache_config
+    crawler_options: dict[str, Any] = web_analysis_config.get("crawler_options", {})
+    processing_mode: str = str(crawler_options.get("processing_mode", "minimalistic"))
+    logger.info("Configuring flow for web content analysis. Processing mode: '%s'", processing_mode)
 
-    n01_fetch_web = FetchWebPage()  # Node n01 (was n20)
+    n01_fetch_web = FetchWebPage()
     start_node: "SourceLensBaseNode" = n01_fetch_web
-    flow_description: str
+    flow_description_parts: list[str] = [type(n01_fetch_web).__name__]
 
-    if processing_mode == "minimalistic":
-        logger.info("Configuring flow for minimalist web content fetching (FetchWebPage only).")
-        flow_description = f"Flow sequence (minimal web crawl): {type(n01_fetch_web).__name__}"
-    elif processing_mode == "llm_extended":
-        logger.info("Configuring flow for LLM-extended web content processing.")
-        max_r_llm, r_wait_llm = _configure_llm_node_params(llm_config)
-        logger.info(
-            "Initializing LLM-based web content analysis nodes with max_retries=%d, retry_wait=%d",
-            max_r_llm,
-            r_wait_llm,
-        )
+    if processing_mode == "llm_extended":
+        logger.info("Web analysis mode: llm_extended. Configuring full LLM pipeline for web content.")
+        llm_config_web: LlmConfigDict = web_analysis_config.get("llm_config", {})
+        max_r_llm, r_wait_llm = _configure_llm_node_params(llm_config_web)
+        log_msg = "Initializing LLM-based web content analysis nodes with max_retries=%d, retry_wait=%d"
+        logger.info(log_msg, max_r_llm, r_wait_llm)
 
         n02_id_web_concepts = IdentifyWebConcepts(max_retries=max_r_llm, wait=r_wait_llm)
         n03_an_web_rels = AnalyzeWebRelationships(max_retries=max_r_llm, wait=r_wait_llm)
         n04_ord_web_chaps = OrderWebChapters(max_retries=max_r_llm, wait=r_wait_llm)
         n05_wr_web_chaps = WriteWebChapters(max_retries=max_r_llm, wait=r_wait_llm)
-        n06_gen_web_inv = GenerateWebInventory(max_retries=max_r_llm, wait=r_wait_llm)  # LLM for summaries
+        n06_gen_web_inv = GenerateWebInventory(max_retries=max_r_llm, wait=r_wait_llm)
         n07_gen_web_rev = GenerateWebReview(max_retries=max_r_llm, wait=r_wait_llm)
-        n08_comb_web_sum = CombineWebSummary()  # No LLM, just combines
+        n08_comb_web_sum = CombineWebSummary()
 
         (
             n01_fetch_web
@@ -205,22 +217,26 @@ def _create_web_content_flow(
             >> n07_gen_web_rev
             >> n08_comb_web_sum
         )
-
-        flow_description = (
-            f"Flow sequence (extended web crawl): {type(n01_fetch_web).__name__} -> "
-            f"{type(n02_id_web_concepts).__name__} -> {type(n03_an_web_rels).__name__} -> "
-            f"{type(n04_ord_web_chaps).__name__} -> {type(n05_wr_web_chaps).__name__} -> "
-            f"{type(n06_gen_web_inv).__name__} -> {type(n07_gen_web_rev).__name__} -> "
-            f"{type(n08_comb_web_sum).__name__}"
+        flow_description_parts.extend(
+            [
+                type(n02_id_web_concepts).__name__,
+                type(n03_an_web_rels).__name__,
+                type(n04_ord_web_chaps).__name__,
+                type(n05_wr_web_chaps).__name__,
+                type(n06_gen_web_inv).__name__,
+                type(n07_gen_web_rev).__name__,
+                type(n08_comb_web_sum).__name__,
+            ]
         )
+    elif processing_mode == "minimalistic":
+        logger.info("Web analysis mode: minimalistic. Only FetchWebPage will run.")
     else:
         logger.warning(
-            "Unknown web_crawler_options.processing_mode '%s'. Defaulting to minimalistic.",
+            "Unknown web_analysis.crawler_options.processing_mode '%s'. Defaulting to minimalistic.",
             processing_mode,
         )
-        flow_description = f"Flow sequence (defaulted minimal web crawl): {type(n01_fetch_web).__name__}"
 
-    logger.info(flow_description)
+    logger.info("Flow sequence (web analysis): %s", " -> ".join(flow_description_parts))
 
     if TYPE_CHECKING:
         from sourcelens.core.flow_engine_sync import Flow as ActualSourceLensFlow
@@ -228,40 +244,73 @@ def _create_web_content_flow(
         try:
             from sourcelens.core.flow_engine_sync import Flow as ActualSourceLensFlow
         except ImportError as e:
-            logger.critical("Failed to import Flow for web content: %s", e)
-            raise RuntimeError("Core Flow component not importable for web content.") from e
+            logger.critical("Failed to import Flow for web analysis: %s", e)
+            raise RuntimeError("Core Flow component not importable for web analysis.") from e
 
     return ActualSourceLensFlow(start=start_node)
 
 
 def create_tutorial_flow(
-    llm_config: LlmConfigDict,
-    cache_config: CacheConfigDict,
+    _llm_config_placeholder: LlmConfigDict,
+    _cache_config_placeholder: CacheConfigDict,
     initial_context: SharedContextDict,
 ) -> "SourceLensFlow":
     """Create and configure the appropriate SourceLens processing flow.
 
-    Dispatches to a specific flow creation function based on the operation type
-    indicated in the `initial_context` (web crawl vs. code analysis).
+    Determines whether to create a code analysis or web analysis flow based on
+    input sources specified in `initial_context` and corresponding enabled flags
+    in the fully resolved configuration (expected under `initial_context["config"]`).
 
     Args:
-        llm_config (LlmConfigDict): Processed configuration for the active LLM provider.
-        cache_config (CacheConfigDict): Configuration related to LLM response caching.
-        initial_context (SharedContextDict): The initial shared context.
+        _llm_config_placeholder: Placeholder; LLM config is now sourced from
+                                 `initial_context["config"]["<mode>_analysis"]["llm_config"]`.
+        _cache_config_placeholder: Placeholder; Cache config is sourced from
+                                   `initial_context["config"]["common"]["cache_settings"]`.
+        initial_context: The initial shared context. Must contain the fully resolved
+                         application configuration under the key "config".
 
     Returns:
-        SourceLensFlow: An instance of the configured `SourceLensFlow`.
-    """
-    logger.info("Determining appropriate SourceLens processing flow...")
+        An instance of `SourceLensFlow` configured for either code or web analysis.
 
-    is_web_crawl_op = bool(
+    Raises:
+        ValueError: If the fully resolved configuration is missing from `initial_context`,
+                    no valid source type (code or web) is specified, or if the
+                    analysis mode for the specified source type is disabled.
+    """
+    del _llm_config_placeholder, _cache_config_placeholder
+    logger.info("Determining appropriate SourceLens processing flow based on context and config...")
+
+    full_resolved_config: dict[str, Any] = initial_context.get("config", {})
+    if not full_resolved_config:
+        raise ValueError("Critical: Fully resolved configuration is missing from initial_context['config'].")
+
+    common_cfg_val: Any = full_resolved_config.get("common", {})
+    common_cfg: dict[str, Any] = common_cfg_val if isinstance(common_cfg_val, dict) else {}
+    common_cache_cfg: CacheConfigDict = common_cfg.get("cache_settings", {})
+
+    is_web_source_specified = bool(
         initial_context.get("crawl_url") or initial_context.get("crawl_sitemap") or initial_context.get("crawl_file")
     )
+    is_code_source_specified = bool(initial_context.get("repo_url") or initial_context.get("local_dir"))
 
-    if is_web_crawl_op:
-        return _create_web_content_flow(llm_config, cache_config, initial_context)
-    # else
-    return _create_code_analysis_flow(llm_config, cache_config)
+    code_analysis_cfg_val: Any = full_resolved_config.get("code_analysis", {})
+    code_analysis_cfg: CodeAnalysisConfigDict = code_analysis_cfg_val if isinstance(code_analysis_cfg_val, dict) else {}
+
+    web_analysis_cfg_val: Any = full_resolved_config.get("web_analysis", {})
+    web_analysis_cfg: WebAnalysisConfigDict = web_analysis_cfg_val if isinstance(web_analysis_cfg_val, dict) else {}
+
+    if is_web_source_specified:
+        if web_analysis_cfg.get("enabled", False):
+            logger.info("Web source specified and web_analysis is enabled. Creating web analysis flow.")
+            return _create_web_analysis_flow(web_analysis_cfg, common_cache_cfg)
+        raise ValueError("Web source input provided, but web_analysis mode is disabled in configuration.")
+    elif is_code_source_specified:
+        if code_analysis_cfg.get("enabled", False):
+            logger.info("Code source specified and code_analysis is enabled. Creating code analysis flow.")
+            return _create_code_analysis_flow(code_analysis_cfg, common_cache_cfg)
+        raise ValueError("Code source input provided, but code_analysis mode is disabled in configuration.")
+    else:
+        raise ValueError("No valid source (code or web) specified to determine processing flow.")
 
 
 # End of src/sourcelens/flow.py

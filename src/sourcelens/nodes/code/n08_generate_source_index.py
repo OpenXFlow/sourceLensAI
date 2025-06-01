@@ -35,11 +35,11 @@ from sourcelens.prompts.code.diagrams import generate_file_structure_mermaid
 from sourcelens.utils._exceptions import LlmApiError
 
 if TYPE_CHECKING:
-    ConfigDictInternal: TypeAlias = dict[str, Any]
-    LlmConfigDictInternal: TypeAlias = dict[str, Any]
-    CacheConfigDictInternal: TypeAlias = dict[str, Any]
-    SourceConfigDictInternal: TypeAlias = dict[str, Any]
-    OutputConfigDictInternal: TypeAlias = dict[str, Any]
+    ResolvedConfigDict: TypeAlias = dict[str, Any]
+    ResolvedLlmConfigDict: TypeAlias = dict[str, Any]
+    ResolvedCacheConfigDict: TypeAlias = dict[str, Any]
+    ResolvedSourceConfigDict: TypeAlias = dict[str, Any]
+    # ResolvedCodeAnalysisOutputOptions: TypeAlias = dict[str, Any] # No longer needed here
 
 SourceIndexPreparedInputs: TypeAlias = dict[str, Any]
 SourceIndexExecutionResult: TypeAlias = Optional[str]
@@ -56,7 +56,14 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 
 def _get_summary_doc_from_file_content_for_node(content: Optional[str]) -> str:
-    """Extract a brief summary from file content (first line heuristic)."""
+    """Extract a brief summary from file content (first line heuristic).
+
+    Args:
+        content: The string content of the file, or None.
+
+    Returns:
+        A brief summary string, or an empty string if no content or summary found.
+    """
     if not content or not content.strip():
         return ""
     first_line = content.strip().split("\n", 1)[0].strip()
@@ -82,7 +89,16 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPreparedInputs, SourceIndexExe
         self,
         files_data: FileDataListInternal,
     ) -> list[str]:
-        """Format a summary list of files for the main index page."""
+        """Format a summary list of files for the main index page.
+
+        Args:
+            files_data: A list of tuples, where each tuple is
+                        (relative_path_to_scan_root, optional_content_string).
+
+        Returns:
+            A list of strings, where each string is a Markdown formatted line
+            for the file summary section.
+        """
         summary_lines: list[str] = ["\n## File Descriptions Summary\n"]
         if not files_data:
             summary_lines.append("No files to summarize.\n")
@@ -110,23 +126,30 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPreparedInputs, SourceIndexExe
     def _generate_detailed_content_ast(
         self,
         project_name: str,
-        files_data_for_ast: FileDataListInternal,  # Changed: expects list[tuple[str, Optional[str]]]
+        files_data_for_ast: FileDataListInternal,
         project_scan_root_display: str,
     ) -> tuple[str, int]:
-        """Generate detailed content using AST formatter for Python files."""
+        """Generate detailed content using AST formatter for Python files.
+
+        Args:
+            project_name: The name of the project.
+            files_data_for_ast: List of (filepath, Optional[content]) tuples.
+                                The formatter will filter for Python files with content.
+            project_scan_root_display: The display root path for file listings.
+
+        Returns:
+            A tuple containing:
+                - The formatted Markdown string for Python files.
+                - The count of Python files actually processed by the AST formatter.
+        """
         self._log_info("Using AST formatter for detailed Python entries.")
-        # AST formatter should ideally handle None content by skipping or erroring.
-        # We pass all .py/.pyi files, even if some might have None content theoretically.
         python_files_to_process: FileDataListInternal = [
             (p, c) for p, c in files_data_for_ast if p.endswith((".py", ".pyi"))
         ]
         if python_files_to_process:
-            # The `format_python_index_from_ast` must be robust enough to handle
-            # Optional[str] for content, or we assume it filters/errors internally
-            # if content is None (which it should for AST parsing).
             content = format_python_index_from_ast(project_name, python_files_to_process, project_scan_root_display)
             return content, len(python_files_to_process)
-        self._log_info("No Python files found to pass to AST formatter.")
+        self._log_info("No Python files with content found to pass to AST formatter.")
         return "", 0
 
     def _generate_detailed_content_llm(
@@ -135,10 +158,24 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPreparedInputs, SourceIndexExe
         files_data: FileDataListInternal,
         project_scan_root_display: str,
         language: str,
-        llm_config: "LlmConfigDictInternal",
-        cache_config: "CacheConfigDictInternal",
+        llm_config: "ResolvedLlmConfigDict",
+        cache_config: "ResolvedCacheConfigDict",
     ) -> tuple[str, int]:
-        """Generate detailed content using LLM formatter."""
+        """Generate detailed content using LLM formatter.
+
+        Args:
+            project_name: The name of the project.
+            files_data: List of (filepath, Optional[content]) tuples.
+            project_scan_root_display: The display root path for file listings.
+            language: The programming language of the project.
+            llm_config: Configuration for LLM API calls.
+            cache_config: Configuration for LLM caching.
+
+        Returns:
+            A tuple containing:
+                - The formatted Markdown string from LLM analysis.
+                - The count of files passed to the LLM formatter.
+        """
         self._log_info("Using LLM formatter for detailed entries (language: %s).", language)
         content = format_index_from_llm(files_data, project_scan_root_display, language, llm_config, cache_config)
         return content, len(files_data)
@@ -149,7 +186,18 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPreparedInputs, SourceIndexExe
         project_scan_root_display: str,
         parser_type: str,
     ) -> tuple[str, int]:
-        """Generate generic file list if no specific parser is used."""
+        """Generate a generic file list if no specific parser (AST/LLM) is used.
+
+        Args:
+            files_data: List of (filepath, Optional[content]) tuples.
+            project_scan_root_display: The display root path for file listings.
+            parser_type: The parser type (expected to be "none" here).
+
+        Returns:
+            A tuple containing:
+                - A Markdown string listing files and their summaries.
+                - The count of files processed.
+        """
         self._log_info("Parser type is '%s'. Generating generic file list for detailed content.", parser_type)
         temp_detailed_lines: list[str] = []
         for i, (path, content_opt) in enumerate(files_data):
@@ -158,14 +206,11 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPreparedInputs, SourceIndexExe
             p_obj = Path(display_path)
             parent_dir_str = "./" if p_obj.parent.as_posix() == "." else f"{p_obj.parent.as_posix().rstrip('/')}/"
             summary = _get_summary_doc_from_file_content_for_node(content_opt)
-            entry_lines.extend(
-                [
-                    f"###### {i + 1}) {parent_dir_str}\n",
-                    f"#  {p_obj.name}\n",
-                    f"\n... {summary}\n" if summary else "\n... (File content summary not available)\n",
-                    "---\n",
-                ]
-            )
+
+            entry_lines.append(f"###### {i + 1}) {parent_dir_str}\n")
+            entry_lines.append(f"#  {p_obj.name}\n")
+            entry_lines.append(f"\n... {summary}\n" if summary else "\n... (File content summary not available)\n")
+            entry_lines.append("---\n")
             temp_detailed_lines.extend(entry_lines)
         return "".join(temp_detailed_lines), len(files_data)
 
@@ -176,10 +221,23 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPreparedInputs, SourceIndexExe
         project_scan_root_display: str,
         parser_type: str,
         language: str,
-        llm_config: "LlmConfigDictInternal",
-        cache_config: "CacheConfigDictInternal",
+        llm_config: "ResolvedLlmConfigDict",
+        cache_config: "ResolvedCacheConfigDict",
     ) -> str:
-        """Assemble the full source index Markdown content."""
+        """Assemble the full source index Markdown content.
+
+        Args:
+            project_name: The name of the project.
+            files_data: A list of (filepath, Optional[content]) tuples.
+            project_scan_root_display: The display root for paths in the index.
+            parser_type: The parser type to use ("ast", "llm", or "none").
+            language: The programming language of the project (relevant for AST/LLM).
+            llm_config: LLM API configuration.
+            cache_config: LLM caching configuration.
+
+        Returns:
+            A string containing the complete Markdown content for the source index.
+        """
         self._log_info("Formatting source index for: '%s' (Parser: %s, Lang: %s)", project_name, parser_type, language)
         markdown_lines: list[str] = [f"# Code Inventory: {project_name}\n"]
 
@@ -194,11 +252,7 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPreparedInputs, SourceIndexExe
         detailed_content_str: str = ""
         processed_files_count: int = 0
 
-        if parser_type == "ast" and language == "python":
-            # Pass the original files_data (list[tuple[str, Optional[str]]])
-            # The _generate_detailed_content_ast method will filter for .py/.pyi
-            # and format_python_index_from_ast MUST handle Optional[str] for content
-            # (ideally by skipping files where content is None, as AST needs content).
+        if parser_type == "ast" and language.lower() == "python":
             detailed_content_str, processed_files_count = self._generate_detailed_content_ast(
                 project_name, files_data, project_scan_root_display
             )
@@ -216,32 +270,60 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPreparedInputs, SourceIndexExe
             markdown_lines.append(detailed_content_str)
         elif files_data:
             markdown_lines.append("\n## Detailed File Content\n")
-            markdown_lines.append("No detailed structural information could be generated for the files.\n")
+            markdown_lines.append(
+                "No detailed structural information could be generated for the files based on the selected parser.\n"
+            )
 
         if not files_data:
             markdown_lines.append("\nNo files found in the source to index.\n")
 
-        log_msg = "Finished source index for '%s'. Detail formatter processed approx %d files. Total length: %d"
-        self._log_info(log_msg, project_name, processed_files_count, len("".join(markdown_lines)))
+        log_msg_parts = [
+            f"Finished source index for '{project_name}'.",
+            f"Detail formatter ('{parser_type}') processed approx {processed_files_count} files.",
+            f"Total Markdown length: {len(''.join(markdown_lines))}",
+        ]
+        self._log_info(" ".join(log_msg_parts))
         return "".join(markdown_lines)
 
     def pre_execution(self, shared_context: SLSharedContext) -> SourceIndexPreparedInputs:
-        """Prepare data and configuration for source index generation."""
+        """Prepare data and configuration for source index generation.
+
+        Retrieves necessary data from `shared_context`, including file data,
+        project details, and relevant configuration for LLM and caching if needed.
+        Determines if source index generation should be skipped based on config.
+
+        Args:
+            shared_context: The shared context dictionary. Expected to contain:
+                            "files", "project_name", "config" (full resolved config),
+                            "source_config" (resolved for code analysis),
+                            "llm_config" (resolved for current mode),
+                            "cache_config" (common cache settings),
+                            "local_dir_display_root",
+                            "current_mode_output_options".
+
+        Returns:
+            A dictionary containing prepared inputs for the `execution` method.
+            If skipping, `{"skip": True, "reason": ...}` is returned.
+
+        Raises:
+            ValueError: If essential data is missing or invalid in `shared_context`.
+        """
         self._log_info(">>> GenerateSourceIndexNode.pre_execution: Preparing for source index generation. <<<")
         try:
             files_data_any: Any = self._get_required_shared(shared_context, "files")
             project_name_any: Any = self._get_required_shared(shared_context, "project_name")
-            config_any: Any = self._get_required_shared(shared_context, "config")
-            source_config_any: Any = self._get_required_shared(shared_context, "source_config")
-            llm_config_any: Any = self._get_required_shared(shared_context, "llm_config")
-            cache_config_any: Any = self._get_required_shared(shared_context, "cache_config")
+            source_config_val: Any = self._get_required_shared(shared_context, "source_config")
+            llm_config_val: Any = self._get_required_shared(shared_context, "llm_config")
+            cache_config_val: Any = self._get_required_shared(shared_context, "cache_config")
+            # Get output options for the current mode (code analysis)
+            current_mode_opts_any: Any = shared_context.get("current_mode_output_options", {})
+            current_mode_opts: dict[str, Any] = current_mode_opts_any if isinstance(current_mode_opts_any, dict) else {}
 
             files_data_raw: list[Any] = files_data_any if isinstance(files_data_any, list) else []
             project_name: str = str(project_name_any) if isinstance(project_name_any, str) else "Unknown Project"
-            config: "ConfigDictInternal" = config_any if isinstance(config_any, dict) else {}
-            source_config: "SourceConfigDictInternal" = source_config_any if isinstance(source_config_any, dict) else {}
-            llm_config: "LlmConfigDictInternal" = llm_config_any if isinstance(llm_config_any, dict) else {}
-            cache_config: "CacheConfigDictInternal" = cache_config_any if isinstance(cache_config_any, dict) else {}
+            source_config: "ResolvedSourceConfigDict" = source_config_val if isinstance(source_config_val, dict) else {}  # type: ignore[assignment]
+            llm_config: "ResolvedLlmConfigDict" = llm_config_val if isinstance(llm_config_val, dict) else {}  # type: ignore[assignment]
+            cache_config: "ResolvedCacheConfigDict" = cache_config_val if isinstance(cache_config_val, dict) else {}  # type: ignore[assignment]
 
             scan_root_val: Any = shared_context.get("local_dir_display_root", "./")
             scan_root: str = str(scan_root_val)
@@ -250,22 +332,26 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPreparedInputs, SourceIndexExe
             elif not scan_root:
                 scan_root = "./"
 
-            out_cfg_any: Any = config.get("output", {})
-            out_cfg: "OutputConfigDictInternal" = out_cfg_any if isinstance(out_cfg_any, dict) else {}
-            inc_idx_raw: Any = out_cfg.get("include_source_index")
-            inc_idx: bool = inc_idx_raw if isinstance(inc_idx_raw, bool) else False
-            if not isinstance(inc_idx_raw, bool) and inc_idx_raw is not None:
-                self._log_warning("Config 'output.include_source_index' not boolean, defaulting to False.")
+            # Read 'include_source_index' from the mode-specific output options
+            include_source_index_val: Any = current_mode_opts.get("include_source_index")
+            include_source_index: bool = (
+                include_source_index_val if isinstance(include_source_index_val, bool) else False
+            )
 
-            self._log_info("Pre-execution: include_source_index=%s, scan_root_display='%s'", inc_idx, scan_root)
-            if not inc_idx:
-                return {"skip": True, "reason": "Disabled via 'output.include_source_index'"}
+            log_msg_pre = f"Pre-execution: include_source_index={include_source_index}, scan_root_display='{scan_root}'"
+            self._log_info(log_msg_pre)
 
-            lang: str = str(source_config.get("language", "unknown"))
-            parser: str = str(source_config.get("source_index_parser", "none"))
-            self._log_info("Pre-execution: language=%s, parser_type=%s", lang, parser)
+            if not include_source_index:
+                return {
+                    "skip": True,
+                    "reason": "Source index generation disabled via output_options.include_source_index",
+                }
 
-            valid_files: FileDataListInternal = []
+            lang_name: str = str(source_config.get("language_name_for_llm", "unknown"))
+            parser: str = str(source_config.get("parser_type", "none"))
+            self._log_info("Pre-execution: language_name_for_llm=%s, parser_type=%s", lang_name, parser)
+
+            valid_files_data: FileDataListInternal = []
             for item in files_data_raw:
                 if (
                     isinstance(item, tuple)
@@ -273,59 +359,88 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPreparedInputs, SourceIndexExe
                     and isinstance(item[0], str)
                     and (isinstance(item[1], str) or item[1] is None)
                 ):
-                    valid_files.append(item)
+                    valid_files_data.append(item)
                 else:
-                    self._log_warning("Skipping invalid item in files_data: %s", item)
+                    self._log_warning("Skipping invalid item in files_data: %s (type: %s)", item, type(item))
 
             return {
                 "skip": False,
-                "files_data": valid_files,
+                "files_data": valid_files_data,
                 "project_name": project_name,
-                "language": lang,
+                "language": lang_name,
                 "parser_type": parser,
                 "project_scan_root_display": scan_root,
                 "llm_config": llm_config,
                 "cache_config": cache_config,
             }
         except ValueError as e_val:
-            self._log_error("Pre-execution failed (missing data): %s", e_val, exc_info=True)
-            return {"skip": True, "reason": f"Missing shared data: {e_val!s}"}
+            self._log_error("Pre-execution failed (missing or invalid shared data): %s", e_val, exc_info=True)
+            return {"skip": True, "reason": f"Missing or invalid shared data: {e_val!s}"}
         except (OSError, TypeError, KeyError) as e_prep:
-            self._log_error("Unexpected pre-execution error: %s", e_prep, exc_info=True)
+            self._log_error("Unexpected pre-execution error for Source Index: %s", e_prep, exc_info=True)
             return {"skip": True, "reason": f"Unexpected pre_execution error: {type(e_prep).__name__}: {e_prep!s}"}
 
     def execution(self, prepared_inputs: SourceIndexPreparedInputs) -> SourceIndexExecutionResult:
-        """Generate the Markdown content for the source index."""
+        """Generate the Markdown content for the source index.
+
+        Args:
+            prepared_inputs: A dictionary containing all necessary data and
+                             configurations, as prepared by `pre_execution`.
+
+        Returns:
+            A string containing the formatted Markdown for the source index,
+            or None if execution was skipped or an error occurred.
+
+        Raises:
+            LlmApiError: If an LLM API call fails and is not handled internally.
+        """
+        skip_reason = prepared_inputs.get("reason", "Unknown reason")
         log_msg_exec_l1 = ">>> GenerateSourceIndexNode.execution: Start. "
         log_msg_exec_l2 = (
-            f"Skip flag: {prepared_inputs.get('skip') if isinstance(prepared_inputs, dict) else 'N/A'}. "
+            f"Skip flag: {prepared_inputs.get('skip')}. Reason: {skip_reason}. "
             f"Prepared_inputs type: {type(prepared_inputs).__name__} <<<"
         )
         self._log_info(log_msg_exec_l1 + log_msg_exec_l2)
 
         if not isinstance(prepared_inputs, dict) or prepared_inputs.get("skip", True):
-            reason_val = prepared_inputs.get("reason", "N/A") if isinstance(prepared_inputs, dict) else "Invalid prep"
-            self._log_info("Skipping source index execution. Reason: %s", str(reason_val))
+            self._log_info("Skipping source index execution. Reason: %s", skip_reason)
             return None
 
-        files: FileDataListInternal = prepared_inputs.get("files_data", [])  # type: ignore[assignment]
-        name: str = prepared_inputs.get("project_name", "Unknown Project")
-        lang: str = prepared_inputs.get("language", "unknown")
-        parser: str = prepared_inputs.get("parser_type", "none")
-        root_disp: str = prepared_inputs.get("project_scan_root_display", "./")
-        llm_cfg: "LlmConfigDictInternal" = prepared_inputs.get("llm_config", {})  # type: ignore[assignment]
-        cache_cfg: "CacheConfigDictInternal" = prepared_inputs.get("cache_config", {})  # type: ignore[assignment]
+        required_keys = [
+            "files_data",
+            "project_name",
+            "language",
+            "parser_type",
+            "project_scan_root_display",
+            "llm_config",
+            "cache_config",
+        ]
+        for key in required_keys:
+            if key not in prepared_inputs:
+                self._log_error("Execution error: Missing key '%s' in prepared_inputs.", key)
+                project_name_fallback = str(prepared_inputs.get("project_name", "Unknown Project"))
+                return f"# Code Inventory: {project_name_fallback}\n\nInternal error: Missing '{key}'.\n"
+
+        files: FileDataListInternal = prepared_inputs["files_data"]  # type: ignore[assignment]
+        name: str = prepared_inputs["project_name"]
+        lang: str = prepared_inputs["language"]
+        parser: str = prepared_inputs["parser_type"]
+        root_disp: str = prepared_inputs["project_scan_root_display"]
+        llm_cfg: "ResolvedLlmConfigDict" = prepared_inputs["llm_config"]  # type: ignore[assignment]
+        cache_cfg: "ResolvedCacheConfigDict" = prepared_inputs["cache_config"]  # type: ignore[assignment]
 
         log_msg_format = "Calling _format_source_index_content with: name=%s, parser=%s, lang=%s, files_count=%d"
         self._log_info(log_msg_format, name, parser, lang, len(files))
 
-        if not files:
-            self._log_warning("No files data for index generation, though not skipped in pre_execution.")
-            return f"# Code Inventory: {name}\n\nNo files found in source to index.\n"
+        if not files and (parser == "ast" or parser == "llm"):  # If parser needs files, but none are there
+            self._log_warning("No files data available for '%s' parser. Index will be minimal.", parser)
+            # Still proceed to _format_source_index_content, which handles empty files_data
+            # and can generate headers and the "No files found" message.
+
         try:
             return self._format_source_index_content(name, files, root_disp, parser, lang, llm_cfg, cache_cfg)
         except LlmApiError:
-            self._log_error("LlmApiError occurred during source index formatting, re-raising.")
+            self._log_error("LlmApiError occurred during source index formatting, re-raising for flow engine.")
             raise
         except (ValueError, TypeError, KeyError, AttributeError) as e_format:
             self._log_error("Error formatting source index: %s", e_format, exc_info=True)
@@ -337,7 +452,13 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPreparedInputs, SourceIndexExe
         prepared_inputs: SourceIndexPreparedInputs,
         execution_outputs: SourceIndexExecutionResult,
     ) -> None:
-        """Store the generated source index content in shared context."""
+        """Store the generated source index content in shared context.
+
+        Args:
+            shared_context: The shared context dictionary to update.
+            prepared_inputs: A dictionary of inputs used for the execution phase.
+            execution_outputs: The Markdown content of the source index, or None.
+        """
         self._log_info(">>> GenerateSourceIndexNode.post_execution: Finalizing. <<<")
         if isinstance(prepared_inputs, dict):
             prep_summary_items = []
@@ -347,15 +468,18 @@ class GenerateSourceIndexNode(BaseNode[SourceIndexPreparedInputs, SourceIndexExe
                     prep_summary_items.append(f"{k_item}: {val_repr}")
             if "files_data" in prepared_inputs and isinstance(prepared_inputs["files_data"], list):
                 prep_summary_items.append(f"files_data_count: {len(prepared_inputs['files_data'])}")
-            self._log_info("Post_execution called. prepared_inputs summary: {%s}", ", ".join(prep_summary_items))
+            self._log_info("Post_execution called. Prepared_inputs summary: {%s}", ", ".join(prep_summary_items))
 
-        shared_context["source_index_content"] = None
+        shared_context["source_index_content"] = None  # Default to None
         if isinstance(execution_outputs, str) and execution_outputs.strip():
             shared_context["source_index_content"] = execution_outputs
             self._log_info("Stored VALID source index content (length: %d).", len(execution_outputs))
+        elif execution_outputs is None and isinstance(prepared_inputs, dict) and prepared_inputs.get("skip"):
+            self._log_info("Source index generation was skipped. 'source_index_content' remains None.")
         else:
-            self._log_warning("Source index content from execution was None or empty. Not storing valid content.")
+            shared_context["source_index_content"] = execution_outputs  # Store error string or empty
+            self._log_warning("Source index content from execution was None, empty, or an error message. Stored as is.")
         self._log_info(">>> GenerateSourceIndexNode.post_execution: Finished. <<<")
 
 
-# End of src/sourcelens/nodes/n08_generate_source_index.py
+# End of src/sourcelens/nodes/code/n08_generate_source_index.py

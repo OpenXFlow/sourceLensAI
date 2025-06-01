@@ -16,20 +16,20 @@
 """Node responsible for fetching source code from GitHub or local directories."""
 
 from pathlib import Path
-from typing import Any, Optional, TypedDict
+from typing import Any, Final, Optional, TypedDict
 
 from typing_extensions import TypeAlias
 
-from sourcelens.nodes.base_node import BaseNode, SLSharedContext  # Updated import and type name
+from sourcelens.nodes.base_node import BaseNode, SLSharedContext
 
-# Using new type naming convention
 FetchPreparedInputs: TypeAlias = bool
-"""Type alias for the result of the pre-execution phase of FetchCode."""
-FetchExecutionResult: TypeAlias = None  # No specific result from main execution
-"""Type alias for the result of the execution phase of FetchCode."""
+FetchExecutionResult: TypeAlias = None
 
 FileDataListInternal: TypeAlias = list[tuple[str, str]]
-"""Type alias for a list of (filepath, content) tuples used internally."""
+
+
+class NoFilesFetchedError(Exception):
+    """Raised when FetchCode finds no files matching criteria for a critical operation."""
 
 
 class _PrepContext(TypedDict):
@@ -43,6 +43,10 @@ class _PrepContext(TypedDict):
     max_file_size: int
     use_relative_paths: bool
     github_token: Optional[str]
+    is_file_fetching_critical: bool
+
+
+CRITICAL_FETCH_MODES: Final[set[str]] = {"code"}  # Modes where finding no files is fatal
 
 
 class FetchCode(BaseNode[FetchPreparedInputs, FetchExecutionResult]):
@@ -51,30 +55,23 @@ class FetchCode(BaseNode[FetchPreparedInputs, FetchExecutionResult]):
     This node is responsible for the initial step of acquiring the codebase
     to be analyzed. It can handle both remote GitHub repositories and local
     filesystem directories. It populates the `shared_context` with the fetched
-    file data and the derived project name.
+    file data and the derived project name. If no files are fetched for a
+    critical operation (like code analysis), it may raise an error.
     """
 
-    def _derive_project_name(self, shared_context: SLSharedContext) -> str:
-        """Derive a project name from repo URL or local directory path.
+    def _derive_project_name_fallback(self, shared_context: SLSharedContext) -> str:
+        """Attempt to derive a project name if not already fully resolved in shared_context.
+
+        This method serves as a fallback if `shared_context["project_name"]` is still
+        a sentinel like "auto-generated" or missing. The primary name resolution
+        should occur in `main.py`.
 
         Args:
             shared_context: The shared context dictionary.
 
         Returns:
-            The derived or existing project name.
-
-        Raises:
-            ValueError: If project name derivation fails.
+            A derived project name string, or a generic fallback.
         """
-        project_name_shared_any: Any = shared_context.get("project_name")
-        project_name_shared: Optional[str] = (
-            str(project_name_shared_any) if isinstance(project_name_shared_any, str) else None
-        )
-
-        if project_name_shared and project_name_shared.strip():
-            self._log_info("Using provided project name: %s", project_name_shared.strip())
-            return project_name_shared.strip()
-
         repo_url_any: Any = shared_context.get("repo_url")
         local_dir_str_any: Any = shared_context.get("local_dir")
         repo_url: Optional[str] = str(repo_url_any) if isinstance(repo_url_any, str) else None
@@ -89,40 +86,44 @@ class FetchCode(BaseNode[FetchPreparedInputs, FetchExecutionResult]):
                     raise ValueError("Empty name derived from URL after stripping .git.")
                 derived_name = derived_name_base
             except (IndexError, ValueError) as e:
-                self._log_warning("Could not derive project name from repo_url '%s': %s. Using fallback.", repo_url, e)
-                derived_name = "unknown_repo"
+                self._log_warning("Could not derive project name from repo_url '%s': %s.", repo_url, e)
+                derived_name = "unknown_repo_at_node"
         elif local_dir_str:
             try:
-                resolved_path = Path(local_dir_str).resolve(strict=True)
+                resolved_path = Path(local_dir_str).resolve(strict=False)  # strict=False more robust
                 derived_name_base = resolved_path.name
-                derived_name = derived_name_base if derived_name_base else "unknown_dir"
+                derived_name = derived_name_base if derived_name_base else "unknown_dir_at_node"
             except (OSError, ValueError) as e:
-                self._log_warning(
-                    "Could not derive project name from local_dir '%s': %s. Using fallback.", local_dir_str, e
-                )
-                derived_name = "unknown_dir"
-        else:
-            self._log_error("Cannot derive project name: 'repo_url' or 'local_dir' missing and no explicit name.")
-            raise ValueError("Missing 'repo_url' or 'local_dir' in shared context to derive project name.")
+                self._log_warning("Could not derive project name from local_dir '%s': %s.", local_dir_str, e)
+                derived_name = "unknown_dir_at_node"
+        return derived_name or "project_name_fallback"
 
-        final_name: str = derived_name if derived_name else "unknown_project"
-        shared_context["project_name"] = final_name
-        self._log_info("Derived project name: %s", final_name)
-        return final_name
-
-    def _gather_prep_context(self, shared_context: SLSharedContext, project_name: str) -> _PrepContext:
+    def _gather_prep_context(self, shared_context: SLSharedContext) -> _PrepContext:
         """Gather and validate context needed for fetching files.
 
         Args:
-            shared_context: The shared context dictionary.
-            project_name: The derived or provided project name.
+            shared_context: The shared context dictionary. Expected to contain all necessary
+                            keys like 'project_name', 'include_patterns', etc., which should
+                            have been populated by `main.py`.
 
         Returns:
-            A _PrepContext dictionary.
+            A `_PrepContext` dictionary containing validated and typed parameters.
 
         Raises:
-            TypeError: If max_file_size is not an integer.
+            ValueError: If a required key is missing from `shared_context` or has an invalid value.
+            TypeError: If `max_file_size` from `shared_context` is not an integer.
         """
+        project_name_val: Any = self._get_required_shared(shared_context, "project_name")
+        if not isinstance(project_name_val, str) or not project_name_val.strip():
+            # This check implies that project_name should have been resolved by main.py
+            # If it's still 'auto-generated' here, derivation within the node might be needed as a fallback.
+            project_name_str = self._derive_project_name_fallback(shared_context)
+            self._log_warning(
+                "Project name was '%s', using node-derived fallback: '%s'", project_name_val, project_name_str
+            )
+        else:
+            project_name_str = project_name_val
+
         repo_url_any: Any = shared_context.get("repo_url")
         local_dir_str_any: Any = shared_context.get("local_dir")
         include_patterns_any: Any = self._get_required_shared(shared_context, "include_patterns")
@@ -131,11 +132,15 @@ class FetchCode(BaseNode[FetchPreparedInputs, FetchExecutionResult]):
         use_relative_paths_any: Any = shared_context.get("use_relative_paths", True)
         github_token_any: Any = shared_context.get("github_token")
 
-        if not isinstance(max_file_size_any, int):
-            raise TypeError(f"max_file_size must be an int, got {type(max_file_size_any)}")
+        operation_mode_val: Any = shared_context.get("current_operation_mode", "unknown")
+        operation_mode: str = str(operation_mode_val)
+        is_critical = operation_mode in CRITICAL_FETCH_MODES
+
+        if not isinstance(max_file_size_any, int) or max_file_size_any < 0:
+            raise TypeError(f"max_file_size must be a non-negative int, got {max_file_size_any}")
 
         context: _PrepContext = {
-            "project_name": project_name,
+            "project_name": project_name_str,
             "repo_url": str(repo_url_any) if isinstance(repo_url_any, str) else None,
             "local_dir_str": str(local_dir_str_any) if isinstance(local_dir_str_any, str) else None,
             "include_patterns": include_patterns_any if isinstance(include_patterns_any, set) else set(),
@@ -143,23 +148,32 @@ class FetchCode(BaseNode[FetchPreparedInputs, FetchExecutionResult]):
             "max_file_size": max_file_size_any,
             "use_relative_paths": bool(use_relative_paths_any),
             "github_token": str(github_token_any) if isinstance(github_token_any, str) else None,
+            "is_file_fetching_critical": is_critical,
         }
         return context
 
     def _fetch_files_from_source(self, context: _PrepContext) -> tuple[dict[str, str], bool]:
         """Fetch files based on the provided context (repo or local dir).
 
+        Delegates to `crawl_github_repo` or `crawl_local_directory` based on
+        whether `repo_url` or `local_dir_str` is present in the context.
+
         Args:
-            context: The _PrepContext dictionary.
+            context: The `_PrepContext` dictionary containing all necessary parameters
+                     for fetching, including URLs, paths, patterns, and tokens.
 
         Returns:
-            A tuple: (dictionary of fetched files, boolean success status).
+            A tuple:
+                - A dictionary mapping file paths (strings) to their content (strings).
+                - A boolean indicating if the fetch attempt was made (True) or if
+                  no source was specified (False).
         """
+        # Lazy imports to avoid circular dependencies or slow startup if utils are heavy
         from sourcelens.utils.github import crawl_github_repo
         from sourcelens.utils.local import crawl_local_directory
 
         files_dict: dict[str, str] = {}
-        fetch_successful = False
+        fetch_attempt_made = False
 
         if context["repo_url"]:
             self._log_info("Crawling GitHub repository: %s", context["repo_url"])
@@ -171,7 +185,7 @@ class FetchCode(BaseNode[FetchPreparedInputs, FetchExecutionResult]):
                 max_file_size=context["max_file_size"],
                 use_relative_paths=context["use_relative_paths"],
             )
-            fetch_successful = True
+            fetch_attempt_made = True
         elif context["local_dir_str"]:
             self._log_info("Crawling local directory: %s", context["local_dir_str"])
             files_dict = crawl_local_directory(
@@ -181,41 +195,46 @@ class FetchCode(BaseNode[FetchPreparedInputs, FetchExecutionResult]):
                 max_file_size=context["max_file_size"],
                 use_relative_paths=context["use_relative_paths"],
             )
-            fetch_successful = True
+            fetch_attempt_made = True
         else:
             self._log_error("Neither repository URL nor local directory specified for fetching.")
-            # fetch_successful remains False
-        return files_dict, fetch_successful
+        return files_dict, fetch_attempt_made
 
     def pre_execution(self, shared_context: SLSharedContext) -> FetchPreparedInputs:
         """Prepare parameters, fetch files, and update shared context.
 
-        This phase involves deriving the project name, gathering necessary
-        configurations, and then fetching the source code files either from
-        a GitHub repository or a local directory. The list of fetched files
-        (path and content) is stored in the `shared_context`.
-
         Args:
-            shared_context: The shared context dictionary.
+            shared_context: The shared context dictionary. It is expected to contain
+                            'project_name', 'include_patterns', 'exclude_patterns',
+                            'max_file_size', 'current_operation_mode', and optionally
+                            'repo_url', 'local_dir', 'use_relative_paths', 'github_token'.
 
         Returns:
-            A boolean indicating whether the fetch attempt was made and considered
-            successful (even if no files were ultimately matched or found).
-            Returns False if a critical error prevented the fetch attempt.
+            A boolean indicating whether the fetch attempt was made.
+
+        Raises:
+            ValueError: If essential pre-requisite data is missing from `shared_context`.
+            TypeError: If `max_file_size` from `shared_context` is not a valid integer.
         """
         self._log_info("Preparing and fetching code...")
         files_list: FileDataListInternal = []
-        fetch_attempt_made_successfully = False
-        project_name_for_log: str = str(shared_context.get("project_name", "unknown_project_initial"))
+        fetch_attempt_made = False
+        project_name_for_log: str = str(shared_context.get("project_name", "unknown_project_in_fetch_pre"))
 
-        from sourcelens.utils.github import GithubApiError  # Lazy import for GithubApiError
+        from sourcelens.utils.github import GithubApiError  # Lazy import
 
         try:
-            project_name = self._derive_project_name(shared_context)
-            project_name_for_log = project_name
+            # Ensure project_name is valid before proceeding
+            project_name_val = self._get_required_shared(shared_context, "project_name")
+            if not isinstance(project_name_val, str) or not project_name_val.strip():
+                raise ValueError("Project name in shared_context is invalid or empty.")
+            project_name_for_log = project_name_val
 
-            prep_context = self._gather_prep_context(shared_context, project_name)
-            files_dict, fetch_attempt_made_successfully = self._fetch_files_from_source(prep_context)
+            prep_context = self._gather_prep_context(shared_context)
+            # Update log name if it was derived/validated inside _gather_prep_context
+            project_name_for_log = prep_context["project_name"]
+
+            files_dict, fetch_attempt_made = self._fetch_files_from_source(prep_context)
             files_list = list(files_dict.items())
 
         except (OSError, GithubApiError, ValueError, ImportError, TypeError) as e:
@@ -225,20 +244,19 @@ class FetchCode(BaseNode[FetchPreparedInputs, FetchExecutionResult]):
                 e,
                 exc_info=True,
             )
-            files_list = []  # Ensure files_list is empty on error
-            fetch_attempt_made_successfully = False  # Mark as failed
-        # Removed broad Exception catch as per BLE001, specific errors are handled.
-
+            files_list = []
+            fetch_attempt_made = False  # Ensure this is false on any of these errors
         shared_context["files"] = files_list
-        if fetch_attempt_made_successfully:
+
+        if fetch_attempt_made:
             if not files_list:
                 self._log_warning("Fetch operation completed, but no files matched criteria or were found.")
             else:
                 self._log_info("Fetched %d files successfully.", len(files_list))
         else:
-            self._log_error("Fetch code operation failed critically or found no source to process.")
+            self._log_error("Fetch code operation did not proceed or failed critically during setup/API call.")
 
-        return fetch_attempt_made_successfully
+        return fetch_attempt_made
 
     def execution(self, prepared_inputs: FetchPreparedInputs) -> FetchExecutionResult:
         """Execute the main logic for FetchCode (which is a no-op).
@@ -251,9 +269,9 @@ class FetchCode(BaseNode[FetchPreparedInputs, FetchExecutionResult]):
                              indicating if the fetch attempt was made.
 
         Returns:
-            None, as this node's main work is preparatory.
+            None.
         """
-        self._log_info("FetchCode execution phase (prep result: %s).", prepared_inputs)
+        self._log_info("FetchCode execution phase (prep_inputs indicate attempt_made: %s).", prepared_inputs)
         if not prepared_inputs:
             self._log_warning("Pre-execution step for FetchCode indicated a failure. No files may have been fetched.")
         return None
@@ -264,27 +282,80 @@ class FetchCode(BaseNode[FetchPreparedInputs, FetchExecutionResult]):
         prepared_inputs: FetchPreparedInputs,
         execution_outputs: FetchExecutionResult,
     ) -> None:
-        """Finalize the FetchCode node's operation by logging the outcome.
+        """Finalize the FetchCode node's operation, logging and potentially raising an error.
+
+        If `prepared_inputs` (indicating a successful fetch attempt) is True but no files
+        were actually found, and if the current operation mode (e.g., "code")
+        deems file fetching critical, this method will raise `NoFilesFetchedError`.
+        Otherwise, it logs the outcome.
 
         Args:
-            shared_context: The shared context dictionary.
-            prepared_inputs: The boolean result from the `pre_execution` method.
-            execution_outputs: The result from the `execution` method (None).
+            shared_context: The shared context dictionary. Expected to contain 'files'
+                            (list of fetched file data), 'source_config' (for language
+                            profile info), 'include_patterns', and
+                            'current_operation_mode'.
+            prepared_inputs: The boolean result from `pre_execution`, indicating if
+                             the fetch attempt was made.
+            execution_outputs: The result from `execution` (None).
+
+        Raises:
+            NoFilesFetchedError: If `prepared_inputs` is True, no files were found,
+                                 and the `current_operation_mode` in `shared_context`
+                                 is one of the `CRITICAL_FETCH_MODES`.
         """
-        del execution_outputs  # Unused
+        del execution_outputs
 
         files_any: Any = shared_context.get("files", [])
         num_files: int = len(files_any) if isinstance(files_any, list) else 0
         status_message: str
 
-        if not prepared_inputs:  # If pre_execution itself failed (e.g. couldn't make attempt)
-            status_message = "with critical errors during fetch attempt"
-        elif num_files > 0:
+        current_operation_mode_val: Any = shared_context.get("current_operation_mode", "unknown")
+        current_operation_mode: str = str(current_operation_mode_val)
+        is_critical_mode = current_operation_mode in CRITICAL_FETCH_MODES
+
+        if not prepared_inputs:
+            status_message = "with critical errors during fetch attempt or setup"
+            self._log_error(
+                "Fetch code operation did not proceed or failed critically. Files in context: %d", num_files
+            )
+            if is_critical_mode:
+                # This error signifies a failure before or during the fetch attempt itself.
+                raise NoFilesFetchedError(
+                    f"Critical error during file fetching setup/attempt for {current_operation_mode} mode. See logs."
+                )
+        elif num_files == 0:
+            status_message = "but no files matched the configured criteria"
+            source_cfg_val: Any = shared_context.get("source_config", {})
+            source_cfg: dict[str, Any] = source_cfg_val if isinstance(source_cfg_val, dict) else {}
+            profile_id: str = str(source_cfg.get("profile_id", "N/A"))
+            lang_name: str = str(source_cfg.get("language_name_for_llm", "N/A"))
+            include_patterns_val: Any = shared_context.get("include_patterns", set())
+            include_patterns_set: set[str] = include_patterns_val if isinstance(include_patterns_val, set) else set()
+
+            warn_msg_l1 = "No files were found matching the include patterns for the active language profile."
+            warn_msg_l2 = f"  Active Profile ID: '{profile_id}' (Language: {lang_name})."
+            # Corrected C414: sorted() can take a set directly
+            # Corrected E501: Broke down the log message for clarity and length
+            sorted_patterns_str = str(sorted(include_patterns_set) if include_patterns_set else ["None"])
+            warn_msg_l3_part1 = "  Effective Include Patterns: "
+            warn_msg_l3_part2 = sorted_patterns_str
+
+            self._log_warning(warn_msg_l1)
+            self._log_warning(warn_msg_l2)
+            self._log_warning("%s%s", warn_msg_l3_part1, warn_msg_l3_part2)  # Log as two parts if too long
+
+            if is_critical_mode:
+                error_message_parts = [
+                    warn_msg_l1,
+                    warn_msg_l2,
+                    f"{warn_msg_l3_part1}{warn_msg_l3_part2}",
+                    "Halting execution as no files were found for critical code analysis.",
+                ]
+                raise NoFilesFetchedError("\n".join(error_message_parts))
+        else:
             status_message = "successfully"
-        else:  # pre_execution was "successful" in making an attempt, but no files found
-            status_message = "with issues or no files found"
 
         self._log_info("FetchCode post_execution finished %s. Files in shared context: %d", status_message, num_files)
 
 
-# End of src/sourcelens/nodes/n01_fetch_code.py
+# End of src/sourcelens/nodes/code/n01_fetch_code.py

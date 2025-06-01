@@ -15,50 +15,51 @@
 
 """Node responsible for generating an AI-powered project review."""
 
-from typing import Any, Final, Optional
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 from typing_extensions import TypeAlias
 
 from sourcelens.nodes.base_node import BaseNode, SLSharedContext
-from sourcelens.prompts.code.project_review_prompts import ProjectReviewPrompts
+from sourcelens.prompts.code.project_review_prompts import (
+    PROJECT_REVIEW_SCHEMA,  # Import schema from prompts module
+    ProjectReviewPrompts,
+)
 from sourcelens.utils.llm_api import LlmApiError, call_llm
 from sourcelens.utils.validation import ValidationFailure, validate_yaml_dict
+
+if TYPE_CHECKING:
+    ResolvedLlmConfigDict: TypeAlias = dict[str, Any]
+    ResolvedCacheConfigDict: TypeAlias = dict[str, Any]
+    # ResolvedCodeAnalysisOutputOptions: TypeAlias = dict[str, Any] # Not directly used in this node
 
 ProjectReviewPreparedInputs: TypeAlias = dict[str, Any]
 ProjectReviewExecutionResult: TypeAlias = Optional[str]
 
 AbstractionsListInternal: TypeAlias = list[dict[str, Any]]
 RelationshipsDictInternal: TypeAlias = dict[str, Any]
-FileDataListInternal: TypeAlias = list[tuple[str, str]]
-LlmConfigDictInternal: TypeAlias = dict[str, Any]
-CacheConfigDictInternal: TypeAlias = dict[str, Any]
-ConfigDictInternal: TypeAlias = dict[str, Any]
-OutputConfigDictInternal: TypeAlias = dict[str, Any]
+FileDataInternal: TypeAlias = tuple[str, str]
+FileDataListInternal: TypeAlias = list[FileDataInternal]
 
-MAX_REVIEW_SNIPPET_LEN: Final[int] = 200
-PROJECT_REVIEW_SCHEMA: Final[dict[str, Any]] = {
-    "type": "object",
-    "properties": {
-        "key_characteristics": {"type": "array", "items": {"type": "string"}},
-        "areas_for_discussion": {"type": "array", "items": {"type": "string"}},
-        "observed_patterns": {"type": "array", "items": {"type": "string"}},
-        "coding_practice_observations": {"type": "array", "items": {"type": "string"}},
-        "overall_summary": {"type": "string"},
-    },
-    "required": ["key_characteristics", "areas_for_discussion", "observed_patterns", "overall_summary"],
-    "additionalProperties": False,
-}
+MAX_REVIEW_SNIPPET_LEN_LOG: Final[int] = 200
+EXPECTED_FILE_DATA_ITEM_LENGTH: Final[int] = 2
 
 
 class GenerateProjectReview(BaseNode[ProjectReviewPreparedInputs, ProjectReviewExecutionResult]):
-    """Generate an AI-powered project review based on analyzed project data."""
+    """Generate an AI-powered project review based on analyzed project data.
+
+    This node takes identified abstractions, their relationships, and file data
+    to prompt an LLM for a structured project review. The review includes key
+    characteristics, areas for discussion, observed patterns, and an overall
+    summary. The LLM's YAML output is validated and then formatted into Markdown.
+    """
 
     def _format_review_yaml_to_markdown(self, review_data: dict[str, Any], project_name: str) -> str:
         """Format the structured YAML data from LLM into Markdown.
 
         Args:
             review_data: The validated dictionary parsed from LLM's YAML response.
-            project_name: The name of the project.
+                         Expected to conform to `PROJECT_REVIEW_SCHEMA`.
+            project_name: The name of the project, used in the review title.
 
         Returns:
             A string containing the formatted Markdown for the project review chapter.
@@ -130,69 +131,111 @@ class GenerateProjectReview(BaseNode[ProjectReviewPreparedInputs, ProjectReviewE
     def pre_execution(self, shared_context: SLSharedContext) -> ProjectReviewPreparedInputs:
         """Prepare necessary data and context for generating the project review.
 
+        Retrieves abstractions, relationships, file data, project details, and
+        relevant LLM/cache configurations from `shared_context`.
+        Determines if project review generation should be skipped based on config.
+
         Args:
-            shared_context: The shared context dictionary.
+            shared_context: The shared context dictionary. Expected to contain:
+                            "abstractions", "relationships", "files", "project_name",
+                            "config" (full resolved config), "language",
+                            "llm_config" (resolved for current mode),
+                            "cache_config" (common cache settings),
+                            "current_mode_output_options".
 
         Returns:
-            A dictionary containing data for the `execution` method, or indicating skip.
+            A dictionary containing data for the `execution` method, or
+            `{"skip": True, "reason": ...}` if prerequisites are not met
+            or review generation is disabled.
+
+        Raises:
+            ValueError: If essential data like 'config' or specific sub-keys are
+                        missing or of an unexpected type in `shared_context`.
         """
         self._log_info("Preparing for project review generation.")
         try:
-            config_any: Any = self._get_required_shared(shared_context, "config")
-            config: ConfigDictInternal = config_any if isinstance(config_any, dict) else {}
-            output_config_any: Any = config.get("output", {})
-            output_config: OutputConfigDictInternal = output_config_any if isinstance(output_config_any, dict) else {}
+            # Use 'current_mode_output_options' from shared_context set by main.py
+            current_mode_opts_any: Any = shared_context.get("current_mode_output_options", {})
+            current_mode_opts: dict[str, Any] = current_mode_opts_any if isinstance(current_mode_opts_any, dict) else {}
 
-            include_review_any: Any = output_config.get("include_project_review")
-            include_review: bool = include_review_any if isinstance(include_review_any, bool) else False
+            include_review_val: Any = current_mode_opts.get("include_project_review")
+            include_review: bool = include_review_val if isinstance(include_review_val, bool) else False
 
             if not include_review:
                 self._log_info("Project review generation is disabled in configuration. Skipping.")
-                return {"skip": True, "reason": "Disabled in configuration"}
+                return {"skip": True, "reason": "Disabled via 'output_options.include_project_review'"}
 
-            abstractions_data: AbstractionsListInternal = self._get_required_shared(shared_context, "abstractions")  # type: ignore[assignment]
-            if not isinstance(abstractions_data, list):
-                raise TypeError("Abstractions data is not a list.")
+            abstractions_data_any: Any = self._get_required_shared(shared_context, "abstractions")
+            relationships_data_any: Any = self._get_required_shared(shared_context, "relationships")
+            files_data_any: Any = self._get_required_shared(shared_context, "files")
+            project_name_val: Any = self._get_required_shared(shared_context, "project_name")
+            language_val: Any = shared_context.get("language", "unknown")
+            llm_config_val: Any = self._get_required_shared(shared_context, "llm_config")
+            cache_config_val: Any = self._get_required_shared(shared_context, "cache_config")
 
-            relationships_data: RelationshipsDictInternal = self._get_required_shared(shared_context, "relationships")  # type: ignore[assignment]
-            if not isinstance(relationships_data, dict):
-                raise TypeError("Relationships data is not a dict.")
+            abstractions_data: AbstractionsListInternal = []
+            if isinstance(abstractions_data_any, list):
+                abstractions_data = [item for item in abstractions_data_any if isinstance(item, dict)]
+            if len(abstractions_data) != len(abstractions_data_any or []):
+                self._log_warning("Some items in 'abstractions' were not dictionaries.")
 
-            files_data: FileDataListInternal = self._get_required_shared(shared_context, "files")  # type: ignore[assignment]
-            if not isinstance(files_data, list):
-                raise TypeError("Files data is not a list.")
+            relationships_data: RelationshipsDictInternal = (
+                relationships_data_any if isinstance(relationships_data_any, dict) else {}
+            )
+            files_data_raw: list[Any] = files_data_any if isinstance(files_data_any, list) else []
+            files_data: FileDataListInternal = []
+            for item in files_data_raw:
+                if (
+                    isinstance(item, tuple)
+                    and len(item) == EXPECTED_FILE_DATA_ITEM_LENGTH
+                    and isinstance(item[0], str)
+                    and isinstance(item[1], str)
+                ):
+                    files_data.append(item)
+                else:
+                    self._log_warning("Skipping invalid item in files_data for project review context: %s", item)
 
             prepared_inputs: ProjectReviewPreparedInputs = {
                 "skip": False,
-                "project_name": str(self._get_required_shared(shared_context, "project_name")),
+                "project_name": str(project_name_val),
                 "abstractions_data": abstractions_data,
                 "relationships_data": relationships_data,
                 "files_data": files_data,
-                "language": str(shared_context.get("language", "unknown")),
-                "llm_config": self._get_required_shared(shared_context, "llm_config"),
-                "cache_config": self._get_required_shared(shared_context, "cache_config"),
+                "language": str(language_val),
+                "llm_config": llm_config_val if isinstance(llm_config_val, dict) else {},
+                "cache_config": cache_config_val if isinstance(cache_config_val, dict) else {},
             }
             return prepared_inputs
-        except (ValueError, TypeError) as e_prep_val:
+        except ValueError as e_prep_val:
             self._log_error("Preparation for project review failed due to missing/invalid data: %s", e_prep_val)
             return {"skip": True, "reason": f"Data preparation error: {e_prep_val!s}"}
+        except (KeyError, TypeError) as e_struct:  # Should be less likely with ValueError catching missing keys
+            self._log_error("Error accessing config structure during project review pre_execution: %s", e_struct)
+            return {"skip": True, "reason": f"Configuration structure error: {e_struct!s}"}
 
     def execution(self, prepared_inputs: ProjectReviewPreparedInputs) -> ProjectReviewExecutionResult:
         """Generate the project review using an LLM.
 
-        If an LlmApiError occurs, it is re-raised to be handled by the Node's retry logic.
-        Other errors during validation or processing result in a fallback Markdown message.
+        If an `LlmApiError` occurs, it is re-raised to be handled by the `Node`'s
+        retry logic (if configured). Other errors during validation or processing
+        result in a fallback Markdown message being returned.
 
         Args:
             prepared_inputs: The dictionary returned by the `pre_execution` method.
+                             Expected to contain all necessary data for prompting the LLM.
 
         Returns:
             A string containing the Markdown content for the project review,
-            or None if skipped, or an error message string on failure.
+            or None if execution was skipped. If LLM call or validation fails
+            after retries (handled by Node), this method's `execution_fallback`
+            will be invoked by the `Node`'s internal logic.
+
+        Raises:
+            LlmApiError: If the LLM API call fails, to allow for retries.
         """
         if prepared_inputs.get("skip", True):
-            reason_any: Any = prepared_inputs.get("reason", "N/A")
-            self._log_info("Skipping project review execution. Reason: %s", str(reason_any))
+            reason_val: Any = prepared_inputs.get("reason", "N/A")
+            self._log_info("Skipping project review execution. Reason: %s", str(reason_val))
             return None
 
         project_name: str = prepared_inputs["project_name"]
@@ -202,8 +245,8 @@ class GenerateProjectReview(BaseNode[ProjectReviewPreparedInputs, ProjectReviewE
         relationships_data: RelationshipsDictInternal = prepared_inputs["relationships_data"]  # type: ignore[assignment]
         files_data: FileDataListInternal = prepared_inputs["files_data"]  # type: ignore[assignment]
         language: str = prepared_inputs["language"]
-        llm_config: LlmConfigDictInternal = prepared_inputs["llm_config"]  # type: ignore[assignment]
-        cache_config: CacheConfigDictInternal = prepared_inputs["cache_config"]  # type: ignore[assignment]
+        llm_config: "ResolvedLlmConfigDict" = prepared_inputs["llm_config"]  # type: ignore[assignment]
+        cache_config: "ResolvedCacheConfigDict" = prepared_inputs["cache_config"]  # type: ignore[assignment]
 
         prompt = ProjectReviewPrompts.format_project_review_prompt(
             project_name=project_name,
@@ -214,12 +257,13 @@ class GenerateProjectReview(BaseNode[ProjectReviewPreparedInputs, ProjectReviewE
         )
 
         try:
-            response_text = call_llm(prompt, llm_config, cache_config)  # This can raise LlmApiError
+            response_text = call_llm(prompt, llm_config, cache_config)
+            # PROJECT_REVIEW_SCHEMA is now imported from the prompts module
             validated_yaml_data = validate_yaml_dict(response_text, PROJECT_REVIEW_SCHEMA)
             markdown_content = self._format_review_yaml_to_markdown(validated_yaml_data, project_name)
             self._log_info("Successfully generated project review content.")
             return markdown_content
-        except LlmApiError:  # Re-raise LlmApiError to trigger Node's retry/fallback
+        except LlmApiError:
             self._log_error(
                 "LLM call failed during project review generation. This error will be re-raised for retry/fallback."
             )
@@ -227,27 +271,37 @@ class GenerateProjectReview(BaseNode[ProjectReviewPreparedInputs, ProjectReviewE
         except ValidationFailure as e_val:
             self._log_error("YAML validation failed for project review: %s", e_val)
             return f"# Project Review: {project_name}\n\n> AI-generated review validation failed: {e_val!s}"
-        except (ValueError, TypeError, AttributeError, KeyError) as e_proc:  # Other processing errors
+        except (ValueError, TypeError, AttributeError, KeyError) as e_proc:
             self._log_error("Unexpected error processing project review: %s", e_proc, exc_info=True)
             return f"# Project Review: {project_name}\n\n> Unexpected error generating review: {e_proc!s}"
 
-    def execution_fallback(  # Override from Node
+    def execution_fallback(
         self, prepared_inputs: ProjectReviewPreparedInputs, exc: Exception
     ) -> ProjectReviewExecutionResult:
         """Handle fallback if all execution attempts for project review fail.
 
+        This method is called by the parent `Node` class's retry mechanism if all
+        attempts to call `self.execution()` (which internally calls the LLM) fail
+        due to recoverable errors (like `LlmApiError`).
+
         Args:
-            prepared_inputs: The data from the `pre_execution` phase.
-            exc: The exception that occurred during the last execution attempt.
+            prepared_inputs: The data from the `pre_execution` phase, which was
+                             passed to the failed `execution` attempts.
+            exc: The exception that occurred during the final execution attempt
+                 (typically an `LlmApiError`).
 
         Returns:
-            A Markdown string indicating the failure.
+            A Markdown string indicating the failure to generate the project review.
         """
-        project_name: str = prepared_inputs.get("project_name", "Unknown Project")
+        project_name_val: Any = prepared_inputs.get("project_name", "Unknown Project")
+        project_name: str = str(project_name_val)
         self._log_error(
             "All attempts to generate project review for '%s' failed. Last error: %s", project_name, exc, exc_info=True
         )
-        return f"# Project Review: {project_name}\n\n> AI-generated review could not be created after multiple attempts. Error: {exc!s}"  # noqa: E501
+        return (
+            f"# Project Review: {project_name}\n\n"
+            f"> AI-generated review could not be created after multiple attempts. Error: {exc!s}"
+        )
 
     def post_execution(
         self,
@@ -259,8 +313,10 @@ class GenerateProjectReview(BaseNode[ProjectReviewPreparedInputs, ProjectReviewE
 
         Args:
             shared_context: The shared context dictionary to update.
-            prepared_inputs: Result from the `pre_execution` phase.
-            execution_outputs: Markdown content of the project review, or None/error string.
+            prepared_inputs: Result from the `pre_execution` phase. Used here to
+                             check if execution was skipped.
+            execution_outputs: Markdown content of the project review, or None if
+                               skipped, or an error string if generation failed.
         """
         if prepared_inputs.get("skip", True):
             shared_context["project_review_content"] = None
@@ -268,13 +324,22 @@ class GenerateProjectReview(BaseNode[ProjectReviewPreparedInputs, ProjectReviewE
             return
 
         shared_context["project_review_content"] = execution_outputs
-        if execution_outputs and execution_outputs.strip():
-            snippet = execution_outputs[:MAX_REVIEW_SNIPPET_LEN].replace("\n", " ")
-            if len(execution_outputs) > MAX_REVIEW_SNIPPET_LEN:
+        project_name = str(prepared_inputs.get("project_name", "Unknown Project"))
+        error_message_start_heuristic = f"# Project Review: {project_name}\n\n> AI-generated review"
+
+        if (
+            execution_outputs
+            and execution_outputs.strip()
+            and not execution_outputs.startswith(error_message_start_heuristic)
+        ):
+            snippet = execution_outputs[:MAX_REVIEW_SNIPPET_LEN_LOG].replace("\n", " ")
+            if len(execution_outputs) > MAX_REVIEW_SNIPPET_LEN_LOG:
                 snippet += "..."
             self._log_info("Stored project review content in shared context (snippet: '%s').", snippet)
+        elif execution_outputs:
+            self._log_warning("Project review content from execution was an error message or empty. Stored as is.")
         else:
-            self._log_warning("Project review content from execution was None or empty. Stored None.")
+            self._log_warning("Project review content from execution was None. Stored None.")
 
 
-# End of src/sourcelens/nodes/n09_generate_project_review.py
+# End of src/sourcelens/nodes/code/n09_generate_project_review.py
