@@ -1,20 +1,27 @@
-# This file is maintained for compatibility or simple deployments.
-# The primary source of dependencies is pyproject.toml.
-# Generate using: pip freeze > requirements.txt
-# Or better: pip install . && pip freeze | grep -E '^(pocketflow|PyYAML|requests|GitPython|google-cloud-aiplatform|google-generativeai|python-dotenv|attrs|jsonschema)==' > requirements.txt
+# This file lists the runtime dependencies for a full installation
+# of sourceLens, including all available analysis flows.
+# It is derived from pyproject.toml.
+# For development, use `pip install -e .[dev,all]`.
 
-pyyaml>=6.0
-requests>=2.28.0
-gitpython>=3.1.0
-google-cloud-aiplatform>=1.25.0
-google-generativeai>=0.8.0
-python-dotenv>=1.0.0
+# Core dependencies
+PyYAML>=6.0
 attrs>=21.3.0
+typing-extensions>=4.0.0
 jsonschema>=4.0.1
-types-jsonschema >=4.0.1
-types-requests >=2.3.0
-types-PyYAML >=6.0.0
-crawl4ai>=0.6.3
-playwright>=1.40.0 
+python-dotenv>=1.0.0
+requests>=2.28.0
+google-generativeai>=0.8.0
+google-cloud-aiplatform>=1.25.0
+# openai>=1.0.0 # Uncomment if added to pyproject.toml core or 'all' extra
+# anthropic>=0.20.0 # Uncomment if added to pyproject.toml core or 'all' extra
 
-# End of requirements.txt
+# Dependencies for FL01_code_analysis flow
+GitPython>=3.1.0
+
+# Dependencies for FL02_web_crawling flow
+crawl4ai>=0.6.3
+# playwright>=1.40.0 # Typically a transitive dependency of crawl4ai
+
+# Note: Type stubs like types-PyYAML, types-requests, types-jsonschema
+# are development dependencies and should not be in this runtime requirements.txt.
+# They are managed via `pip install .[dev]`.

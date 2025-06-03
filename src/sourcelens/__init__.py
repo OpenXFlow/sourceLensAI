@@ -15,19 +15,26 @@
 
 """SourceLens Package.
 
-An AI-powered tool to generate tutorials from codebases by analyzing
-source code and leveraging Large Language Models.
+An AI-powered tool to generate tutorials from codebases or web content
+by analyzing source code or web pages and leveraging Large Language Models.
+Its primary capabilities include generating code abstractions, documentation chapters,
+diagrams, and identifying use case scenarios.
 """
 
-# Optionally import key classes/functions for easier top-level access
+# Define package version.
+# This version should be kept in sync with the version in pyproject.toml.
+__version__ = "0.2.0"  # Version was 0.1.1, assuming an update.
+
+# It's generally cleaner to let users import directly from submodules
+# (e.g., from sourcelens.main import main) rather than re-exporting too much here,
+# unless specific functions form the primary public API of the package.
+#
+# Example of a potential re-export if `main` function was intended as a direct API:
 # from .main import main
-# from .flow import create_tutorial_flow
-
-# Define package version
-__version__ = "0.1.1"
-
-# (Removed the incorrect import: from .github import ...)
-# Imports should generally happen within the modules that use them,
-# or explicitly re-exported here if intended as part of the package's public API.
+#
+# __all__ = [
+# "main",
+# "__version__",
+# ]
 
 # End of src/sourcelens/__init__.py

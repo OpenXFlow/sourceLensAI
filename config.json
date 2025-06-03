@@ -1,0 +1,318 @@
+{
+  "common": {
+    "common_output_settings": {
+      "default_output_name": "auto-generated",
+      "main_output_directory": "output",
+      "generated_text_language": "english"
+    },
+    "logging": {
+      "log_dir": "logs",
+      "log_level": "DEBUG"
+    },
+    "cache_settings": {
+      "use_llm_cache": true,
+      "llm_cache_file": ".cache/llm_cache.json"
+    },
+    "llm_default_options": {
+      "max_retries": 5,
+      "retry_wait_seconds": 20
+    }
+  },
+  "FL01_code_analysis": {
+    "enabled": true,
+    "github_token_env_var": "GITHUB_TOKEN",
+    "github_token": "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",
+    "active_language_profile_id": "python_ast_default",
+    "active_llm_provider_id": "gemini_flash_main",
+    "source_options": {
+      "max_file_size_bytes": 150000,
+      "use_relative_paths": true,
+      "default_exclude_patterns": [
+        "__pycache__/*", "venv/*", ".venv/*", "env/*", "ENV/*", "*.pyc", "*.pyo",
+        "*test*", "tests/*", "test_*.py", "*_test.py", "docs/*", "examples/*",
+        "dist/*", "build/*", "*.egg-info/*", ".git/*", ".github/*", ".vscode/*",
+        "node_modules/*", "output/*", "logs/*", ".cache/*", "*.log", "*.tmp",
+        "*.bak", ".DS_Store", "Thumbs.db", "*.swp", "*.swo",
+        "target/*", "*.class", "*.jar", "*.war", "*.ear",
+        "bin/*", "obj/*", "Debug/*", "Release/*", "*.o", "*.obj",
+        "*.a", "*.lib", "*.so", "*.dylib", "*.dll",
+        "vendor/*", "Pods/*", "tmp/*", "temp/*", "log/*"
+      ]
+    },
+    "diagram_generation": {
+      "enabled": true,
+      "format": "mermaid",
+      "include_relationship_flowchart": true,
+      "include_class_diagram": true,
+      "include_package_diagram": true,
+      "include_file_structure_diagram": true,
+      "sequence_diagrams": {
+        "enabled": true,
+        "max_diagrams_to_generate": 5
+      }
+    },
+    "output_options": {
+      "include_source_index": true,
+      "include_project_review": true
+    }
+  },
+  "FL02_web_crawling": {
+    "enabled": true,
+    "active_llm_provider_id": "gemini_flash_main",
+    "crawler_options": {
+      "default_output_subdir_name": "crawled_web_content",
+      "processing_mode": "llm_extended",
+      "max_depth_recursive": 2,
+      "user_agent": "SourceLensBot/0.1 (https://github.com/openXFlow/sourceLensAI)",
+      "respect_robots_txt": true,
+      "max_concurrent_requests": 3,
+      "default_page_timeout_ms": 30000,
+      "word_count_threshold_for_markdown": 50
+    },
+	"segmentation_options": {
+	"enabled": true,
+	"min_chunk_char_length": 150,
+	"heading_levels_to_split_on": [1, 2, 3]
+	},	
+    "output_options": {
+      "include_content_inventory": true,
+      "include_content_review": true
+    }
+  },
+  "profiles": {
+    "language_profiles": [
+      {
+        "profile_id": "python_ast_default",
+        "language_name_for_llm": "Python",
+        "parser_type": "ast",
+        "include_patterns": [
+          "*.py", "*.pyi", "*.pyx", "*.ipynb", "requirements.txt", "setup.py",
+          "pyproject.toml", "README.md", "Dockerfile", "*.yaml", "*.yml",
+          "*.json", "*.sh", "Makefile"
+        ]
+      },
+      {
+        "profile_id": "java_llm_default",
+        "language_name_for_llm": "Java",
+        "parser_type": "llm",
+        "include_patterns": [
+          "*.java", "pom.xml", "build.gradle", "build.gradle.kts",
+          "settings.gradle", "settings.gradle.kts", "*.properties",
+          "*.xml", "*.yaml", "*.yml", "*.json", "README.md", "Dockerfile",
+          "*.sh", "mvnw", "mvnw.cmd", "gradlew", "gradlew.bat"
+        ]
+      },
+      {
+        "profile_id": "javascript_llm_default",
+        "language_name_for_llm": "JavaScript",
+        "parser_type": "llm",
+        "include_patterns": [
+          "*.js", "*.jsx", "*.mjs", "*.cjs", "package.json", "package-lock.json",
+          "yarn.lock", "tsconfig.json", "jsconfig.json", "*.html", "*.css",
+          "*.scss", "*.less", "*.vue", "*.svelte", "README.md", "Dockerfile",
+          "*.yaml", "*.yml", "*.json", "*.sh"
+        ]
+      },
+      {
+        "profile_id": "typescript_llm_default",
+        "language_name_for_llm": "TypeScript",
+        "parser_type": "llm",
+        "include_patterns": [
+          "*.ts", "*.tsx", "package.json", "package-lock.json", "yarn.lock",
+          "tsconfig.json", "tslint.json", "*.html", "*.css", "*.scss", "*.less",
+          "*.vue", "*.svelte", "README.md", "Dockerfile", "*.yaml", "*.yml",
+          "*.json", "*.sh"
+        ]
+      },
+      {
+        "profile_id": "csharp_llm_default",
+        "language_name_for_llm": "C#",
+        "parser_type": "llm",
+        "include_patterns": [
+          "*.cs", "*.csproj", "*.sln", "appsettings.json", "*.config",
+          "*.xaml", "*.xml", "README.md", "Dockerfile", "*.yaml", "*.yml",
+          "*.json", "*.sh", "*.ps1"
+        ]
+      },
+      {
+        "profile_id": "cpp_llm_default",
+        "language_name_for_llm": "C++",
+        "parser_type": "llm",
+        "include_patterns": [
+          "*.cpp", "*.hpp", "*.cc", "*.hh", "*.cxx", "*.hxx", "*.c", "*.h",
+          "Makefile", "makefile", "*.mk", "CMakeLists.txt", "*.cmake",
+          "*.yaml", "*.yml", "*.json", "*.ini", "*.conf",
+          "README.md", "Dockerfile", "*.sh"
+        ]
+      },
+      {
+        "profile_id": "c_llm_default",
+        "language_name_for_llm": "C",
+        "parser_type": "llm",
+        "include_patterns": [
+           "*.c", "*.h", "Makefile", "makefile", "*.mk", "CMakeLists.txt", "*.cmake",
+           "*.yaml", "*.yml", "*.json", "*.ini", "*.conf",
+           "README.md", "Dockerfile", "*.sh"
+        ]
+      },
+      {
+        "profile_id": "rust_llm_default",
+        "language_name_for_llm": "Rust",
+        "parser_type": "llm",
+        "include_patterns": [
+          "*.rs","Cargo.toml","Cargo.lock","build.rs","README.md",
+          "Dockerfile","*.yaml", "*.yml","*.json","*.sh","Makefile"
+        ]
+      },
+      {
+        "profile_id": "php_llm_default",
+        "language_name_for_llm": "PHP",
+        "parser_type": "llm",
+        "include_patterns": [
+          "*.php", "composer.json", "composer.lock", "phpunit.xml", "*.xml",
+          "*.yaml", "*.yml", "*.json", "*.ini", "README.md", "Dockerfile", "*.sh"
+        ]
+      },
+      {
+        "profile_id": "swift_llm_default",
+        "language_name_for_llm": "Swift",
+        "parser_type": "llm",
+        "include_patterns": [
+          "*.swift", "Package.swift", "*.xcodeproj/*", "*.xcworkspace/*",
+          "*.storyboard", "*.xib", "*.plist", "Podfile", "Podfile.lock",
+          "Cartfile", "Cartfile.resolved", "README.md", "Dockerfile",
+          "*.yaml", "*.yml", "*.json", "*.sh"
+        ]
+      },
+      {
+        "profile_id": "go_llm_default",
+        "language_name_for_llm": "Go",
+        "parser_type": "llm",
+        "include_patterns": [
+          "*.go", "go.mod", "go.sum", "Makefile", "*.yaml", "*.yml",
+          "*.json", "README.md", "Dockerfile", "*.sh"
+        ]
+      },
+      {
+        "profile_id": "ruby_llm_default",
+        "language_name_for_llm": "Ruby",
+        "parser_type": "llm",
+        "include_patterns": [
+          "*.rb", "Gemfile", "Gemfile.lock", "Rakefile", "*.gemspec",
+          "config.ru", "*.yaml", "*.yml", "*.json", "README.md", "Dockerfile",
+          "*.sh"
+        ]
+      }
+    ],
+    "llm_profiles": [
+      {
+        "provider_id": "gemini_flash_main",
+        "is_local_llm": false,
+        "provider": "gemini",
+        "model": "gemini-2.0-flash",
+        "api_key_env_var": "GEMINI_API_KEY",
+        "api_key": "AIzaSyAUGjUliZxuYZp0G8oMP5gscz6QHVjS3PY",
+        "api_base_url": null
+      },
+      {
+        "provider_id": "gemini_pro_latest",
+        "is_local_llm": false,
+        "provider": "gemini",
+        "model": "gemini-1.5-pro-latest",
+        "api_key_env_var": "GEMINI_API_KEY",
+        "api_key": null,
+        "api_base_url": null
+      },
+      {
+        "provider_id": "anthropic_opus",
+        "is_local_llm": false,
+        "provider": "anthropic",
+        "model": "claude-3-opus-20240229",
+        "api_key_env_var": "ANTHROPIC_API_KEY",
+        "api_key": null,
+        "api_base_url": null
+      },
+      {
+        "provider_id": "anthropic_sonnet",
+        "is_local_llm": false,
+        "provider": "anthropic",
+        "model": "claude-3-sonnet-20240229",
+        "api_key_env_var": "ANTHROPIC_API_KEY",
+        "api_key": null,
+        "api_base_url": null
+      },
+      {
+        "provider_id": "openai_gpt4_turbo",
+        "is_local_llm": false,
+        "provider": "openai",
+        "model": "gpt-4-turbo",
+        "api_key_env_var": "OPENAI_API_KEY",
+        "api_key": null,
+        "api_base_url": null
+      },
+      {
+        "provider_id": "openai_gpt4o",
+        "is_local_llm": false,
+        "provider": "openai",
+        "model": "gpt-4o",
+        "api_key_env_var": "OPENAI_API_KEY",
+        "api_key": null,
+        "api_base_url": null
+      },
+      {
+        "provider_id": "vertexai_gemini_pro",
+        "is_local_llm": false,
+        "provider": "vertexai",
+        "model": "gemini-1.5-pro-preview-0409",
+        "api_key_env_var": "GOOGLE_APPLICATION_CREDENTIALS",
+        "api_key": null,
+        "api_base_url": null,
+        "vertex_project_env_var": "GOOGLE_CLOUD_PROJECT",
+        "vertex_location_env_var": "GOOGLE_CLOUD_REGION",
+        "vertex_project": null,
+        "vertex_location": null
+      },
+      {
+        "provider_id": "perplexity_llama3_sonar",
+        "is_local_llm": false,
+        "provider": "perplexity",
+        "model": "llama-3-sonar-large-32k-chat",
+        "api_key_env_var": "PERPLEXITY_API_KEY",
+        "api_key": null,
+        "api_base_url": null
+      },
+      {
+        "provider_id": "local_ollama_llama3_8b",
+        "is_local_llm": true,
+        "provider": "openai_compatible",
+        "model": "llama3:8b",
+        "api_key": null,
+        "api_base_url": "http://localhost:11434/v1"
+      },
+      {
+        "provider_id": "local_ollama_mistral_7b",
+        "is_local_llm": true,
+        "provider": "openai_compatible",
+        "model": "mistral:7b",
+        "api_key": null,
+        "api_base_url": "http://localhost:11434/v1"
+      },
+      {
+        "provider_id": "local_lmstudio_llama3_70b",
+        "is_local_llm": true,
+        "provider": "openai_compatible",
+        "model": "local-model/llama3-70b-instruct",
+        "api_key": null,
+        "api_base_url": "http://localhost:1234/v1"
+      },
+      {
+        "provider_id": "local_custom_mixtral",
+        "is_local_llm": true,
+        "provider": "openai_compatible",
+        "model": "mixtral-8x7b-instruct-v0.1",
+        "api_key": null,
+        "api_base_url": "http://192.168.1.100:8080/v1"
+      }
+    ]
+  }
+}

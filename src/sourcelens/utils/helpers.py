@@ -22,15 +22,17 @@ strings for use as filenames.
 import logging
 import re
 from collections.abc import Iterable
-from typing import Any  # Pridaný Any späť
+from typing import Any
 
 from typing_extensions import TypeAlias
 
+# Import shared types from the central common_types module
+from sourcelens.core.common_types import FilePathContentList
+
 logger: logging.Logger = logging.getLogger(__name__)
 
-FileDataItem: TypeAlias = tuple[str, str]
-FileDataList: TypeAlias = list[FileDataItem]
-"""Type alias for a list of (filepath_string, content_string) tuples."""
+# Local TypeAliases FileDataItem and FileDataList are no longer needed,
+# using FilePathContentTuple and FilePathContentList from common_types directly or implicitly.
 
 ContentMap: TypeAlias = dict[str, str]
 """Type alias for a dictionary mapping "index # path" to file content."""
@@ -98,11 +100,11 @@ def _parse_raw_indices(raw_indices: Iterable[Any]) -> set[int]:
     return parsed_integer_indices
 
 
-def get_content_for_indices(files_data: FileDataList, indices: Iterable[Any]) -> ContentMap:  # indices is Iterable[Any]
+def get_content_for_indices(files_data: FilePathContentList, indices: Iterable[Any]) -> ContentMap:
     """Retrieve the file path and content for a specific set of file indices.
 
     Args:
-        files_data: A list of tuples, where each tuple is (path, content).
+        files_data: A list of tuples, where each tuple is (path_string, content_string).
         indices: An iterable of indices. Non-integer or out-of-range indices
                  in this iterable will be logged and ignored.
 
@@ -129,12 +131,12 @@ def get_content_for_indices(files_data: FileDataList, indices: Iterable[Any]) ->
             sorted(out_of_bounds_indices),
         )
 
-    for i, (path, content) in enumerate(files_data):
+    for i, (path, content) in enumerate(files_data):  # path and content are str from FilePathContentList
         if i in valid_in_range_indices:
             normalized_path = path.replace("\\", "/")
             key = f"{i} # {normalized_path}"
-            content_str = str(content) if content is not None else ""
-            content_map[key] = content_str
+            # Content is already string due to FilePathContentList type hint
+            content_map[key] = content
 
     if len(content_map) != len(valid_in_range_indices):
         found_indices_keys = {int(k.split("#", 1)[0].strip()) for k in content_map}
@@ -174,22 +176,24 @@ def sanitize_filename(name: str, *, allow_underscores: bool = True, max_len: int
     if not allow_underscores:
         sanitized_name = sanitized_name.replace("_", "-")
     else:
+        # This regex ensures multiple consecutive hyphens/underscores become a single hyphen
         sanitized_name = re.sub(r"[-_]+", "-", sanitized_name)
 
-    sanitized_name = re.sub(r"-+", "-", sanitized_name)
+    sanitized_name = re.sub(r"-+", "-", sanitized_name)  # Ensure multiple hyphens become one
 
     strip_chars = "-"
-    if allow_underscores:
-        strip_chars += "_"
+    # if allow_underscores: # This condition is not needed if underscores are already replaced by hyphens
+    #     strip_chars += "_"
     sanitized_name = sanitized_name.strip(strip_chars)
 
     if len(sanitized_name) > max_len:
+        # Prioritize cutting at a hyphen if possible to avoid breaking words
         cut_pos = sanitized_name.rfind("-", 0, max_len)
         sanitized_name = sanitized_name[:cut_pos] if cut_pos != -1 else sanitized_name[:max_len]
-        sanitized_name = sanitized_name.strip(strip_chars)
+        sanitized_name = sanitized_name.strip(strip_chars)  # Strip again in case cut creates leading/trailing hyphen
 
     if not sanitized_name or all(c == "." for c in sanitized_name):
-        return "sanitized-name"
+        return "sanitized-name"  # Default for empty or dot-only strings post-sanitization
 
     return sanitized_name.lower()
 

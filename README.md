@@ -24,7 +24,7 @@
 
 *   **Example of generated tutorials:** 
 
-    [View python Sample Tutorial](./output/python-sample-project/index.md)
+    [python Sample Tutorial (eng) ](./output/python-sample-project/index.md)
 
 
 ## Installation
@@ -41,7 +41,7 @@
 
 1.  **Clone:**
     ```bash
-    git clone https://github.com/darijo2yahoocom/sourceLensAI
+    git clone https://github.com/openXFlow/sourceLensAI
     cd sourceLensAI
     ```
 

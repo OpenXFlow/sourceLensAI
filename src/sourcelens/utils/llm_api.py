@@ -24,13 +24,10 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Final, Optional, Protocol
 
-from typing_extensions import TypeAlias
+from sourcelens.core.common_types import CacheConfigDict, LlmConfigDict
 
 from . import _cloud_llm_api, _local_llm_api
 from ._exceptions import LlmApiError
-
-LlmConfigDict: TypeAlias = dict[str, Any]
-CacheConfigDict: TypeAlias = dict[str, Any]
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -39,45 +36,59 @@ LOG_RESPONSE_SNIPPET_LEN: Final[int] = 200
 
 
 class CacheProtocol(Protocol):
-    """Define the interface for a cache object."""
+    """Define the interface for a cache object.
+
+    This protocol outlines the methods that any cache implementation used by
+    the LLM API module must provide.
+    """
 
     def get(self, prompt: str) -> Optional[str]:
-        """Retrieve an item from the cache.
+        """Retrieve an item from the cache based on the prompt.
 
         Args:
-            prompt: The prompt string (used as a key).
+            prompt: The prompt string used as the cache key.
 
         Returns:
-            The cached response string, or None if not found.
+            The cached response string if found, otherwise None.
         """
         ...  # pragma: no cover
 
     def put(self, prompt: str, response: str) -> None:
-        """Store an item in the cache.
+        """Store an item (prompt-response pair) in the cache.
 
         Args:
-            prompt: The prompt string (used as a key).
-            response: The LLM response string to cache.
+            prompt: The prompt string to use as the cache key.
+            response: The LLM response string to store.
         """
         ...  # pragma: no cover
 
 
 class LlmCache(CacheProtocol):
-    """A simple file-based JSON cache for LLM prompts and responses."""
+    """Implement a simple file-based JSON cache for LLM prompts and responses.
+
+    This class provides a persistent cache mechanism, storing prompt-response
+    pairs in a JSON file to avoid redundant LLM API calls for identical prompts.
+    """
+
+    cache_file_path: Path
+    cache: dict[str, str]
 
     def __init__(self, cache_file_path: Path) -> None:
-        """Initialize LlmCache.
+        """Initialize LlmCache and load existing cache from file.
 
         Args:
-            cache_file_path: Path to the JSON file used for caching.
+            cache_file_path: The `Path` object pointing to the JSON cache file.
+                             The directory for this file will be created if it
+                             doesn't exist.
         """
-        self.cache_file_path: Path = cache_file_path
-        self.cache: dict[str, str] = {}
+        self.cache_file_path = cache_file_path
+        self.cache = {}
         self._ensure_cache_dir()
         self.cache = self._load_cache()
+        logger.debug("LlmCache initialized with file: %s", self.cache_file_path)
 
     def _ensure_cache_dir(self) -> None:
-        """Ensure the cache directory exists."""
+        """Ensure the cache directory exists, creating it if necessary."""
         cache_dir: Path = self.cache_file_path.parent
         if not cache_dir.exists():
             try:
@@ -87,11 +98,12 @@ class LlmCache(CacheProtocol):
                 logger.error("Failed to create cache directory '%s': %s.", cache_dir, e)
 
     def _load_cache(self) -> dict[str, str]:
-        """Load cache from the JSON file.
+        """Load the cache from the JSON file.
+
+        If the cache file does not exist or is invalid, an empty cache is returned.
 
         Returns:
-            A dictionary representing the loaded cache. Returns an empty
-            dictionary if the file doesn't exist or an error occurs.
+            A dictionary representing the loaded cache.
         """
         if not self.cache_file_path.is_file():
             logger.debug("Cache file not found at %s. Starting with an empty cache.", self.cache_file_path)
@@ -102,11 +114,13 @@ class LlmCache(CacheProtocol):
                 if not isinstance(loaded_data, dict):
                     logger.warning("Cache data in %s is not a dictionary. Resetting cache.", self.cache_file_path)
                     return {}
+                # Ensure keys and values are strings
                 str_cache: dict[str, str] = {
                     str(k): str(v) for k, v in loaded_data.items() if isinstance(k, str) and isinstance(v, str)
                 }
-                if len(str_cache) != len(loaded_data):
+                if len(str_cache) != len(loaded_data):  # pragma: no cover
                     logger.warning("Some non-string key/values removed from cache during load.")
+                logger.debug("Loaded %d items from cache file: %s", len(str_cache), self.cache_file_path)
                 return str_cache
         except (OSError, json.JSONDecodeError, TypeError) as e:
             logger.warning(
@@ -115,34 +129,34 @@ class LlmCache(CacheProtocol):
             return {}
 
     def _save_cache(self) -> None:
-        """Save the current cache to the JSON file."""
+        """Save the current state of the cache to the JSON file."""
         try:
-            self._ensure_cache_dir()
+            self._ensure_cache_dir()  # Ensure directory exists before writing
             with self.cache_file_path.open("w", encoding="utf-8") as f:
                 json.dump(self.cache, f, indent=2, ensure_ascii=False)
-            logger.debug("LLM cache saved to %s.", self.cache_file_path)
-        except (OSError, TypeError) as e:
+            logger.debug("LLM cache saved to %s. Cache size: %d items.", self.cache_file_path, len(self.cache))
+        except (OSError, TypeError) as e:  # pragma: no cover
             logger.error("Failed to save LLM cache to %s: %s", self.cache_file_path, e, exc_info=False)
-        except Exception as e:
+        except Exception as e:  # pragma: no cover
             logger.error("Unexpected error saving LLM cache: %s", e, exc_info=True)
 
     def get(self, prompt: str) -> Optional[str]:
-        """Retrieve an item from the cache.
+        """Retrieve an item from the cache based on the prompt.
 
         Args:
-            prompt: The prompt string (used as a key).
+            prompt: The prompt string used as the cache key.
 
         Returns:
-            The cached response string, or None if not found.
+            The cached response string if found, otherwise None.
         """
         return self.cache.get(prompt)
 
     def put(self, prompt: str, response: str) -> None:
-        """Store an item in the cache.
+        """Store an item (prompt-response pair) in the cache and save it.
 
         Args:
-            prompt: The prompt string (used as a key).
-            response: The LLM response string to cache.
+            prompt: The prompt string to use as the cache key.
+            response: The LLM response string to store.
         """
         if not isinstance(prompt, str) or not isinstance(response, str):
             logger.warning("Attempted to cache non-string prompt or response. Skipping.")
@@ -152,60 +166,74 @@ class LlmCache(CacheProtocol):
 
 
 class DummyCache(CacheProtocol):
-    """A no-op cache implementation that doesn't store anything."""
+    """Implement a no-op cache that does not store any data.
 
-    def get(self, prompt: str) -> None:  # type: ignore[override]
+    This class can be used when caching is disabled, providing the same
+    interface as `LlmCache` but without performing any caching operations.
+    """
+
+    def get(self, prompt: str) -> Optional[str]:  # Changed return type to Optional[str]
         """Simulate getting from cache, always returns None.
 
         Args:
-            prompt: The prompt string.
+            prompt: The prompt string (unused).
 
         Returns:
-            None.
+            Always None, as this cache does not store items.
         """
-        del prompt
+        del prompt  # Mark as unused
         return None
 
     def put(self, prompt: str, response: str) -> None:
-        """Simulate putting into cache, does nothing.
+        """Simulate putting into cache, performs no action.
 
         Args:
-            prompt: The prompt string.
-            response: The response string.
+            prompt: The prompt string (unused).
+            response: The LLM response string (unused).
         """
-        del prompt, response
+        del prompt, response  # Mark as unused
 
 
-# Function to manage the cache singleton instance
 def get_cache_manager() -> Callable[[CacheConfigDict], CacheProtocol]:
-    """Return a function that manages a singleton cache instance.
+    """Return a factory function that manages a singleton cache instance.
 
-    This approach avoids using a global variable directly in `_get_cache`
-    and allows for lazy initialization of the cache.
+    This function uses a closure to maintain a single instance of the cache
+    throughout the application's lifecycle, creating it on first call based
+    on the provided `cache_config`.
 
     Returns:
-        A function that, when called with cache_config, returns the
-        singleton CacheProtocol instance.
+        A callable that, when invoked with `CacheConfigDict`, returns the
+        singleton `CacheProtocol` instance (either `LlmCache` or `DummyCache`).
     """
-    # This attribute will store the singleton instance
-    # It's an attribute of the get_cache_manager function itself
     if not hasattr(get_cache_manager, "_cache_instance"):
-        get_cache_manager._cache_instance = None  # type: ignore[attr-defined]
+        # Initialize attribute to store the singleton cache instance
+        setattr(get_cache_manager, "_cache_instance", None)
 
     def _get_or_create_cache(cache_config: CacheConfigDict) -> CacheProtocol:
-        """Get or create the cache instance."""
+        """Get or create the singleton cache instance based on configuration.
+
+        If caching is enabled in `cache_config` and a valid file path is provided,
+        an `LlmCache` instance is created. Otherwise, a `DummyCache` is used.
+
+        Args:
+            cache_config: Configuration dictionary for caching. Expected keys:
+                          'use_llm_cache' (bool), 'llm_cache_file' (str).
+
+        Returns:
+            The initialized cache instance (either `LlmCache` or `DummyCache`).
+        """
         instance: Optional[CacheProtocol] = getattr(get_cache_manager, "_cache_instance", None)
         if instance is None:
-            use_caching_any: Any = cache_config.get("use_cache", True)
+            use_caching_any: Any = cache_config.get("use_llm_cache", True)
             use_caching: bool = bool(use_caching_any)
 
             if not use_caching:
                 instance = DummyCache()
-                logger.info("LLM caching is disabled.")
+                logger.info("LLM caching is disabled by configuration.")
             else:
                 cache_file_str_any: Any = cache_config.get("llm_cache_file")
                 if not cache_file_str_any or not isinstance(cache_file_str_any, str):
-                    logger.warning("LLM cache file path not configured or invalid. Disabling file cache.")
+                    logger.warning("LLM cache file path not configured or invalid. Disabling file-based cache.")
                     instance = DummyCache()
                 else:
                     cache_file_str: str = cache_file_str_any
@@ -213,57 +241,73 @@ def get_cache_manager() -> Callable[[CacheConfigDict], CacheProtocol]:
                         cache_path = Path(cache_file_str).resolve()
                         instance = LlmCache(cache_path)
                         logger.info("LLM file cache initialized at: %s", cache_path)
-                    except (OSError, ValueError, TypeError) as e:
+                    except (OSError, ValueError, TypeError) as e:  # pragma: no cover
                         logger.error(
-                            "Failed to initialize LlmCache at '%s': %s. Disabling file cache.", cache_file_str, e
+                            "Failed to initialize LlmCache at '%s': %s. Disabling file-based cache.", cache_file_str, e
                         )
                         instance = DummyCache()
             setattr(get_cache_manager, "_cache_instance", instance)
-        return instance  # Instance is now guaranteed to be CacheProtocol
+        return instance
 
     return _get_or_create_cache
 
 
-# Get the cache management function
 _get_cache_singleton_provider: Callable[[CacheConfigDict], CacheProtocol] = get_cache_manager()
 
 
 def _get_llm_response(prompt: str, llm_config: LlmConfigDict) -> str:
-    """Make the actual API call to the specified LLM provider.
+    """Dispatch the LLM API call to the appropriate provider-specific function.
+
+    This internal helper function selects the correct API calling function
+    (e.g., `call_gemini`, `call_local_openai_compatible`) based on the 'provider'
+    field in `llm_config`.
 
     Args:
-        prompt: The prompt string.
-        llm_config: LLM provider configuration.
+        prompt: The prompt string to send to the LLM.
+        llm_config: Configuration dictionary for the LLM provider, containing
+                    at least 'provider' and 'model'.
 
     Returns:
-        The LLM's text response.
+        The text response from the LLM.
 
     Raises:
-        ValueError: If provider is missing or unsupported.
-        LlmApiError: For API errors.
-        ImportError: If provider-specific libraries are missing.
+        ValueError: If the 'provider' is missing, invalid, or unsupported.
+        LlmApiError: Propagated from the provider-specific call functions if an
+                     API error occurs.
     """
+    logger.debug(
+        "Dispatching LLM call. Config (API key redacted): %s",
+        json.dumps({k: (v if k != "api_key" else "***REDACTED***") for k, v in llm_config.items()}, indent=2),
+    )
+
     provider_any: Any = llm_config.get("provider")
     model_name_any: Any = llm_config.get("model")
 
     if not provider_any or not isinstance(provider_any, str):
         raise ValueError("LLM provider name is missing or invalid in configuration.")
-    provider: str = provider_any
+    provider: str = provider_any.lower()  # Normalize provider name
     model_name_str: str = str(model_name_any) if isinstance(model_name_any, str) else "unknown_model"
 
-    logger.debug("LLM API CALL - Provider: %s, Model: %s", provider, model_name_str)
+    logger.debug("LLM API Call - Provider: %s, Model: %s", provider, model_name_str)
 
     response_text: str
     if provider == "gemini":
         response_text = _cloud_llm_api.call_gemini(prompt, llm_config)
     elif provider == "perplexity":
         response_text = _cloud_llm_api.call_perplexity(prompt, llm_config)
-    elif provider == "openai_compatible_local":
+    elif provider in ("openai_compatible_local", "openai_compatible"):  # Handle both specific and general
+        if provider == "openai_compatible":  # pragma: no cover
+            logger.warning("Provider 'openai_compatible' used; assuming local. Calling call_local_openai_compatible.")
         response_text = _local_llm_api.call_local_openai_compatible(prompt, llm_config)
+    # Add other providers here:
+    # elif provider == "anthropic":
+    #     response_text = _cloud_llm_api.call_anthropic(prompt, llm_config)
+    # elif provider == "openai": # For official OpenAI API
+    #     response_text = _cloud_llm_api.call_openai(prompt, llm_config)
     else:
         raise ValueError(f"Unsupported LLM provider configured: {provider}")
 
-    if not response_text:
+    if not response_text:  # pragma: no cover
         logger.warning(
             "LLM call to provider '%s' (model '%s') returned an empty response string.", provider, model_name_str
         )
@@ -273,51 +317,70 @@ def _get_llm_response(prompt: str, llm_config: LlmConfigDict) -> str:
 def call_llm(prompt: str, llm_config: LlmConfigDict, cache_config: CacheConfigDict) -> str:
     """Call the configured LLM API with caching and error handling.
 
-    Dispatches to the appropriate provider-specific function.
+    This is the main public function for interacting with LLMs. It first checks
+    the cache for a response to the given prompt. If not found (cache miss),
+    it calls the appropriate LLM provider via `_get_llm_response`. The new
+    response is then stored in the cache if caching is enabled.
 
     Args:
         prompt: The prompt string to send to the LLM.
-        llm_config: Dictionary containing configuration for the LLM provider.
-        cache_config: Dictionary containing cache configuration.
+        llm_config: Configuration dictionary for the LLM API, including provider,
+                    model, API key, etc.
+        cache_config: Configuration dictionary for LLM response caching, including
+                      whether to use cache and the cache file path.
 
     Returns:
         The text response from the LLM.
 
     Raises:
-        ValueError: If critical configuration is missing or provider is unsupported.
-        LlmApiError: If the API call to the LLM provider fails.
-        ImportError: If a required library for a provider is not installed.
+        ValueError: If LLM provider configuration in `llm_config` is invalid
+                    or an unsupported provider is specified.
+        ImportError: If a required library for a specific LLM provider is not installed
+                     (raised from provider-specific functions).
+        LlmApiError: For errors during the API call itself (e.g., network issues,
+                     API errors, authentication failures) or if the LLM response
+                     is problematic (e.g., empty, blocked).
+        Exception: For any other unexpected errors during the process.
     """
+    logger.debug(
+        "call_llm entry: llm_config (API key redacted): %s",
+        json.dumps({k: (v if k != "api_key" else "***REDACTED***") for k, v in llm_config.items()}, indent=2),
+    )
+    logger.debug("call_llm entry: cache_config: %s", json.dumps(cache_config, indent=2))
+
     cache: CacheProtocol = _get_cache_singleton_provider(cache_config)
-    is_real_cache_in_use = not isinstance(cache, DummyCache)
+    is_real_cache_in_use: bool = not isinstance(cache, DummyCache)
 
     if is_real_cache_in_use:
-        cached_response = cache.get(prompt)
+        cached_response: Optional[str] = cache.get(prompt)
         if cached_response is not None:
-            prompt_snippet = prompt[:LOG_PROMPT_SNIPPET_LEN].replace("\n", " ") + (
+            prompt_snippet: str = prompt[:LOG_PROMPT_SNIPPET_LEN].replace("\n", " ") + (
                 "..." if len(prompt) > LOG_PROMPT_SNIPPET_LEN else ""
             )
             logger.info('LLM Cache HIT for prompt starting with: "%s"', prompt_snippet)
             return cached_response
-        prompt_snippet = prompt[:LOG_PROMPT_SNIPPET_LEN].replace("\n", " ") + (
+        prompt_snippet_miss: str = prompt[:LOG_PROMPT_SNIPPET_LEN].replace("\n", " ") + (
             "..." if len(prompt) > LOG_PROMPT_SNIPPET_LEN else ""
         )
-        logger.info('LLM Cache MISS for prompt starting with: "%s"', prompt_snippet)
+        logger.info('LLM Cache MISS for prompt starting with: "%s"', prompt_snippet_miss)
 
     try:
-        response_text = _get_llm_response(prompt, llm_config)
-    except (ImportError, ValueError, NotImplementedError) as e:
-        provider = str(llm_config.get("provider", "Unknown"))
-        logger.error("Setup/Config error for LLM provider '%s': %s", provider, e, exc_info=True)
-        raise
-    except LlmApiError:
-        raise
-    except Exception as e_unexpected:
-        provider = str(llm_config.get("provider", "Unknown"))
-        logger.exception("Unexpected error during LLM API call dispatch for provider '%s'", provider)
-        raise LlmApiError(f"Unexpected dispatch error: {e_unexpected!s}", provider=provider) from e_unexpected
+        response_text: str = _get_llm_response(prompt, llm_config)
+    except (ImportError, ValueError, NotImplementedError) as e:  # These are setup/config errors
+        provider_name: str = str(llm_config.get("provider", "Unknown"))
+        logger.error("Setup/Config error for LLM provider '%s': %s", provider_name, e, exc_info=True)
+        raise  # Re-raise to be handled by the caller or flow engine
+    except LlmApiError:  # API errors from provider-specific calls
+        raise  # Re-raise to be handled by the caller or flow engine
+    except Exception as e_unexpected:  # pragma: no cover
+        # Catch any other unexpected errors during the dispatch or call
+        provider_name_unexp: str = str(llm_config.get("provider", "Unknown"))
+        logger.exception("Unexpected error during LLM API call dispatch for provider '%s'", provider_name_unexp)
+        raise LlmApiError(
+            f"Unexpected dispatch error: {e_unexpected!s}", provider=provider_name_unexp
+        ) from e_unexpected
 
-    response_snippet = response_text[:LOG_RESPONSE_SNIPPET_LEN].replace("\n", " ") + (
+    response_snippet: str = response_text[:LOG_RESPONSE_SNIPPET_LEN].replace("\n", " ") + (
         "..." if len(response_text) > LOG_RESPONSE_SNIPPET_LEN else ""
     )
     logger.debug("LLM API Response Snippet: %s", response_snippet)
