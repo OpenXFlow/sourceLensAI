@@ -1,5 +1,5 @@
 {
-  "FL01_code_analysis": { 
+  "FL01_code_analysis": {
     "enabled": true,
     "github_token_env_var": "GITHUB_TOKEN",
     "github_token": null,
@@ -29,53 +29,12 @@
       "include_file_structure_diagram": true,
       "sequence_diagrams": {
         "enabled": true,
-        "max_diagrams_to_generate": 3
+        "max_diagrams_to_generate": 5
       }
     },
     "output_options": {
       "include_source_index": true,
       "include_project_review": true
-    }
-  },
-  "_comment_profiles_llm": "LLM and Language profiles are typically managed globally in the main config.json but can be overridden if this flow is run standalone with a specific config pointing here, or if global config allows flow-specific LLM profiles.",
-  "profiles": {
-    "language_profiles": [
-      {
-        "profile_id": "python_ast_default",
-        "language_name_for_llm": "Python",
-        "parser_type": "ast",
-        "include_patterns": ["*.py", "*.pyi"]
-      }
-    ],
-    "llm_profiles": [
-      {
-        "provider_id": "gemini_flash_main",
-        "is_local_llm": false,
-        "provider": "gemini",
-        "model": "gemini-1.5-flash-latest",
-        "api_key_env_var": "GEMINI_API_KEY",
-        "api_key": null,
-        "api_base_url": null
-      }
-    ]
-  },
-  "_comment_common_settings": "Common settings like output directories or language might also be globally managed but can be set here for standalone runs or flow-specific overrides if the main ConfigLoader supports it.",
-  "common": {
-    "common_output_settings": {
-      "default_output_name": "code-analysis-output",
-      "main_output_directory": "output_code_flow",
-      "generated_text_language": "english"
-    },
-    "logging": {
-      "log_level": "INFO"
-    },
-    "cache_settings": {
-      "use_llm_cache": true,
-      "llm_cache_file": ".cache/code_analysis_llm_cache.json"
-    },
-    "llm_default_options": {
-      "max_retries": 3,
-      "retry_wait_seconds": 10
     }
   }
 }

@@ -183,11 +183,11 @@ def _get_local_dir_display_root_cli(local_dir_str: Optional[str]) -> str:
     display_root_str: str = ""
     with contextlib.suppress(ValueError, TypeError, OSError):
         path_obj = Path(local_dir_str)
-        if path_obj:  # Ensure path_obj is not an empty Path on error
+        if path_obj:
             display_root_str = path_obj.as_posix()
             if display_root_str == ".":
                 display_root_str = "./"
-            elif display_root_str and not display_root_str.endswith("/"):  # Avoid adding / to empty string
+            elif display_root_str and not display_root_str.endswith("/"):
                 display_root_str += "/"
     return display_root_str
 
@@ -246,11 +246,10 @@ def _derive_name_if_auto_cli(args: argparse.Namespace, current_name: str) -> str
     """
     if current_name != AUTO_DETECT_OUTPUT_NAME:
         return current_name
-    # If --name is explicitly given by user, it overrides auto-derivation logic
     if args.name:
         return str(args.name)
     derived = _derive_name_from_code_source_cli(args)
-    return derived or _FLOW_DEFAULT_OUTPUT_NAME  # Fallback if derivation returns empty
+    return derived or _FLOW_DEFAULT_OUTPUT_NAME
 
 
 class DummyConfigLoaderForFlowCLI:
@@ -277,7 +276,7 @@ class DummyConfigLoaderForFlowCLI:
             global_config_path_str: Optional path to a global configuration file.
         """
         self._logger_dummy = logging.getLogger(self.__class__.__name__)
-        self._global_config_data = {"common": {}, "profiles": {}}  # Minimal default
+        self._global_config_data = {"common": {}, "profiles": {}}
         if global_config_path_str:
             try:
                 global_path = Path(global_config_path_str).resolve(strict=True)
@@ -285,7 +284,7 @@ class DummyConfigLoaderForFlowCLI:
                 self._logger_dummy.info("DummyLoader: Successfully loaded global config from %s", global_path)
             except (FileNotFoundError, ConfigError) as e_load_global:
                 log_msg_part1 = f"DummyLoader: Could not load global config from '{global_config_path_str}': "
-                log_msg_part2 = f"{e_load_global}. Using minimal global."  # Shorter log line
+                log_msg_part2 = f"{e_load_global}. Using minimal global."
                 self._logger_dummy.warning(log_msg_part1 + log_msg_part2)
         else:
             self._logger_dummy.info("DummyLoader: No global config path provided. Using minimal global structure.")
@@ -307,7 +306,7 @@ class DummyConfigLoaderForFlowCLI:
         try:
             with fp.open("r", encoding="utf-8") as f_json:
                 loaded_data: Any = json.load(f_json)
-                if not isinstance(loaded_data, dict):  # Should be caught by JSONDecodeError if not object
+                if not isinstance(loaded_data, dict):
                     raise TypeError(f"Configuration in {fp} is not a dictionary.")
                 return cast(ConfigDict, loaded_data)
         except json.JSONDecodeError as e_json:
@@ -351,7 +350,7 @@ class DummyConfigLoaderForFlowCLI:
         common_block = cfg.setdefault("common", {})
         common_output = common_block.setdefault("common_output_settings", {})
         logging_block = common_block.setdefault("logging", {})
-        flow_block = cfg.setdefault(flow_nm, {})  # This is where flow-specific settings go
+        flow_block = cfg.setdefault(flow_nm, {})
 
         if getattr(cli_args, "name", None):
             common_output["default_output_name"] = cli_args.name
@@ -364,7 +363,7 @@ class DummyConfigLoaderForFlowCLI:
         if getattr(cli_args, "log_file", None):
             logging_block["log_file"] = str(cli_args.log_file)
 
-        if flow_nm == _FLOW_NAME:  # Specific to FL01_code_analysis
+        if flow_nm == _FLOW_NAME:
             source_opts = flow_block.setdefault("source_options", {})
             if getattr(cli_args, "include", None):
                 source_opts["include_patterns"] = cli_args.include
@@ -374,7 +373,6 @@ class DummyConfigLoaderForFlowCLI:
                 source_opts["max_file_size_bytes"] = cli_args.max_size
             if getattr(cli_args, "llm_provider", None):
                 flow_block["active_llm_provider_id"] = cli_args.llm_provider
-            # Note: CLI overrides for llm_model, api_key affect resolved_llm_config later
 
     def get_resolved_flow_config(
         self,
@@ -400,11 +398,9 @@ class DummyConfigLoaderForFlowCLI:
         default_cfg = self._read_json_file(flow_default_config_path)
         merged_cfg = copy.deepcopy(default_cfg)
 
-        # Merge common and profiles from the (minimal or loaded) global config
         self._deep_merge_configs(merged_cfg.setdefault("common", {}), self._global_config_data.get("common", {}))
         merged_cfg.setdefault("profiles", {}).update(self._global_config_data.get("profiles", {}))
 
-        # Merge flow-specific overrides from global, if present in _global_config_data
         global_flow_overrides = self._global_config_data.get(flow_name, {})
         if global_flow_overrides:
             merged_cfg_flow_block = merged_cfg.setdefault(flow_name, {})
@@ -413,7 +409,6 @@ class DummyConfigLoaderForFlowCLI:
         if cli_args:
             self._apply_simplified_cli_overrides(merged_cfg, cli_args, flow_name)
 
-        # Simplified LLM config resolution for dummy loader
         llm_default_opts = merged_cfg.get("common", {}).get("llm_default_options", {})
         flow_settings_block = merged_cfg.get(flow_name, {})
         active_llm_id = (
@@ -421,29 +416,26 @@ class DummyConfigLoaderForFlowCLI:
         )
 
         profiles = merged_cfg.get("profiles", {}).get("llm_profiles", [])
-        resolved_llm_cfg = copy.deepcopy(llm_default_opts)  # Start with defaults
+        resolved_llm_cfg = copy.deepcopy(llm_default_opts)
 
         if active_llm_id and isinstance(active_llm_id, str) and isinstance(profiles, list):
             active_profile = next(
                 (p for p in profiles if isinstance(p, dict) and p.get("provider_id") == active_llm_id), None
             )
             if active_profile:
-                resolved_llm_cfg.update(active_profile)  # Merge active profile over defaults
+                resolved_llm_cfg.update(active_profile)
 
-        # Apply CLI overrides for LLM model and API key to the resolved_llm_cfg
         if cli_args:
             if getattr(cli_args, "llm_model", None):
                 resolved_llm_cfg["model"] = cli_args.llm_model
             if getattr(cli_args, "api_key", None):
                 resolved_llm_cfg["api_key"] = cli_args.api_key
-                # Dummy loader does not handle api_key_env_var from CLI for simplicity
 
         merged_cfg["resolved_llm_config"] = resolved_llm_cfg
 
-        if flow_name == _FLOW_NAME:  # Code analysis specific token resolution (simplified)
+        if flow_name == _FLOW_NAME:
             flow_block_final = merged_cfg.get(_FLOW_NAME, {})
             if isinstance(flow_block_final, dict):
-                # Assumes github_token might be set by global override or flow default directly
                 flow_block_final.setdefault("resolved_github_token", flow_block_final.get("github_token"))
 
         return cast(ResolvedFlowConfigData, merged_cfg)
@@ -507,7 +499,6 @@ def _initialize_flow_config_and_logging_logic(args: argparse.Namespace) -> Resol
 
     common_config_resolved: dict[str, Any] = resolved_flow_config.get("common", {})
     logging_settings_resolved: dict[str, Any] = common_config_resolved.get("logging", {})
-    # CLI log_file arg directly influences logging_settings_resolved via ConfigLoader or Dummy
     setup_flow_logging(logging_settings_resolved)
     logger.info("%s CLI: Configuration loaded and processed.", _FLOW_NAME)
     return resolved_flow_config
@@ -564,15 +555,13 @@ def _prepare_standalone_initial_context(
     """
     common_settings: dict[str, Any] = resolved_flow_config.get("common", {})
     common_output_settings: dict[str, Any] = common_settings.get("common_output_settings", {})
-    flow_specific_settings: dict[str, Any] = resolved_flow_config.get(
-        _FLOW_NAME, {}
-    )  # e.g. resolved_config["FL01_code_analysis"]
+    flow_specific_settings: dict[str, Any] = resolved_flow_config.get(_FLOW_NAME, {})
 
     output_name_from_config = str(common_output_settings.get("default_output_name", AUTO_DETECT_OUTPUT_NAME))
     final_output_name = _derive_name_if_auto_cli(args, output_name_from_config)
 
     main_out_dir_from_config = str(common_output_settings.get("main_output_directory", _FLOW_DEFAULT_OUTPUT_DIR))
-    final_main_out_dir = str(args.output) if args.output else main_out_dir_from_config  # args.output is already Path
+    final_main_out_dir = str(args.output) if args.output else main_out_dir_from_config
 
     gen_text_lang_from_config = str(common_output_settings.get("generated_text_language", _FLOW_DEFAULT_LANGUAGE))
     final_gen_text_lang = str(args.language) if args.language else gen_text_lang_from_config
@@ -589,12 +578,12 @@ def _prepare_standalone_initial_context(
         "project_name": final_output_name,
         "output_dir": final_main_out_dir,
         "language": final_gen_text_lang,
-        "current_operation_mode": "code",  # Specific to this CLI
+        "current_operation_mode": _FLOW_NAME,  # Use internal flow name
         "current_mode_output_options": flow_specific_settings.get("output_options", {}),
         "repo_url": args.repo,
         "local_dir": str(args.dir) if args.dir else None,
-        "source_config": flow_specific_settings.get("source_config", {}),  # Contains language profile
-        "github_token": flow_specific_settings.get("resolved_github_token"),  # Resolved by loader
+        "source_config": flow_specific_settings.get("source_config", {}),
+        "github_token": flow_specific_settings.get("resolved_github_token"),
         "include_patterns": include_patterns,
         "exclude_patterns": exclude_patterns,
         "max_file_size": max_file_size,
@@ -637,14 +626,22 @@ def run_standalone_code_analysis() -> None:
     initial_context = _prepare_standalone_initial_context(args, resolved_config)
 
     logger.info("Starting %s flow (standalone)...", _FLOW_NAME)
-    logger.debug("Effective runtime configuration for flow: %s", resolved_config.get(_FLOW_NAME))
-    logger.debug("Effective common settings for flow: %s", resolved_config.get("common"))
+    # Log the specific flow config being used, not the entire resolved_config
+    # which might contain other flow data if a global config was used.
+    flow_config_for_run = initial_context.get("config", {}).get(_FLOW_NAME, {})
+    logger.debug("Effective runtime configuration for flow: %s", flow_config_for_run)
+    logger.debug("Effective common settings for flow: %s", initial_context.get("config", {}).get("common"))
     logger.debug("Effective LLM config for flow: %s", initial_context.get("llm_config"))
 
     try:
-        from .flow import create_code_analysis_flow  # Relative import
+        # Construct the full module path relative to the 'src' directory or top-level package
+        # If FL01_code_analysis is a top-level package:
+        # from FL01_code_analysis.flow import create_code_analysis_flow
+        # If it's under 'src':
+        flow_module = importlib.import_module(f"src.{_FLOW_NAME}.flow")
+        create_code_analysis_flow_func = getattr(flow_module, "create_code_analysis_flow")
 
-        code_pipeline: "SourceLensFlow" = create_code_analysis_flow(initial_context)
+        code_pipeline: "SourceLensFlow" = create_code_analysis_flow_func(initial_context)
         logger.info("Code analysis pipeline created. Running...")
         code_pipeline.run_standalone(initial_context)
         logger.info("Code analysis pipeline finished successfully.")
@@ -659,7 +656,7 @@ def run_standalone_code_analysis() -> None:
     except (ConfigError, ValueError, TypeError, AttributeError, RuntimeError, OSError, ImportError) as e_flow:
         no_files_error_type: Optional[type[Exception]] = None
         try:
-            nff_module = importlib.import_module(".nodes.n01_fetch_code", package=_FLOW_NAME)
+            nff_module = importlib.import_module(f"src.{_FLOW_NAME}.nodes.n01_fetch_code")
             no_files_error_type = getattr(nff_module, "NoFilesFetchedError", None)
         except ImportError:  # pragma: no cover
             logger.warning("Could not dynamically import NoFilesFetchedError for specific handling.")
@@ -681,6 +678,16 @@ def run_standalone_code_analysis() -> None:
 
 
 if __name__ == "__main__":  # pragma: no cover
+    # Ensure the 'src' directory is in sys.path if running this script directly
+    # for standalone testing, and 'src' is the parent of FL01_code_analysis package.
+    # This helps with relative imports like 'from .flow import ...'
+    # or 'from ..utils import ...' if nodes were to use them.
+    current_script_path = Path(__file__).resolve()  # C:\...\src\FL01_code_analysis\cli.py
+    project_src_root = current_script_path.parent.parent  # C:\...\src
+    if str(project_src_root) not in sys.path:
+        sys.path.insert(0, str(project_src_root))
+        logger.debug("Added '%s' to sys.path for standalone CLI execution.", project_src_root)
+
     run_standalone_code_analysis()
 
 # End of src/FL01_code_analysis/cli.py

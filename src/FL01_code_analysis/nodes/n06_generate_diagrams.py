@@ -23,18 +23,19 @@ from typing import Any, Final, Optional, Union, cast
 from typing_extensions import TypeAlias
 
 from sourcelens.core import BaseNode, SLSharedContext
+
+# Corrected imports:
+from sourcelens.core.common_types import (
+    CodeAbstractionsList,
+    CodeRelationshipsDict,
+    SequenceDiagramContext,
+)
 from sourcelens.mermaid_diagrams.class_diagram_prompts import format_class_diagram_prompt
 from sourcelens.mermaid_diagrams.package_diagram_prompts import format_package_diagram_prompt
 from sourcelens.mermaid_diagrams.sequence_diagram_prompts import (
     format_sequence_diagram_prompt,
 )
 from sourcelens.utils.llm_api import LlmApiError, call_llm
-
-from ..prompts._common import (
-    CodeAbstractionsList,
-    CodeRelationshipsDict,
-    SequenceDiagramContext,
-)
 
 DiagramMarkup: TypeAlias = Optional[str]
 SequenceDiagramsListInternal: TypeAlias = list[DiagramMarkup]
@@ -76,12 +77,12 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPreparedInputs, GenerateDiag
         """Prepare a string summarizing the project file structure for prompts.
 
         Args:
-            files_data (Optional[FilesDataListInternal]): A list of (filepath, content) tuples.
-                                                          Only filepaths are used.
+            files_data: A list of (filepath, content) tuples.
+                        Only filepaths are used.
 
         Returns:
-            str: A string summarizing the project file structure, suitable for inclusion
-                 in LLM prompts. Returns a placeholder if no file data is available.
+            A string summarizing the project file structure, suitable for inclusion
+            in LLM prompts. Returns a placeholder if no file data is available.
         """
         if not files_data:
             return "No file data available to generate structure context."
@@ -105,12 +106,11 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPreparedInputs, GenerateDiag
         """Extract diagram generation flags and LLM/cache configurations from shared context.
 
         Args:
-            shared_context (SLSharedContext): The shared context dictionary.
+            shared_context: The shared context dictionary.
 
         Returns:
-            tuple[DiagramGenerationConfigDict, LlmConfigDict, CacheConfigDict]:
-                A tuple containing the diagram generation settings, resolved LLM configuration,
-                and common cache settings.
+            A tuple containing the diagram generation settings, resolved LLM configuration,
+            and common cache settings.
 
         Raises:
             ValueError: If essential configuration is missing.
@@ -152,7 +152,17 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPreparedInputs, GenerateDiag
         llm_cfg: LlmConfigDict,
         cache_cfg: CacheConfigDict,
     ) -> GenerateDiagramsPreparedInputs:
-        """Gather all core context data required for generating diagrams."""
+        """Gather all core context data required for generating diagrams.
+
+        Args:
+            shared_context: The shared context dictionary.
+            diagram_gen_cfg: Configuration settings for diagram generation.
+            llm_cfg: LLM API configuration.
+            cache_cfg: Cache configuration.
+
+        Returns:
+            A dictionary containing prepared inputs for diagram generation, or None if skipping.
+        """
         gen_flowchart = bool(diagram_gen_cfg.get("include_relationship_flowchart", False))
         gen_class = bool(diagram_gen_cfg.get("include_class_diagram", False))
         gen_pkg = bool(diagram_gen_cfg.get("include_package_diagram", False))
@@ -230,7 +240,14 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPreparedInputs, GenerateDiag
         return prepared_inputs
 
     def pre_execution(self, shared_context: SLSharedContext) -> GenerateDiagramsPreparedInputs:
-        """Prepare context and configuration flags for diagram generation."""
+        """Prepare context and configuration flags for diagram generation.
+
+        Args:
+            shared_context: The shared context dictionary.
+
+        Returns:
+            A dictionary with prepared inputs for the execution phase, or None if skipping.
+        """
         self._log_info("Preparing for diagram generation...")
         try:
             diagram_gen_cfg, llm_cfg, cache_cfg = self._prepare_diagram_flags_and_configs(shared_context)
@@ -250,7 +267,14 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPreparedInputs, GenerateDiag
             return None
 
     def _clean_llm_diagram_output(self, raw_markup: str) -> str:
-        """Clean the raw markup from LLM, removing potential code fences."""
+        """Clean the raw markup from LLM, removing potential code fences.
+
+        Args:
+            raw_markup: The raw string output from the LLM.
+
+        Returns:
+            The cleaned markup string.
+        """
         return CODE_FENCE_REGEX.sub("", raw_markup).strip()
 
     def _call_llm_for_diagram(
@@ -261,7 +285,19 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPreparedInputs, GenerateDiag
         diagram_type: str,
         expected_keywords: Optional[list[str]] = None,
     ) -> DiagramMarkup:
-        """Call LLM for diagram generation and validate the response."""
+        """Call LLM for diagram generation and validate the response.
+
+        Args:
+            prompt: The prompt string for the LLM.
+            llm_config: Configuration for the LLM API.
+            cache_config: Configuration for LLM caching.
+            diagram_type: A string identifying the type of diagram (for logging).
+            expected_keywords: Optional list of keywords that the response should start with.
+
+        Returns:
+            The generated diagram markup as a string, or None if an error occurs
+            or validation fails.
+        """
         markup: DiagramMarkup = None
         try:
             markup_raw: str = call_llm(prompt, llm_config, cache_config)
@@ -317,7 +353,14 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPreparedInputs, GenerateDiag
             return None
 
     def _generate_relationship_flowchart(self, prepared_inputs: dict[str, Any]) -> DiagramMarkup:
-        """Generate the relationship flowchart diagram."""
+        """Generate the relationship flowchart diagram.
+
+        Args:
+            prepared_inputs: The dictionary of prepared inputs.
+
+        Returns:
+            The generated diagram markup, or None.
+        """
         from sourcelens.mermaid_diagrams.relationship_flowchart_prompts import (
             format_relationship_flowchart_prompt,
         )
@@ -346,7 +389,14 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPreparedInputs, GenerateDiag
         )
 
     def _generate_class_diagram(self, prepared_inputs: dict[str, Any]) -> DiagramMarkup:
-        """Generate the class hierarchy diagram."""
+        """Generate the class hierarchy diagram.
+
+        Args:
+            prepared_inputs: The dictionary of prepared inputs.
+
+        Returns:
+            The generated diagram markup, or None.
+        """
         code_context_str = str(prepared_inputs.get("structure_context", "No code context available."))
         if not code_context_str or code_context_str == "File structure data was not available for diagram context.":
             self._log_warning("No proper code/structure context for class diagram. Diagram might be suboptimal.")
@@ -368,7 +418,14 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPreparedInputs, GenerateDiag
         )
 
     def _generate_package_diagram(self, prepared_inputs: dict[str, Any]) -> DiagramMarkup:
-        """Generate the package dependency diagram."""
+        """Generate the package dependency diagram.
+
+        Args:
+            prepared_inputs: The dictionary of prepared inputs.
+
+        Returns:
+            The generated diagram markup, or None.
+        """
         structure_context_str = str(prepared_inputs.get("structure_context", ""))
         empty_context_placeholders = {
             "File structure data was not available for diagram context.",
@@ -396,7 +453,14 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPreparedInputs, GenerateDiag
         )
 
     def _generate_sequence_diagrams(self, prepared_inputs: dict[str, Any]) -> SequenceDiagramsListInternal:
-        """Generate sequence diagrams based on identified scenarios."""
+        """Generate sequence diagrams based on identified scenarios.
+
+        Args:
+            prepared_inputs: The dictionary of prepared inputs.
+
+        Returns:
+            A list of generated sequence diagram markups (or None for failed ones).
+        """
         diagram_format: str = str(prepared_inputs.get("diagram_format", DEFAULT_DIAGRAM_FORMAT_NODE))
         self._log_info("Generating Sequence diagrams (format: %s)...", diagram_format)
         generated_seq_diagrams: SequenceDiagramsListInternal = []
@@ -486,7 +550,15 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPreparedInputs, GenerateDiag
         return generated_seq_diagrams
 
     def execution(self, prepared_inputs: GenerateDiagramsPreparedInputs) -> GenerateDiagramsExecutionResult:
-        """Generate diagrams based on prepared context and configuration flags."""
+        """Generate diagrams based on prepared context and configuration flags.
+
+        Args:
+            prepared_inputs: A dictionary with prepared inputs from pre_execution,
+                             or None if skipping.
+
+        Returns:
+            A dictionary containing the generated diagram markups.
+        """
         results: GenerateDiagramsExecutionResult = {
             "relationship_flowchart_markup": None,
             "class_diagram_markup": None,
@@ -516,7 +588,13 @@ class GenerateDiagramsNode(BaseNode[GenerateDiagramsPreparedInputs, GenerateDiag
         prepared_inputs: GenerateDiagramsPreparedInputs,
         execution_outputs: GenerateDiagramsExecutionResult,
     ) -> None:
-        """Update shared context with generated diagram markups."""
+        """Update shared context with generated diagram markups.
+
+        Args:
+            shared_context: The shared context dictionary.
+            prepared_inputs: The inputs used for execution.
+            execution_outputs: A dictionary of generated diagram markups.
+        """
         if prepared_inputs is None:
             self._log_info("Diagram generation was skipped; no updates to shared_context for diagrams.")
             shared_context.setdefault("relationship_flowchart_markup", None)

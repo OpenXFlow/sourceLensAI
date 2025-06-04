@@ -23,7 +23,7 @@ and constants should be imported from `sourcelens.core.common_types`.
 # Import flow-specific data structures and constants defined within this sub-package.
 from ._common import (
     CODE_BLOCK_MAX_LINES_FOR_CHAPTERS,  # Specific to FL01 chapter writing
-    SequenceDiagramContext,  # Specific context for FL01 sequence diagrams
+    # SequenceDiagramContext was moved to sourcelens.core.common_types
     WriteChapterContext,  # Specific context for FL01 chapter writing
 )
 
@@ -41,7 +41,6 @@ from .source_index_prompts import SourceIndexPrompts
 __all__ = [
     # From ._common (specific to FL01 code analysis prompts)
     "CODE_BLOCK_MAX_LINES_FOR_CHAPTERS",
-    "SequenceDiagramContext",
     "WriteChapterContext",
     # Prompt classes for code analysis
     "AbstractionPrompts",
@@ -50,6 +49,8 @@ __all__ = [
     "PROJECT_REVIEW_SCHEMA",  # Exporting schema alongside the prompt class
     "ScenarioPrompts",
     "SourceIndexPrompts",
+    # SequenceDiagramContext is no longer re-exported from here.
+    # Modules needing it should import from sourcelens.core.common_types
 ]
 # Note: Types like CodeAbstractionsList, CodeRelationshipsDict, ChapterMetadata,
 # DEFAULT_CODE_RELATIONSHIP_LABEL, MAX_CODE_FLOWCHART_LABEL_LEN are now in
