@@ -15,16 +15,21 @@
 
 """Prompts for generating an AI-powered review of web content."""
 
-from typing import Any, Final, Optional
+from typing import TYPE_CHECKING, Any, Final, Optional
 
-from sourcelens.core.common_types import WebContentConceptsList, WebContentRelationshipsDict
+if TYPE_CHECKING:
+    from sourcelens.core.common_types import WebContentConceptsList, WebContentRelationshipsDict
+
 
 MAX_CONCEPT_DESC_SNIPPET_LEN_REVIEW: Final[int] = 100
+"""Max character length for individual concept summary snippets used in the review prompt."""
 MAX_REL_SUMMARY_SNIPPET_LEN_REVIEW: Final[int] = 150
-MAX_INVENTORY_SNIPPET_LEN_REVIEW: Final[int] = 1000  # Snippet of the inventory markdown file
-MAX_EXAMPLE_RELATIONSHIPS_IN_REVIEW_PROMPT: Final[int] = 2  # New constant for example relationships
+"""Max character length for the overall relationship summary snippet used in the review prompt."""
+MAX_INVENTORY_SNIPPET_LEN_REVIEW: Final[int] = 1000
+"""Max character length for the content inventory snippet provided to the review prompt."""
+MAX_EXAMPLE_RELATIONSHIPS_IN_REVIEW_PROMPT: Final[int] = 2
+"""Maximum number of example relationships to include in the review prompt for context."""
 
-# Schema for the expected YAML output of the web content review
 WEB_REVIEW_SCHEMA: Final[dict[str, Any]] = {
     "type": "object",
     "properties": {
@@ -63,69 +68,90 @@ class WebReviewPrompts:
     """Container for prompts related to generating a review of web content."""
 
     @staticmethod
-    def _format_concepts_for_review_prompt(concepts: WebContentConceptsList) -> str:
+    def _format_concepts_for_review_prompt(concepts: "WebContentConceptsList", target_language: str) -> str:
         """Format the list of web concepts for the review prompt.
 
         Args:
-            concepts: List of identified web concepts. Each item should have
-                      'name', 'summary', and 'source_chunk_ids'.
+            concepts (WebContentConceptsList): List of identified web concepts.
+            target_language (str): The target language for the review.
 
         Returns:
-            A formatted string of concepts for the prompt.
+            str: A formatted string of concepts for the prompt.
         """
         if not concepts:
             return "No core concepts were identified for this web content."
-        header = "Identified Core Concepts/Topics (Index. Name - Summary Snippet - Source Chunk IDs):"
+
+        lang_note: str = ""
+        if target_language.lower() != "english":
+            lang_cap: str = target_language.capitalize()
+            lang_note = f" (Names/summaries are expected to be in {lang_cap})"
+
+        header: str = f"Identified Core Concepts/Topics{lang_note} (Index. Name - Summary Snippet - Source Chunk IDs):"
         parts: list[str] = [header]
         for i, concept_item in enumerate(concepts):
-            name: str = str(concept_item.get("name", f"Unnamed Concept {i}"))
-            summary: str = str(concept_item.get("summary", "N/A"))
+            name_val: Any = concept_item.get("name", f"Unnamed Concept {i}")
+            name: str = str(name_val)
+            summary_val: Any = concept_item.get("summary", "N/A")
+            summary: str = str(summary_val)
             summary_snippet: str = summary[:MAX_CONCEPT_DESC_SNIPPET_LEN_REVIEW]
             if len(summary) > MAX_CONCEPT_DESC_SNIPPET_LEN_REVIEW:
                 summary_snippet += "..."
 
-            source_ids_raw = concept_item.get("source_chunk_ids", [])
-            source_ids_list = (
+            source_ids_raw: Any = concept_item.get("source_chunk_ids", [])
+            source_ids_list: list[str] = (
                 [str(sid) for sid in source_ids_raw if isinstance(sid, str)] if isinstance(source_ids_raw, list) else []
             )
-            source_info = (
+            source_info: str = (
                 (
-                    f"(Sources: {', '.join(source_ids_list[:2])}"  # Display up to 2 source IDs for brevity
-                    f"{'...' if len(source_ids_list) > 2 else ''})"  # noqa: PLR2004
+                    f"(Sources: {', '.join(source_ids_list[:2])}{'...' if len(source_ids_list) > 2 else ''})"  # noqa: PLR2004 (literal comparison is fine)
                 )
                 if source_ids_list
-                else ""
+                else "(No specific source chunks listed)"
             )
-
             parts.append(f"  - {i}. {name} {source_info}: {summary_snippet}")
         return "\n".join(parts)
 
     @staticmethod
-    def _format_relationships_for_review_prompt(relationships: WebContentRelationshipsDict) -> str:
+    def _format_relationships_for_review_prompt(
+        relationships: "WebContentRelationshipsDict", target_language: str
+    ) -> str:
         """Format the relationships summary for the review prompt.
 
         Args:
-            relationships: Dictionary of identified relationships.
+            relationships (WebContentRelationshipsDict): Dictionary of identified relationships.
+            target_language (str): The target language for the review.
 
         Returns:
-            A formatted string of the relationship summary for the prompt.
+            str: A formatted string of the relationship summary for the prompt.
         """
-        summary: str = str(relationships.get("overall_summary", "No overall relationship summary provided."))
+        summary_val: Any = relationships.get("overall_summary", "No overall relationship summary provided.")
+        summary: str = str(summary_val)
         summary_snippet: str = summary[:MAX_REL_SUMMARY_SNIPPET_LEN_REVIEW]
         if len(summary) > MAX_REL_SUMMARY_SNIPPET_LEN_REVIEW:
             summary_snippet += "..."
-        rel_summary_header = "Relationship Summary (AI's interpretation of content flow between concepts):"
+
+        lang_note: str = ""
+        if target_language.lower() != "english":
+            lang_cap_rel: str = target_language.capitalize()
+            lang_note = f" (Summary and labels are expected to be in {lang_cap_rel})"
+
+        rel_summary_header: str = (
+            f"Relationship Summary{lang_note} (AI's interpretation of content flow between concepts):"
+        )
         details_any: Any = relationships.get("relationships", [])
-        details_list = details_any if isinstance(details_any, list) else []
+        details_list: list[Any] = details_any if isinstance(details_any, list) else []
         key_rels_parts: list[str] = []
+
         if details_list:
             key_rels_parts.append("  Key Interactions Example:")
-            # Use the new constant here
             for rel_item_any in details_list[:MAX_EXAMPLE_RELATIONSHIPS_IN_REVIEW_PROMPT]:
                 if isinstance(rel_item_any, dict):
-                    from_idx = rel_item_any.get("from_concept_index", "?")
-                    to_idx = rel_item_any.get("to_concept_index", "?")
-                    label = rel_item_any.get("label", "related to")
+                    from_idx_val: Any = rel_item_any.get("from_concept_index", "?")
+                    from_idx: str = str(from_idx_val)
+                    to_idx_val: Any = rel_item_any.get("to_concept_index", "?")
+                    to_idx: str = str(to_idx_val)
+                    label_val: Any = rel_item_any.get("label", "related to")
+                    label: str = str(label_val)
                     key_rels_parts.append(f"    - Concept {from_idx} --[{label}]--> Concept {to_idx}")
 
         return f"{rel_summary_header}\n{summary_snippet}\n" + "\n".join(key_rels_parts)
@@ -135,14 +161,14 @@ class WebReviewPrompts:
         """Format the content inventory for the review prompt.
 
         Args:
-            inventory_md: Markdown content of the web inventory.
+            inventory_md (Optional[str]): Markdown content of the web inventory.
 
         Returns:
-            A formatted string of the inventory snippet for the prompt.
+            str: A formatted string of the inventory snippet for the prompt.
         """
         if not inventory_md or not inventory_md.strip():
             return "Content inventory: Not available or empty."
-        header = "Content Inventory Snippet (Summaries of crawled documents/chunks):"
+        header: str = "Content Inventory Snippet (Summaries of crawled documents/chunks):"
         snippet: str = inventory_md.strip()[:MAX_INVENTORY_SNIPPET_LEN_REVIEW]
         if len(inventory_md.strip()) > MAX_INVENTORY_SNIPPET_LEN_REVIEW:
             snippet += "..."
@@ -153,119 +179,144 @@ class WebReviewPrompts:
         """Prepare language specific instruction for the web review.
 
         Args:
-            target_language: The target language for the review.
+            target_language (str): The target language for the review.
 
         Returns:
-            Language-specific instruction string.
+            str: Language-specific instruction string.
         """
         instruction_parts: list[str] = []
+        lang_cap_instr: str = target_language.capitalize()
         if target_language.lower() != "english":
-            lang_cap = target_language.capitalize()
             instruction_parts.append(
-                f"IMPORTANT: Generate all textual content for this review (summaries, characteristics, etc.) "
-                f"exclusively in **{lang_cap}**,"
+                f"IMPORTANT: You MUST generate all textual content for this review (summaries, characteristics, insights, etc.) "  # noqa: E501
+                f"exclusively in **{lang_cap_instr}**."
             )
-            instruction_parts.append("unless quoting specific English technical terms, titles, or proper nouns.\n")
-        return "\n".join(instruction_parts)
+            instruction_parts.append(
+                f"Use English ONLY for universally recognized technical terms, direct quotes from the English source, or "  # noqa: E501
+                f"proper nouns that do not have a common {lang_cap_instr} equivalent (e.g., 'API', 'JSON', 'Crawl4AI').\n"  # noqa: E501
+            )
+        else:
+            instruction_parts.append("IMPORTANT: Generate all textual content for this review in **English**.\n")
+        return "".join(instruction_parts)
 
     @staticmethod
-    def _get_web_review_yaml_example(collection_name: str) -> str:
+    def _get_web_review_yaml_example(collection_name: str, target_language: str) -> str:
         """Return the YAML example structure string for the web review prompt.
 
         Args:
-            collection_name: The name of the document collection.
+            collection_name (str): The name of the document collection.
+            target_language (str): The target language for localization of examples.
 
         Returns:
-            A string representing the YAML example structure.
+            str: A string representing the YAML example structure.
         """
-        yaml_ex_kc_header = "key_insights:"
-        yaml_ex_kc_items_l1 = '  - "Insight: The content primarily focuses on [Main Topic A from Concepts]. '
-        yaml_ex_kc_items_l2 = 'Benefit: Provides a clear entry point for users interested in [Main Topic A]."'
-        yaml_ex_kc_items_l3 = '  - "Insight: A strong connection exists between [Concept B] and [Concept C]. '
-        yaml_ex_kc_items_l4 = 'Benefit: Helps users understand how these ideas build upon each other."'
-
-        yaml_ex_ad_header = "areas_for_improvement_or_clarification:"
-        yaml_ex_ad_items_l1 = (
-            '  - "Suggestion: The transition between [Concept D name (Index X)] and [Concept E name (Index Y)] '
-            'could be smoother. Consider adding a brief introductory sentence to bridge them."'
+        # Basic English examples, to be localized if needed
+        ex_insight1_en: str = (
+            "Insight: The content primarily focuses on [Main Topic A from Concepts]. "
+            "Benefit: Provides a clear entry point for users interested in [Main Topic A]."
         )
-        yaml_ex_ad_items_l2 = (
-            '  - "Question: Is the target audience for [Concept F name (Index Z)] beginners or advanced users? '
-            'The current explanation might be too [simple/complex]."'
+        ex_suggestion1_en: str = (
+            "Suggestion: The transition between [Concept D name (Index X)] and [Concept E name (Index Y)] "
+            "could be smoother. Consider adding a brief introductory sentence to bridge them."
         )
-
-        yaml_ex_op_header = "content_structure_observations:"
-        yaml_ex_op_items_l1 = (
-            '  - "Observation: The information flows logically from general introductions (e.g., [Concept A name '
-            '(Index 0)]) to more specific details (e.g., [Concept B name (Index 2)])."'
+        ex_observation1_en: str = (
+            "Observation: The information flows logically from general introductions (e.g., [Concept A name "
+            "(Index 0)]) to more specific details (e.g., [Concept B name (Index 2)])."
         )
-        yaml_ex_op_items_l2 = (
-            '  - "Observation: The use of examples in document chunks related to [Concept G name (Index W)] '
-            'is effective for illustration."'
-        )
-
-        yaml_ex_os_header = "overall_assessment: |"
-        yaml_ex_os_lines_l1 = (
+        ex_assessment_en_l1: str = (
             f"    Overall, the web content for '{collection_name}' appears to be [e.g., well-structured, "
+            "comprehensive on Topic X, somewhat fragmented]."
         )
-        yaml_ex_os_lines_l2 = "comprehensive on Topic X, somewhat fragmented]."
-        yaml_ex_os_lines_l3 = (
+        ex_assessment_en_l2: str = (
             "    A key strength is [e.g., its clear explanation of Concept A name (Index 0)]. A potential area for "
+            "enhancement could be [e.g., providing more examples for Concept B name (Index 2)]. "
+            "(AI-generated assessment for discussion)."
         )
-        yaml_ex_os_lines_l4 = "enhancement could be [e.g., providing more examples for Concept B name (Index 2)]. "
-        yaml_ex_os_lines_l5 = "(AI-generated assessment for discussion)."
+
+        # Simple localization for Slovak example
+        if target_language.lower() == "slovak":
+            ex_insight1: str = (
+                '  - "Poznatok: Obsah sa primárne zameriava na [Hlavná téma A z Konceptov]. '
+                'Výhoda: Poskytuje jasný vstupný bod pre používateľov so záujmom o [Hlavná téma A]."'
+            )
+            ex_suggestion1: str = (
+                '  - "Návrh: Prechod medzi [Názov konceptu D (Index X)] a [Názov konceptu E (Index Y)] '
+                'by mohol byť plynulejší. Zvážte pridanie krátkej úvodnej vety na ich prepojenie."'
+            )
+            ex_observation1: str = (
+                '  - "Pozorovanie: Informácie plynú logicky od všeobecných úvodov (napr. [Názov konceptu A (Index 0)]) '
+                'k špecifickejším detailom (napr. [Názov konceptu B (Index 2)])."'
+            )
+            ex_assessment_l1: str = (
+                f"    Celkovo sa webový obsah pre '{collection_name}' javí byť [napr. dobre štruktúrovaný, "
+                "komplexný v téme X, trochu fragmentovaný]."
+            )
+            ex_assessment_l2: str = (
+                "    Kľúčovou silnou stránkou je [napr. jasné vysvetlenie Názvu konceptu A (Index 0)]. Potenciálnou oblasťou "  # noqa: E501
+                "na zlepšenie by mohlo byť [napr. poskytnutie viacerých príkladov pre Názov konceptu B (Index 2)]. "
+                "(Hodnotenie vygenerované AI na diskusiu)."
+            )
+        else:  # Default to English if no specific translation
+            ex_insight1 = f'  - "{ex_insight1_en}"'
+            ex_suggestion1 = f'  - "{ex_suggestion1_en}"'
+            ex_observation1 = f'  - "{ex_observation1_en}"'
+            ex_assessment_l1 = ex_assessment_en_l1
+            ex_assessment_l2 = ex_assessment_en_l2
+
+        yaml_ex_kc_header: str = "key_insights:"
+        yaml_ex_ad_header: str = "areas_for_improvement_or_clarification:"
+        yaml_ex_op_header: str = "content_structure_observations:"
+        yaml_ex_os_header: str = "overall_assessment: |"
 
         output_parts: list[str] = ["```yaml"]
-        output_parts.append(yaml_ex_kc_header)
-        output_parts.extend([yaml_ex_kc_items_l1 + yaml_ex_kc_items_l2, yaml_ex_kc_items_l3 + yaml_ex_kc_items_l4])
-        output_parts.append(yaml_ex_ad_header)
-        output_parts.extend([yaml_ex_ad_items_l1, yaml_ex_ad_items_l2])
-        output_parts.append(yaml_ex_op_header)
-        output_parts.extend([yaml_ex_op_items_l1, yaml_ex_op_items_l2])
-        output_parts.append(yaml_ex_os_header)
-        output_parts.extend(
-            [yaml_ex_os_lines_l1 + yaml_ex_os_lines_l2, yaml_ex_os_lines_l3 + yaml_ex_os_lines_l4 + yaml_ex_os_lines_l5]
-        )
+        output_parts.extend([yaml_ex_kc_header, ex_insight1])
+        output_parts.extend([yaml_ex_ad_header, ex_suggestion1])
+        output_parts.extend([yaml_ex_op_header, ex_observation1])
+        output_parts.extend([yaml_ex_os_header, ex_assessment_l1, ex_assessment_l2])
         output_parts.append("```")
         return "\n".join(output_parts)
 
     @staticmethod
     def format_generate_web_review_prompt(
         document_collection_name: str,
-        concepts_data: WebContentConceptsList,
-        relationships_data: WebContentRelationshipsDict,
+        concepts_data: "WebContentConceptsList",
+        relationships_data: "WebContentRelationshipsDict",
         inventory_content: Optional[str],
         target_language: str,
     ) -> str:
         """Format the prompt for the LLM to generate a review of web content.
 
         Args:
-            document_collection_name: The name of the document collection (e.g., website name).
-            concepts_data: List of identified web concepts.
-            relationships_data: Dictionary of identified relationships.
-            inventory_content: Markdown content of the web inventory (summaries of pages).
-            target_language: The target language for the review.
+            document_collection_name (str): The name of the document collection.
+            concepts_data (WebContentConceptsList): List of identified web concepts.
+            relationships_data (WebContentRelationshipsDict): Dictionary of identified relationships.
+            inventory_content (Optional[str]): Markdown content of the web inventory.
+            target_language (str): The target language for the review.
 
         Returns:
-            A formatted string prompting the LLM for a structured web content review.
+            str: A formatted string prompting the LLM for a structured web content review.
         """
-        concepts_str: str = WebReviewPrompts._format_concepts_for_review_prompt(concepts_data)
-        relationships_str: str = WebReviewPrompts._format_relationships_for_review_prompt(relationships_data)
+        concepts_str: str = WebReviewPrompts._format_concepts_for_review_prompt(concepts_data, target_language)
+        relationships_str: str = WebReviewPrompts._format_relationships_for_review_prompt(
+            relationships_data, target_language
+        )
         inventory_str: str = WebReviewPrompts._format_inventory_for_review_prompt(inventory_content)
         lang_instruction: str = WebReviewPrompts._get_web_review_language_instruction(target_language)
-        output_structure_yaml: str = WebReviewPrompts._get_web_review_yaml_example(document_collection_name)
+        output_structure_yaml: str = WebReviewPrompts._get_web_review_yaml_example(
+            document_collection_name, target_language
+        )
 
-        task_desc_lines_l1 = "Generate a high-level review of the provided web content. Focus on:"
-        task_desc_lines_l2 = " - Key insights or takeaways from the content."
-        task_desc_lines_l3_part1 = (
+        task_desc_lines_l1: str = "Generate a high-level review of the provided web content. Focus on:"
+        task_desc_lines_l2: str = " - Key insights or takeaways from the content."
+        task_desc_lines_l3_part1: str = (
             " - Potential areas for improvement, clarification, or further discussion (phrase as suggestions or "
         )
-        task_desc_lines_l3_part2 = (
+        task_desc_lines_l3_part2: str = (
             "questions, referencing specific concepts using 'Concept Name (Index X)' format if relevant)."
         )
-        task_desc_lines_l4 = " - Observations about the content's structure or presentation."
-        task_desc_lines_l5 = "This is an AI-driven initial analysis based on extracted concepts and summaries."
-        task_desc_full = "\n".join(
+        task_desc_lines_l4: str = " - Observations about the content's structure or presentation."
+        task_desc_lines_l5: str = "This is an AI-driven initial analysis based on extracted concepts and summaries."
+        task_desc_full: str = "\n".join(
             [
                 task_desc_lines_l1,
                 task_desc_lines_l2,
@@ -275,18 +326,18 @@ class WebReviewPrompts:
             ]
         )
 
-        prompt_lines_l1 = (
+        prompt_lines_l1_intro: str = (
             f"You are an AI assistant tasked with providing a review of web content from: '{document_collection_name}'."
         )
-        prompt_lines_l2 = (
+        prompt_lines_l2_context: str = (
             "Based on the following summarized information (identified concepts from document chunks, "
-            "their relationships, and an inventory of documents), provide a structured review."
+            "their relationships, and an inventory of documents/chunks), provide a structured review."
         )
 
         prompt_lines: list[str] = [
-            prompt_lines_l1,
-            lang_instruction,
-            prompt_lines_l2,
+            prompt_lines_l1_intro,
+            lang_instruction,  # Language instruction placed prominently
+            prompt_lines_l2_context,
             "\n**Provided Contextual Information:**",
             f"1. Identified Core Concepts (from document chunks):\n{concepts_str}",
             f"\n2. Summary of Concept Relationships:\n{relationships_str}",
@@ -302,6 +353,7 @@ class WebReviewPrompts:
             "  - When referencing concepts in your points, use the format 'Concept Name (Index X)' "
             "for clarity, using the names and indices from the 'Identified Core Concepts' section.",
             "  - Ensure your points are specific and actionable where possible.",
+            f"  - All textual fields in the YAML output (key_insights, areas_for_improvement_or_clarification, content_structure_observations, overall_assessment) MUST be in **{target_language.capitalize()}**.",  # noqa: E501
             "\nProvide ONLY the YAML output block. No introductory text or explanations outside the YAML.",
         ]
         return "\n".join(filter(None, prompt_lines))

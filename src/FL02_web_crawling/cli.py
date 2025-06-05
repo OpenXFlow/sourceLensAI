@@ -24,6 +24,7 @@ logging setup, and execution of the web content analysis pipeline.
 
 import argparse
 import copy
+import importlib
 import json
 import logging
 import os
@@ -34,10 +35,13 @@ from urllib.parse import urlparse
 
 from typing_extensions import TypeAlias
 
+# Ensure imports from sourcelens use the full package path if this cli.py
+# is run as part of the sourcelens package (e.g. via `sourcelens web ...`)
+# or if the src directory is in PYTHONPATH.
 from sourcelens.config_loader import (
     AUTO_DETECT_OUTPUT_NAME,
     DEFAULT_GENERATED_TEXT_LANGUAGE,
-    DEFAULT_LOG_FORMAT_MAIN,  # Správny import
+    DEFAULT_LOG_FORMAT_MAIN,
     DEFAULT_LOG_LEVEL,
     DEFAULT_MAIN_OUTPUT_DIR,
     DEFAULT_WEB_MAX_DEPTH_RECURSIVE,
@@ -50,7 +54,7 @@ from sourcelens.config_loader import (
 from sourcelens.utils.helpers import sanitize_filename
 
 if TYPE_CHECKING:
-    from sourcelens.core import Flow as SourceLensFlow
+    from sourcelens.core import Flow as SourceLensFlow  # type: ignore[attr-defined]
 
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -58,33 +62,26 @@ logger: logging.Logger = logging.getLogger(__name__)
 SharedContextDict: TypeAlias = dict[str, Any]
 ResolvedFlowConfigData: TypeAlias = ConfigDict
 
-_FLOW_NAME: Final[str] = "FL02_web_crawling"
-_FLOW_DEFAULT_CONFIG_FILENAME: Final[str] = "config.default.json"
-_GLOBAL_CONFIG_FILENAME: Final[str] = "config.json"
+_FLOW_NAME_CLI: Final[str] = "FL02_web_crawling"  # Renamed to avoid conflict with _FLOW_NAME in other modules
+_FLOW_DEFAULT_CONFIG_FILENAME_CLI: Final[str] = "config.default.json"
+_GLOBAL_CONFIG_FILENAME_CLI: Final[str] = "config.json"
 
-_FLOW_DEFAULT_LOG_FORMAT_CLI: Final[str] = DEFAULT_LOG_FORMAT_MAIN
-_FLOW_DEFAULT_OUTPUT_NAME_CLI: Final[str] = f"{DEFAULT_WEB_PROCESSING_MODE}-web-analysis"
-# _FLOW_DEFAULT_OUTPUT_DIR_CLI: Final[str] = DEFAULT_MAIN_OUTPUT_DIR
-# _FLOW_DEFAULT_LANGUAGE_CLI: Final[str] = DEFAULT_GENERATED_TEXT_LANGUAGE
-_FLOW_DEFAULT_MAX_DEPTH_CLI: Final[int] = DEFAULT_WEB_MAX_DEPTH_RECURSIVE
-_FLOW_DEFAULT_CRAWL_SUBDIR_CLI: Final[str] = DEFAULT_WEB_OUTPUT_SUBDIR_NAME
+_FLOW_DEFAULT_LOG_FORMAT_STANDALONE_CLI: Final[str] = DEFAULT_LOG_FORMAT_MAIN
+_FLOW_DEFAULT_OUTPUT_NAME_STANDALONE_CLI: Final[str] = f"{DEFAULT_WEB_PROCESSING_MODE}-web-analysis"
+_FLOW_DEFAULT_MAX_DEPTH_STANDALONE_CLI: Final[int] = DEFAULT_WEB_MAX_DEPTH_RECURSIVE
+_FLOW_DEFAULT_CRAWL_SUBDIR_STANDALONE_CLI: Final[str] = DEFAULT_WEB_OUTPUT_SUBDIR_NAME
 
-_FLOW_MAX_PROJECT_NAME_LEN_CLI: Final[int] = 40
+_FLOW_MAX_PROJECT_NAME_LEN_STANDALONE_CLI: Final[int] = 40
 
 
 def parse_web_crawling_args() -> argparse.Namespace:
     """Parse command-line arguments specific to the Web Crawling Flow.
 
-    Defines and parses arguments for specifying web content sources (URL, sitemap,
-    or file), configuration files, output naming and location, crawl parameters,
-    logging levels, and LLM provider overrides for a standalone run.
-
     Returns:
         argparse.Namespace: An object containing the parsed command-line arguments.
-                            Each argument is accessible as an attribute of this object.
     """
     parser = argparse.ArgumentParser(
-        description=f"Run SourceLens {_FLOW_NAME} independently.",
+        description=f"Run SourceLens {_FLOW_NAME_CLI} independently.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     source_group = parser.add_mutually_exclusive_group(required=True)
@@ -96,7 +93,7 @@ def parse_web_crawling_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--flow-config",
-        default=_FLOW_DEFAULT_CONFIG_FILENAME,
+        default=_FLOW_DEFAULT_CONFIG_FILENAME_CLI,
         metavar="FILE_PATH",
         type=Path,
         help="Path to the flow-specific JSON configuration file (relative to this script or absolute).",
@@ -107,7 +104,7 @@ def parse_web_crawling_args() -> argparse.Namespace:
         metavar="FILE_PATH",
         type=Path,
         help=(
-            f"Optional path to a global SourceLens '{_GLOBAL_CONFIG_FILENAME}'. "
+            f"Optional path to a global SourceLens '{_GLOBAL_CONFIG_FILENAME_CLI}'. "
             "If not provided, attempts to find it in parent dirs."
         ),
     )
@@ -137,12 +134,8 @@ def parse_web_crawling_args() -> argparse.Namespace:
 def setup_flow_logging(log_config: dict[str, Any]) -> None:
     """Set up basic logging for this flow's standalone execution.
 
-    Configures logging to stream to stdout and optionally to a file,
-    based on the resolved logging level and log file path from `log_config`.
-
     Args:
-        log_config (dict[str, Any]): A dictionary containing logging configuration.
-                                     Expected keys: 'log_level' (str), 'log_file' (Optional[str]).
+        log_config (dict[str, Any]): A dictionary containing 'log_level' and 'log_file'.
     """
     log_level_str: str = str(log_config.get("log_level", DEFAULT_LOG_LEVEL)).upper()
     log_level_val: int = getattr(logging, log_level_str, logging.INFO)
@@ -164,27 +157,21 @@ def setup_flow_logging(log_config: dict[str, Any]) -> None:
 
     logging.basicConfig(
         level=log_level_val,
-        format=_FLOW_DEFAULT_LOG_FORMAT_CLI,
+        format=_FLOW_DEFAULT_LOG_FORMAT_STANDALONE_CLI,
         handlers=handlers_to_add,
         force=True,
     )
-    logger.info("Logging initialized for %s standalone run at level %s.", _FLOW_NAME, log_level_str)
+    logger.info("Logging initialized for %s standalone run at level %s.", _FLOW_NAME_CLI, log_level_str)
 
 
 def _derive_name_from_web_source_cli(args: argparse.Namespace) -> str:
     """Derive an output name for web sources based on URL or filename.
 
-    Prioritizes crawl URL, then sitemap URL, then file path/URL.
-    The derived name is sanitized for use in filenames.
-
     Args:
         args (argparse.Namespace): Parsed command-line arguments.
-                                   Expected to have `crawl_url`, `crawl_sitemap`,
-                                   or `crawl_file` attributes.
 
     Returns:
         str: A sanitized, derived name suitable for output identification.
-             Returns a default name if derivation fails.
     """
     source_val: Any = args.crawl_url or args.crawl_sitemap or args.crawl_file
     name_candidate: str = ""
@@ -192,24 +179,20 @@ def _derive_name_from_web_source_cli(args: argparse.Namespace) -> str:
     if source_val:
         source_str: str = str(source_val)
         try:
-            parsed_url_obj = urlparse(source_str)
+            parsed_url_obj: Any = urlparse(source_str)
             if parsed_url_obj.scheme and parsed_url_obj.netloc:
                 name_candidate = parsed_url_obj.netloc or Path(parsed_url_obj.path).stem
             else:
                 name_candidate = Path(source_str).stem
             if name_candidate:
-                return sanitize_filename(name_candidate, max_len=_FLOW_MAX_PROJECT_NAME_LEN_CLI)
+                return sanitize_filename(name_candidate, max_len=_FLOW_MAX_PROJECT_NAME_LEN_STANDALONE_CLI)
         except (ValueError, TypeError, AttributeError, OSError) as e:
             logger.warning("Could not derive name from web source '%s': %s", source_str, e)
-    return _FLOW_DEFAULT_OUTPUT_NAME_CLI
+    return _FLOW_DEFAULT_OUTPUT_NAME_STANDALONE_CLI
 
 
 def _derive_name_if_auto_cli(args: argparse.Namespace, current_name: str) -> str:
-    """Derive output name if the current name indicates auto-detection for web flow.
-
-    If `current_name` is `AUTO_DETECT_OUTPUT_NAME`, this function attempts to derive
-    a name from the web source specified in CLI arguments. If the user provided
-    a `--name` via CLI, that takes precedence.
+    """Derive output name if current name indicates auto-detection for web flow.
 
     Args:
         args (argparse.Namespace): Parsed command-line arguments.
@@ -222,18 +205,12 @@ def _derive_name_if_auto_cli(args: argparse.Namespace, current_name: str) -> str
         return current_name
     if args.name:
         return str(args.name)
-    derived = _derive_name_from_web_source_cli(args)
-    return derived or _FLOW_DEFAULT_OUTPUT_NAME_CLI
+    derived_name: str = _derive_name_from_web_source_cli(args)
+    return derived_name or _FLOW_DEFAULT_OUTPUT_NAME_STANDALONE_CLI
 
 
 class DummyConfigLoaderForFlowCLI:
-    """A simplified configuration loader for standalone web flow CLI execution.
-
-    This loader is used when a global SourceLens configuration file is not
-    provided or found. It loads the web flow's default configuration and merges
-    it with a minimal global structure, applying basic CLI argument overrides
-    relevant to web crawling.
-    """
+    """A simplified configuration loader for standalone web flow CLI execution."""
 
     _global_config_data: ConfigDict
     _logger_dummy: logging.Logger
@@ -245,23 +222,23 @@ class DummyConfigLoaderForFlowCLI:
             global_config_path_str (Optional[str]): Optional path to a global configuration file.
         """
         self._logger_dummy = logging.getLogger(f"{__name__}.DummyConfigLoaderForFlowCLI")
-        self._logger_dummy.setLevel(logging.DEBUG)
+        self._logger_dummy.setLevel(logging.DEBUG)  # Ensure dummy logger can output debugs
         if not self._logger_dummy.handlers:
-            _dummy_handler = logging.StreamHandler(sys.stdout)
-            _dummy_handler.setFormatter(logging.Formatter(_FLOW_DEFAULT_LOG_FORMAT_CLI))
+            _dummy_handler: logging.Handler = logging.StreamHandler(sys.stdout)
+            _dummy_handler.setFormatter(logging.Formatter(_FLOW_DEFAULT_LOG_FORMAT_STANDALONE_CLI))
             self._logger_dummy.addHandler(_dummy_handler)
             self._logger_dummy.propagate = False
 
         self._global_config_data = {"common": {}, "profiles": {}}
         if global_config_path_str:
             try:
-                global_path = Path(global_config_path_str).resolve(strict=True)
+                global_path: Path = Path(global_config_path_str).resolve(strict=True)
                 self._global_config_data = self._read_json_file(global_path)
                 self._logger_dummy.debug("DummyLoader: Successfully loaded global config from %s", global_path)
             except (FileNotFoundError, ConfigError) as e_load_global:
-                log_msg_part1 = f"DummyLoader: Could not load global config from '{global_config_path_str}': "
-                log_msg_part2 = f"{e_load_global}. Using minimal global."
-                self._logger_dummy.warning(log_msg_part1 + log_msg_part2)
+                log_msg_part1_str: str = f"DummyLoader: Could not load global config from '{global_config_path_str}': "
+                log_msg_part2_str: str = f"{e_load_global}. Using minimal global."
+                self._logger_dummy.warning(log_msg_part1_str + log_msg_part2_str)
         else:
             self._logger_dummy.debug("DummyLoader: No global config path provided. Using minimal global structure.")
 
@@ -300,11 +277,11 @@ class DummyConfigLoaderForFlowCLI:
         Returns:
             ConfigDict: The modified `base` dictionary.
         """
-        for k, v_override in override.items():
-            if isinstance(v_override, dict) and isinstance(base.get(k), dict):
-                self._deep_merge_configs(base[k], v_override)
+        for k_merge, v_override_merge in override.items():
+            if isinstance(v_override_merge, dict) and isinstance(base.get(k_merge), dict):
+                self._deep_merge_configs(base[k_merge], v_override_merge)
             else:
-                base[k] = v_override
+                base[k_merge] = v_override_merge
         return base
 
     def _apply_simplified_cli_overrides(self, cfg: ConfigDict, cli_args: argparse.Namespace, flow_nm: str) -> None:
@@ -316,30 +293,30 @@ class DummyConfigLoaderForFlowCLI:
             flow_nm (str): The name of the current flow (e.g., "FL02_web_crawling").
         """
         self._logger_dummy.debug("DummyLoader applying simplified CLI args to web config.")
-        common_block = cfg.setdefault("common", {})
-        common_output = common_block.setdefault("common_output_settings", {})
-        logging_block = common_block.setdefault("logging", {})
-        flow_block = cfg.setdefault(flow_nm, {})
+        common_block_cfg: ConfigDict = cfg.setdefault("common", {})
+        common_output_cfg: ConfigDict = common_block_cfg.setdefault("common_output_settings", {})
+        logging_block_cfg: ConfigDict = common_block_cfg.setdefault("logging", {})
+        flow_block_cfg: ConfigDict = cfg.setdefault(flow_nm, {})
 
         if getattr(cli_args, "name", None):
-            common_output["default_output_name"] = cli_args.name
+            common_output_cfg["default_output_name"] = cli_args.name
         if getattr(cli_args, "output", None):
-            common_output["main_output_directory"] = str(cli_args.output)
+            common_output_cfg["main_output_directory"] = str(cli_args.output)
         if getattr(cli_args, "language", None):
-            common_output["generated_text_language"] = cli_args.language
+            common_output_cfg["generated_text_language"] = cli_args.language
         if getattr(cli_args, "log_level", None):
-            logging_block["log_level"] = cli_args.log_level
+            logging_block_cfg["log_level"] = cli_args.log_level
         if getattr(cli_args, "log_file", None):
-            logging_block["log_file"] = str(cli_args.log_file)
+            logging_block_cfg["log_file"] = str(cli_args.log_file)
 
-        if flow_nm == _FLOW_NAME:
-            crawler_opts = flow_block.setdefault("crawler_options", {})
+        if flow_nm == _FLOW_NAME_CLI:  # Use the CLI-specific flow name constant
+            crawler_opts_cfg: ConfigDict = flow_block_cfg.setdefault("crawler_options", {})
             if getattr(cli_args, "crawl_depth", None) is not None:
-                crawler_opts["max_depth_recursive"] = cli_args.crawl_depth
+                crawler_opts_cfg["max_depth_recursive"] = cli_args.crawl_depth
             if getattr(cli_args, "crawl_output_subdir", None):
-                crawler_opts["default_output_subdir_name"] = cli_args.crawl_output_subdir
+                crawler_opts_cfg["default_output_subdir_name"] = cli_args.crawl_output_subdir
             if getattr(cli_args, "llm_provider", None):
-                flow_block["active_llm_provider_id"] = cli_args.llm_provider
+                flow_block_cfg["active_llm_provider_id"] = cli_args.llm_provider
 
     def get_resolved_flow_config(
         self,
@@ -358,20 +335,26 @@ class DummyConfigLoaderForFlowCLI:
             ResolvedFlowConfigData: The merged and partially resolved configuration.
         """
         self._logger_dummy.info("DummyLoader resolving config for web flow: %s", flow_name)
-        default_cfg = self._read_json_file(flow_default_config_path)
-        merged_cfg = copy.deepcopy(default_cfg)
+        default_cfg: ConfigDict = self._read_json_file(flow_default_config_path)
+        merged_cfg: ConfigDict = copy.deepcopy(default_cfg)
         self._logger_dummy.debug("DummyLoader: Loaded default flow config: %s", json.dumps(default_cfg, indent=2))
 
-        self._deep_merge_configs(merged_cfg.setdefault("common", {}), self._global_config_data.get("common", {}))
-        merged_cfg.setdefault("profiles", {}).update(self._global_config_data.get("profiles", {}))
+        merged_cfg_common: ConfigDict = merged_cfg.setdefault("common", {})
+        global_common: ConfigDict = self._global_config_data.get("common", {})
+        self._deep_merge_configs(merged_cfg_common, global_common)
+
+        merged_cfg_profiles: ConfigDict = merged_cfg.setdefault("profiles", {})
+        global_profiles: ConfigDict = self._global_config_data.get("profiles", {})
+        merged_cfg_profiles.update(global_profiles)  # Profiles are usually flat lists, update handles merge
+
         self._logger_dummy.debug(
             "DummyLoader: After merging global common/profiles: %s", json.dumps(merged_cfg, indent=2)
         )
 
-        global_flow_overrides = self._global_config_data.get(flow_name, {})
-        if global_flow_overrides:
-            merged_cfg_flow_block = merged_cfg.setdefault(flow_name, {})
-            self._deep_merge_configs(merged_cfg_flow_block, global_flow_overrides)
+        global_flow_overrides_cfg: ConfigDict = self._global_config_data.get(flow_name, {})
+        if global_flow_overrides_cfg:
+            merged_cfg_flow_block: ConfigDict = merged_cfg.setdefault(flow_name, {})
+            self._deep_merge_configs(merged_cfg_flow_block, global_flow_overrides_cfg)
             self._logger_dummy.debug(
                 "DummyLoader: After merging global flow-specific overrides: %s", json.dumps(merged_cfg, indent=2)
             )
@@ -380,19 +363,23 @@ class DummyConfigLoaderForFlowCLI:
             self._apply_simplified_cli_overrides(merged_cfg, cli_args, flow_name)
             self._logger_dummy.debug("DummyLoader: After applying CLI overrides: %s", json.dumps(merged_cfg, indent=2))
 
-        llm_default_opts = merged_cfg.get("common", {}).get("llm_default_options", {})
-        active_llm_id = merged_cfg.get(flow_name, {}).get("active_llm_provider_id")
-        profiles = merged_cfg.get("profiles", {}).get("llm_profiles", [])
-        resolved_llm_cfg = copy.deepcopy(llm_default_opts)
+        llm_default_opts_cfg: ConfigDict = merged_cfg.get("common", {}).get("llm_default_options", {})
+        active_llm_id_str: Optional[str] = cast(
+            Optional[str], merged_cfg.get(flow_name, {}).get("active_llm_provider_id")
+        )
+        profiles_list: list[Any] = cast(list[Any], merged_cfg.get("profiles", {}).get("llm_profiles", []))
+        resolved_llm_cfg: ConfigDict = copy.deepcopy(llm_default_opts_cfg)
         self._logger_dummy.debug("DummyLoader: Initial resolved_llm_cfg from defaults: %s", resolved_llm_cfg)
 
-        if active_llm_id and isinstance(active_llm_id, str) and isinstance(profiles, list):
-            active_profile = next(
-                (p for p in profiles if isinstance(p, dict) and p.get("provider_id") == active_llm_id), None
+        if active_llm_id_str and isinstance(profiles_list, list):
+            active_profile_found: Optional[dict[str, Any]] = next(
+                (p for p in profiles_list if isinstance(p, dict) and p.get("provider_id") == active_llm_id_str), None
             )
-            if active_profile:
-                resolved_llm_cfg.update(active_profile)
-                self._logger_dummy.debug("DummyLoader: Merged active profile '%s': %s", active_llm_id, active_profile)
+            if active_profile_found:
+                resolved_llm_cfg.update(active_profile_found)
+                self._logger_dummy.debug(
+                    "DummyLoader: Merged active profile '%s': %s", active_llm_id_str, active_profile_found
+                )
                 if cli_args and getattr(cli_args, "llm_model", None):
                     resolved_llm_cfg["model"] = cli_args.llm_model
                     self._logger_dummy.debug("DummyLoader: CLI override model to: %s", cli_args.llm_model)
@@ -401,8 +388,9 @@ class DummyConfigLoaderForFlowCLI:
                     self._logger_dummy.debug("DummyLoader: CLI override api_key (value redacted).")
 
         merged_cfg["resolved_llm_config"] = resolved_llm_cfg
-        log_llm_config_dummy_safe = {
-            k: (v if k != "api_key" else ("***REDACTED***" if v else None)) for k, v in resolved_llm_cfg.items()
+        log_llm_config_dummy_safe: dict[str, Any] = {
+            k_llm: (v_llm if k_llm != "api_key" else ("***REDACTED***" if v_llm else None))
+            for k_llm, v_llm in resolved_llm_cfg.items()
         }
         self._logger_dummy.debug(
             "DummyLoader: Final resolved_llm_config: %s", json.dumps(log_llm_config_dummy_safe, indent=2, default=str)
@@ -414,19 +402,20 @@ def _initialize_flow_config_and_logging_logic(args: argparse.Namespace) -> Resol
     """Perform the core logic for initializing configuration and logging for standalone web flow.
 
     Args:
-        args: Parsed command-line arguments.
+        args (argparse.Namespace): Parsed command-line arguments.
 
     Returns:
-        The fully resolved configuration dictionary specific
-        to the web analysis flow to be executed.
+        ResolvedFlowConfigData: The fully resolved configuration dictionary specific
+                                to the web analysis flow to be executed.
 
     Raises:
         FileNotFoundError: If the flow's default configuration file is not found.
         ConfigError: If there's an error loading or processing configurations.
     """
     flow_default_path_arg: Path = args.flow_config
+    flow_default_path: Path
     if not flow_default_path_arg.is_absolute():
-        script_parent_dir = Path(__file__).parent.resolve()
+        script_parent_dir: Path = Path(__file__).parent.resolve()
         flow_default_path = (script_parent_dir / flow_default_path_arg).resolve()
     else:
         flow_default_path = flow_default_path_arg.resolve()
@@ -442,14 +431,14 @@ def _initialize_flow_config_and_logging_logic(args: argparse.Namespace) -> Resol
         logger.info("Using explicit global config: %s", global_config_path_to_use)
         loader = ConfigLoader(global_config_path_to_use)
     else:
-        current_dir = Path(__file__).parent.resolve()
-        for _i in range(3):
-            potential_global_config = current_dir / _GLOBAL_CONFIG_FILENAME
+        current_dir: Path = Path(__file__).parent.resolve()
+        for _i in range(3):  # Check up to 3 parent directories
+            potential_global_config: Path = current_dir / _GLOBAL_CONFIG_FILENAME_CLI
             if potential_global_config.is_file():
                 global_config_path_to_use = str(potential_global_config)
                 logger.info("Auto-detected global config at: %s", global_config_path_to_use)
                 break
-            if current_dir.parent == current_dir:
+            if current_dir.parent == current_dir:  # Reached root
                 break
             current_dir = current_dir.parent
         if global_config_path_to_use:
@@ -461,8 +450,8 @@ def _initialize_flow_config_and_logging_logic(args: argparse.Namespace) -> Resol
             )
             loader = DummyConfigLoaderForFlowCLI(global_config_path_str=None)
 
-    resolved_flow_config = loader.get_resolved_flow_config(
-        flow_name=_FLOW_NAME,
+    resolved_flow_config: ResolvedFlowConfigData = loader.get_resolved_flow_config(
+        flow_name=_FLOW_NAME_CLI,
         flow_default_config_path=flow_default_path,
         cli_args=args,
     )
@@ -470,21 +459,18 @@ def _initialize_flow_config_and_logging_logic(args: argparse.Namespace) -> Resol
     common_config_resolved: dict[str, Any] = resolved_flow_config.get("common", {})
     logging_settings_resolved: dict[str, Any] = common_config_resolved.get("logging", {})
     setup_flow_logging(logging_settings_resolved)
-    logger.info("%s CLI: Configuration loaded and processed.", _FLOW_NAME)
+    logger.info("%s CLI: Configuration loaded and processed.", _FLOW_NAME_CLI)
     return resolved_flow_config
 
 
 def _initialize_flow_config_and_logging(args: argparse.Namespace) -> ResolvedFlowConfigData:
     """Initialize ConfigLoader, resolve config for web flow, and set up logging.
 
-    This function acts as a wrapper around `_initialize_flow_config_and_logging_logic`
-    to provide centralized error handling for critical configuration and logging setup failures.
-
     Args:
-        args: Parsed command-line arguments.
+        args (argparse.Namespace): Parsed command-line arguments.
 
     Returns:
-        The fully resolved configuration for this flow.
+        ResolvedFlowConfigData: The fully resolved configuration for this flow.
 
     Raises:
         SystemExit: If configuration or logging setup fails critically.
@@ -492,15 +478,15 @@ def _initialize_flow_config_and_logging(args: argparse.Namespace) -> ResolvedFlo
     try:
         return _initialize_flow_config_and_logging_logic(args)
     except (ConfigError, FileNotFoundError, ValueError, TypeError, AttributeError) as e_conf:
-        print(f"ERROR: {_FLOW_NAME} CLI - Configuration setup failed: {e_conf!s}", file=sys.stderr)
+        print(f"ERROR: {_FLOW_NAME_CLI} CLI - Configuration setup failed: {e_conf!s}", file=sys.stderr)
         if not logger.handlers:
-            logging.basicConfig(level=logging.ERROR, format=_FLOW_DEFAULT_LOG_FORMAT_CLI, stream=sys.stderr)
+            logging.basicConfig(level=logging.ERROR, format=_FLOW_DEFAULT_LOG_FORMAT_STANDALONE_CLI, stream=sys.stderr)
         logger.critical("Configuration error: %s", e_conf, exc_info=True)
         sys.exit(1)
     except (ImportError, RuntimeError, OSError) as e_unexpected:  # pragma: no cover
-        print(f"ERROR: {_FLOW_NAME} CLI - Unexpected error during init: {e_unexpected!s}", file=sys.stderr)
+        print(f"ERROR: {_FLOW_NAME_CLI} CLI - Unexpected error during init: {e_unexpected!s}", file=sys.stderr)
         if not logger.handlers:
-            logging.basicConfig(level=logging.ERROR, format=_FLOW_DEFAULT_LOG_FORMAT_CLI, stream=sys.stderr)
+            logging.basicConfig(level=logging.ERROR, format=_FLOW_DEFAULT_LOG_FORMAT_STANDALONE_CLI, stream=sys.stderr)
         logger.critical("Unexpected initialization error: %s", e_unexpected, exc_info=True)
         sys.exit(1)
 
@@ -510,46 +496,44 @@ def _prepare_standalone_initial_context(
 ) -> SharedContextDict:
     """Prepare `initial_context` for a standalone web crawling and analysis run.
 
-    Populates the context with values from CLI arguments and the resolved
-    configuration, setting up all keys expected by the web analysis flow.
-
     Args:
-        args: Parsed command-line arguments.
-        resolved_flow_config: The fully resolved configuration specific to this
-                              web analysis flow.
+        args (argparse.Namespace): Parsed command-line arguments.
+        resolved_flow_config (ResolvedFlowConfigData): The fully resolved configuration.
 
     Returns:
-        The initial context dictionary for the pipeline.
+        SharedContextDict: The initial context dictionary for the pipeline.
     """
     common_settings: dict[str, Any] = resolved_flow_config.get("common", {})
     common_output_settings: dict[str, Any] = common_settings.get("common_output_settings", {})
-    flow_specific_settings: dict[str, Any] = resolved_flow_config.get(_FLOW_NAME, {})
+    flow_specific_settings: dict[str, Any] = resolved_flow_config.get(_FLOW_NAME_CLI, {})
 
-    output_name_from_config = str(common_output_settings.get("default_output_name", AUTO_DETECT_OUTPUT_NAME))
-    final_output_name = _derive_name_if_auto_cli(args, output_name_from_config)
+    output_name_from_config: str = str(common_output_settings.get("default_output_name", AUTO_DETECT_OUTPUT_NAME))
+    final_output_name: str = _derive_name_if_auto_cli(args, output_name_from_config)
 
-    main_out_dir_from_config = str(common_output_settings.get("main_output_directory", DEFAULT_MAIN_OUTPUT_DIR))
-    final_main_out_dir = str(args.output) if args.output else main_out_dir_from_config
+    main_out_dir_from_config: str = str(common_output_settings.get("main_output_directory", DEFAULT_MAIN_OUTPUT_DIR))
+    final_main_out_dir: str = str(args.output) if args.output else main_out_dir_from_config
 
-    gen_text_lang_from_config = str(
+    gen_text_lang_from_config: str = str(
         common_output_settings.get("generated_text_language", DEFAULT_GENERATED_TEXT_LANGUAGE)
     )
-    final_gen_text_lang = str(args.language) if args.language else gen_text_lang_from_config
+    final_gen_text_lang: str = str(args.language) if args.language else gen_text_lang_from_config
 
-    crawler_opts_from_resolved_config = flow_specific_settings.get("crawler_options", {})
+    crawler_opts_from_resolved_config: dict[str, Any] = flow_specific_settings.get("crawler_options", {})
 
     crawl_file_final: Optional[str] = None
     if args.crawl_file:
-        crawl_file_str = str(args.crawl_file)
+        crawl_file_str: str = str(args.crawl_file)
         try:
-            p_crawl_file = Path(crawl_file_str)
-            is_likely_path = os.sep in crawl_file_str or (os.path.altsep and os.path.altsep in crawl_file_str)
+            p_crawl_file: Path = Path(crawl_file_str)
+            is_likely_path: bool = os.sep in crawl_file_str or (
+                os.path.altsep is not None and os.path.altsep in crawl_file_str
+            )
             if not urlparse(crawl_file_str).scheme and (
                 p_crawl_file.is_file() or (is_likely_path and not p_crawl_file.exists())
             ):
                 if p_crawl_file.is_file():
                     crawl_file_final = str(p_crawl_file.resolve())
-                else:
+                else:  # pragma: no cover
                     logger.warning(
                         "Local crawl file path '%s' does not exist or is not a file. Using as raw string.",
                         crawl_file_str,
@@ -557,18 +541,24 @@ def _prepare_standalone_initial_context(
                     crawl_file_final = crawl_file_str
             else:
                 crawl_file_final = crawl_file_str
-        except Exception:  # pragma: no cover
+        except (OSError, ValueError, TypeError) as e_path_resolve:  # pragma: no cover
             logger.error(
-                "Error processing --crawl-file argument '%s'. Using as raw string.", crawl_file_str, exc_info=True
+                "Error processing --crawl-file argument '%s': %s. Using as raw string.",
+                crawl_file_str,
+                e_path_resolve,
+                exc_info=True,
             )
             crawl_file_final = crawl_file_str
 
-    resolved_llm_config_for_context = resolved_flow_config.get("resolved_llm_config", {})
+    resolved_llm_config_for_context: ConfigDict = resolved_flow_config.get("resolved_llm_config", {})
     logger.debug(
         "Resolved LLM config to be used in initial_context for flow '%s': %s",
-        _FLOW_NAME,
+        _FLOW_NAME_CLI,
         json.dumps(
-            {k: (v if k != "api_key" else "***REDACTED***") for k, v in resolved_llm_config_for_context.items()},
+            {
+                k_llm: (v_llm if k_llm != "api_key" else "***REDACTED***")
+                for k_llm, v_llm in resolved_llm_config_for_context.items()
+            },  # type: ignore[union-attr]
             indent=2,
         ),
     )
@@ -580,14 +570,16 @@ def _prepare_standalone_initial_context(
         "project_name": final_output_name,
         "output_dir": final_main_out_dir,
         "language": final_gen_text_lang,
-        "current_operation_mode": _FLOW_NAME,
+        "current_operation_mode": _FLOW_NAME_CLI,
         "current_mode_output_options": flow_specific_settings.get("output_options", {}),
         "crawl_url": args.crawl_url,
         "crawl_sitemap": args.crawl_sitemap,
         "crawl_file": crawl_file_final,
-        "cli_crawl_depth": crawler_opts_from_resolved_config.get("max_depth_recursive", _FLOW_DEFAULT_MAX_DEPTH_CLI),
+        "cli_crawl_depth": crawler_opts_from_resolved_config.get(
+            "max_depth_recursive", _FLOW_DEFAULT_MAX_DEPTH_STANDALONE_CLI
+        ),
         "cli_crawl_output_subdir": crawler_opts_from_resolved_config.get(
-            "default_output_subdir_name", _FLOW_DEFAULT_CRAWL_SUBDIR_CLI
+            "default_output_subdir_name", _FLOW_DEFAULT_CRAWL_SUBDIR_STANDALONE_CLI
         ),
         "files": [],
         "web_content_chunks": [],
@@ -600,70 +592,81 @@ def _prepare_standalone_initial_context(
         "final_output_dir": None,
         "final_output_dir_web_crawl": None,
     }
-    logger.debug("Standalone initial context for %s prepared.", _FLOW_NAME)
-    log_llm_in_ctx = initial_context.get("llm_config", {})
+    logger.debug("Standalone initial context for %s prepared.", _FLOW_NAME_CLI)
+    log_llm_in_ctx_val: Any = initial_context.get("llm_config", {})
+    log_llm_in_ctx: ConfigDict = log_llm_in_ctx_val if isinstance(log_llm_in_ctx_val, dict) else {}
     logger.debug(
         "LLM config in final initial_context: %s",
-        json.dumps({k: (v if k != "api_key" else "***REDACTED***") for k, v in log_llm_in_ctx.items()}, indent=2),
+        json.dumps(
+            {k_llm: (v_llm if k_llm != "api_key" else "***REDACTED***") for k_llm, v_llm in log_llm_in_ctx.items()},
+            indent=2,
+        ),
     )
     return initial_context
 
 
 def run_standalone_web_crawling() -> None:
-    """Run the web crawling and analysis flow independently as a standalone script.
+    """Run the web crawling and analysis flow independently as a standalone script."""
+    args: argparse.Namespace = parse_web_crawling_args()
+    resolved_config: ResolvedFlowConfigData = _initialize_flow_config_and_logging(args)
+    initial_context: SharedContextDict = _prepare_standalone_initial_context(args, resolved_config)
 
-    This function orchestrates the entire process for a standalone run:
-    1.  Parses command-line arguments specific to web crawling and analysis.
-    2.  Initializes configuration, merging flow defaults, optional global settings,
-        and CLI overrides, and sets up logging.
-    3.  Prepares the initial shared context required by the web analysis flow.
-    4.  Dynamically imports and instantiates the `create_web_crawling_flow`.
-    5.  Runs the flow using `run_standalone` from the base `Flow` class.
-    6.  Handles potential errors and exceptions during execution.
-    7.  Prints a success or failure message to the console.
-    """
-    args = parse_web_crawling_args()
-    resolved_config = _initialize_flow_config_and_logging(args)
-    initial_context = _prepare_standalone_initial_context(args, resolved_config)
-
-    logger.info("Starting %s flow (standalone)...", _FLOW_NAME)
-    final_flow_settings_for_log = initial_context.get("config", {}).get(_FLOW_NAME, {})
+    logger.info("Starting %s flow (standalone)...", _FLOW_NAME_CLI)
+    final_flow_settings_for_log_val: Any = initial_context.get("config", {}).get(_FLOW_NAME_CLI, {})
+    final_flow_settings_for_log: ConfigDict = (
+        final_flow_settings_for_log_val if isinstance(final_flow_settings_for_log_val, dict) else {}
+    )
     logger.debug(
         "Effective runtime configuration for flow '%s': %s",
-        _FLOW_NAME,
+        _FLOW_NAME_CLI,
         json.dumps(final_flow_settings_for_log, indent=2, default=str),
     )
-    final_common_settings_for_log = initial_context.get("config", {}).get("common", {})
+    final_common_settings_for_log_val: Any = initial_context.get("config", {}).get("common", {})
+    final_common_settings_for_log: ConfigDict = (
+        final_common_settings_for_log_val if isinstance(final_common_settings_for_log_val, dict) else {}
+    )
     logger.debug(
         "Effective common settings for flow '%s': %s",
-        _FLOW_NAME,
+        _FLOW_NAME_CLI,
         json.dumps(final_common_settings_for_log, indent=2, default=str),
     )
-    final_llm_config_for_log = initial_context.get("llm_config", {})
+    final_llm_config_for_log_val: Any = initial_context.get("llm_config", {})
+    final_llm_config_for_log: ConfigDict = (
+        final_llm_config_for_log_val if isinstance(final_llm_config_for_log_val, dict) else {}
+    )
     logger.debug(
         "Effective LLM config for flow '%s': %s",
-        _FLOW_NAME,
+        _FLOW_NAME_CLI,
         json.dumps(
-            {k: (v if k != "api_key" else "***REDACTED***") for k, v in final_llm_config_for_log.items()},
+            {
+                k_llm: (v_llm if k_llm != "api_key" else "***REDACTED***")
+                for k_llm, v_llm in final_llm_config_for_log.items()
+            },
             indent=2,
             default=str,
         ),
     )
 
     try:
-        from .flow import create_web_crawling_flow
+        # Dynamically import the flow creation function to avoid circular dependencies
+        # if cli.py is imported by other parts of the package that flow.py might import.
+        # This assumes flow.py is in the same directory as cli.py (or PYTHONPATH is set up).
+        flow_module = importlib.import_module(".flow", package=__package__)
+        create_web_crawling_flow_func = getattr(flow_module, "create_web_crawling_flow")
 
-        web_pipeline: "SourceLensFlow" = create_web_crawling_flow(initial_context)
+        web_pipeline: "SourceLensFlow" = create_web_crawling_flow_func(initial_context)
         logger.info("Web crawling pipeline created. Running...")
-        web_pipeline.run_standalone(initial_context)
+        web_pipeline.run_standalone(initial_context)  # This is a synchronous call
         logger.info("Web crawling pipeline finished successfully.")
 
-        final_dir_key = "final_output_dir"
+        final_dir_key: str = "final_output_dir"
         final_dir_val_any: Any = initial_context.get(final_dir_key) or initial_context.get("final_output_dir_web_crawl")
-        final_dir_val: Optional[str] = str(final_dir_val_any) if isinstance(final_dir_val_any, str) else None
+        final_dir_val: Optional[str] = str(final_dir_val_any) if isinstance(final_dir_val_any, (str, Path)) else None
 
         if final_dir_val:
-            output_msg_type = "Web summary/tutorial" if initial_context.get(final_dir_key) else "Raw crawled content"
+            output_msg_type: str = (
+                "Web summary/tutorial" if initial_context.get(final_dir_key) else "Raw crawled content"
+            )
             print(f"\n✅ Standalone {output_msg_type} processing complete! Output in: {Path(final_dir_val).resolve()}")
         else:  # pragma: no cover
             print("\n⚠️ Standalone web analysis finished, but no output directory was set in context.")
@@ -685,7 +688,7 @@ def run_standalone_web_crawling() -> None:
         print("\n❌ Execution interrupted by user.", file=sys.stderr)
         sys.exit(130)
 
-    logger.info("%s flow (standalone) finished processing.", _FLOW_NAME)
+    logger.info("%s flow (standalone) finished processing.", _FLOW_NAME_CLI)
 
 
 if __name__ == "__main__":  # pragma: no cover

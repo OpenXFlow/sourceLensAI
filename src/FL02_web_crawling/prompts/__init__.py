@@ -21,12 +21,14 @@ specifically tailored for analyzing crawled web content.
 
 # Import prompt generating classes and relevant data structures/constants
 # from their respective modules within this sub-package.
+# Using explicit relative imports from within the same package.
 
-from .chapter_prompts import WebChapterPrompts, WriteWebChapterContext
+from ._common import WriteWebChapterContext
+from .chapter_prompts import WebChapterPrompts
 from .concept_prompts import (
+    DEFAULT_MAX_CONCEPTS_TO_IDENTIFY,
     MAX_CONTEXT_FILES_FOR_PROMPT_CONCEPTS,
     MAX_FILE_CONTENT_SNIPPET_LEN_CONCEPTS,
-    # WEB_CONCEPT_ITEM_SCHEMA, # Schema is defined and used in n02_identify_web_concepts.py
     WebConceptPrompts,
 )
 from .inventory_prompts import (
@@ -35,29 +37,29 @@ from .inventory_prompts import (
 )
 from .relationship_prompts import (
     MAX_RELATIONSHIP_LABEL_LEN,
-    # WEB_RELATIONSHIPS_DICT_SCHEMA, # Defined in n03_analyze_web_relationships.py
-    # WEB_RELATIONSHIP_ITEM_SCHEMA,  # Defined in n03_analyze_web_relationships.py
     WebRelationshipPrompts,
 )
 from .review_prompts import WEB_REVIEW_SCHEMA, WebReviewPrompts
 
 __all__ = [
+    # From _common.py
+    "WriteWebChapterContext",
     # From concept_prompts.py
     "WebConceptPrompts",
     "MAX_CONTEXT_FILES_FOR_PROMPT_CONCEPTS",
     "MAX_FILE_CONTENT_SNIPPET_LEN_CONCEPTS",
+    "DEFAULT_MAX_CONCEPTS_TO_IDENTIFY",
     # From relationship_prompts.py
     "WebRelationshipPrompts",
     "MAX_RELATIONSHIP_LABEL_LEN",
     # From chapter_prompts.py
     "WebChapterPrompts",
-    "WriteWebChapterContext",  # Dataclass for chapter writing context
     # From inventory_prompts.py
     "WebInventoryPrompts",
     "MAX_DOCUMENT_SNIPPET_FOR_SUMMARY_PROMPT",
     # From review_prompts.py
     "WebReviewPrompts",
-    "WEB_REVIEW_SCHEMA",  # This schema is defined in review_prompts.py
+    "WEB_REVIEW_SCHEMA",
 ]
 
 # End of src/FL02_web_crawling/prompts/__init__.py
