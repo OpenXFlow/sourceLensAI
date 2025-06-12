@@ -20,8 +20,11 @@ GitPython>=3.1.0
 
 # Dependencies for FL02_web_crawling flow
 crawl4ai>=0.6.3
+yt-dlp>=2023.12.30
+webvtt-py>=0.5.1
 # playwright>=1.40.0 # Typically a transitive dependency of crawl4ai
 
 # Note: Type stubs like types-PyYAML, types-requests, types-jsonschema
 # are development dependencies and should not be in this runtime requirements.txt.
 # They are managed via `pip install .[dev]`.
+# End of requirements.txt

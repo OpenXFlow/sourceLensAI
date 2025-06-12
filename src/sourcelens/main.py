@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Final, Optional, cast
 from urllib.parse import urlparse
@@ -41,10 +42,16 @@ from sourcelens.config_loader import (
     ConfigLoader,
 )
 from sourcelens.core import Flow as SourceLensFlow
-from sourcelens.utils.helpers import sanitize_filename
+from sourcelens.utils._exceptions import LlmApiError
+from sourcelens.utils.helpers import (
+    get_youtube_video_title_and_id,
+    is_youtube_url,
+    sanitize_filename,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     pass
+
 
 SharedContextDict: TypeAlias = dict[str, Any]
 ResolvedFlowConfigData: TypeAlias = ConfigDict
@@ -52,10 +59,12 @@ ResolvedFlowConfigData: TypeAlias = ConfigDict
 _DEFAULT_LOG_DIR_MAIN: Final[str] = "logs"
 _DEFAULT_LOG_LEVEL_MAIN: Final[str] = "INFO"
 _DEFAULT_LOG_FORMAT_MAIN: Final[str] = "%(asctime)s - %(name)s:%(funcName)s - %(levelname)s - %(message)s"
-_DEFAULT_WEB_OUTPUT_NAME_FALLBACK_MAIN: Final[str] = "web-content-analysis"
-_DEFAULT_CODE_OUTPUT_NAME_FALLBACK_MAIN: Final[str] = "code-analysis-output"
-_MAX_PROJECT_NAME_LEN_MAIN: Final[int] = 40
-_DEFAULT_MAX_FILE_SIZE_MAIN: Final[int] = 150000
+
+_DEFAULT_YT_BASE_NAME_FALLBACK_MAIN: Final[str] = "youtube_video"
+_DEFAULT_WEB_BASE_NAME_FALLBACK_MAIN: Final[str] = "web_content"
+_DEFAULT_CODE_BASE_NAME_FALLBACK_MAIN: Final[str] = "code_project"
+
+_MAX_BASE_NAME_LEN_MAIN: Final[int] = 50
 _DEFAULT_MAIN_OUTPUT_DIR_MAIN: Final[str] = "output"
 _DEFAULT_GENERATED_TEXT_LANGUAGE_MAIN: Final[str] = "english"
 
@@ -63,26 +72,24 @@ logger_main: logging.Logger = logging.getLogger(__name__)
 
 NoFilesFetchedError: Optional[type[Exception]] = None
 try:
-    # Corrected import path assuming FL01_code_analysis is a top-level directory in src
-    # and nodes is a submodule. This structure implies FL01_code_analysis is effectively a package.
-    n01_fetch_code_module_path = "FL01_code_analysis.nodes.n01_fetch_code"
-    n01_fetch_code_module = importlib.import_module(n01_fetch_code_module_path)
-    NoFilesFetchedError = getattr(n01_fetch_code_module, "NoFilesFetchedError", None)  # type: ignore[assignment]
+    n01_fetch_code_module_path_val: str = "FL01_code_analysis.nodes.n01_fetch_code"
+    n01_fetch_code_module_obj = importlib.import_module(n01_fetch_code_module_path_val)
+    NoFilesFetchedError = getattr(n01_fetch_code_module_obj, "NoFilesFetchedError", None)
     if NoFilesFetchedError is None:  # pragma: no cover
 
-        class _PlaceholderNoFilesFetchedErrorNF(Exception):
-            """Placeholder if original NoFilesFetchedError is not found."""
+        class _PlaceholderNoFilesFetchedErrorNFSub(Exception):  # pylint: disable=C0115
+            pass
 
-        NoFilesFetchedError = _PlaceholderNoFilesFetchedErrorNF
+        NoFilesFetchedError = _PlaceholderNoFilesFetchedErrorNFSub
 except ImportError:  # pragma: no cover
 
-    class _MissingModuleForNoFilesFetchedErrorNF(Exception):
-        """Placeholder if module for NoFilesFetchedError cannot be imported."""
+    class _MissingModuleForNoFilesFetchedErrorNFSub(Exception):  # pylint: disable=C0115
+        pass
 
-    NoFilesFetchedError = _MissingModuleForNoFilesFetchedErrorNF
+    NoFilesFetchedError = _MissingModuleForNoFilesFetchedErrorNFSub
     logger_main.warning(
-        "Could not dynamically import NoFilesFetchedError. Using a placeholder. "
-        "This might affect specific error handling for no files fetched in code analysis."
+        "Could not dynamically import NoFilesFetchedError from FL01_code_analysis.nodes.n01_fetch_code. "
+        "Using a placeholder. This might affect specific error handling for no files fetched in code analysis."
     )
 
 
@@ -96,151 +103,185 @@ CLI_COMMAND_TO_INTERNAL_FLOW_MAP: Final[dict[str, str]] = {
     "web": "FL02_web_crawling",
     "web_crawling": "FL02_web_crawling",
 }
-CLI_FLOW_CHOICES: Final[list[str]] = list(CLI_COMMAND_TO_INTERNAL_FLOW_MAP.keys())
 
 
 def _get_local_dir_display_root(local_dir: Optional[str]) -> str:
     """Return the display root for local directories, normalizing the path.
 
+    Used for providing a consistent base path display in logs or context.
+
     Args:
-        local_dir: The path string to the local directory.
+        local_dir: The path string to the local directory. Can be relative or absolute.
 
     Returns:
-        A normalized string representation of the local directory root.
+        A normalized string representation of the local directory root (e.g., "./" or "my_project/").
+        Returns an empty string if `local_dir` is None or empty.
     """
     if not local_dir or not isinstance(local_dir, str):
         return ""
-    display_root_str: str = ""
+    display_root_str_val: str = ""
     with contextlib.suppress(ValueError, TypeError, OSError):
-        path_obj = Path(local_dir)
-        if path_obj:
-            display_root_str = path_obj.as_posix()
-            if display_root_str == ".":
-                display_root_str = "./"
-            elif display_root_str and not display_root_str.endswith("/"):
-                display_root_str += "/"
-    return display_root_str
+        path_obj_val: Path = Path(local_dir)
+        if path_obj_val:
+            display_root_str_val = path_obj_val.as_posix()
+            if display_root_str_val == ".":
+                display_root_str_val = "./"
+            elif display_root_str_val and not display_root_str_val.endswith("/"):  # pragma: no cover
+                display_root_str_val += "/"
+    return display_root_str_val
 
 
 def setup_logging(log_config: dict[str, Any]) -> None:
     """Configure application-wide logging based on the provided configuration.
 
+    Sets up logging handlers for console (stdout) and optionally for a file.
+    The logging level and format are determined by `log_config`.
+
     Args:
         log_config: A dictionary containing logging configuration parameters.
+                    Expected keys:
+                    - 'log_dir' (str): Directory for log files.
+                    - 'log_level' (str): Logging level (e.g., "INFO", "DEBUG").
+                    - 'log_file' (Optional[str]): Path to a specific log file for this run.
+                      If "NONE", file logging is disabled. If None and `log_dir` is set,
+                      a default "sourcelens.log" is created in `log_dir`.
     """
-    log_dir_str: str = str(log_config.get("log_dir", _DEFAULT_LOG_DIR_MAIN))
-    log_level_str: str = str(log_config.get("log_level", _DEFAULT_LOG_LEVEL_MAIN)).upper()
-    log_level: int = getattr(logging, log_level_str, logging.INFO)
-    log_file_path_from_config: Optional[str] = log_config.get("log_file")
-    log_file_to_use: Optional[Path] = None
+    log_dir_str_val: str = str(log_config.get("log_dir", _DEFAULT_LOG_DIR_MAIN))
+    log_level_str_val_upper: str = str(log_config.get("log_level", _DEFAULT_LOG_LEVEL_MAIN)).upper()
+    log_level_int_val: int = getattr(logging, log_level_str_val_upper, logging.INFO)
+    log_file_path_cfg_val: Optional[str] = log_config.get("log_file")
+    log_file_to_use_path_val: Optional[Path] = None
+    log_handlers_list: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
 
-    if log_file_path_from_config and log_file_path_from_config.upper() != "NONE":
-        log_file_to_use = Path(log_file_path_from_config)
-    elif not log_file_path_from_config:  # Only set default if not "" and not "NONE"
-        log_dir_path_obj = Path(log_dir_str)
-        log_file_to_use = log_dir_path_obj / "sourcelens.log"
+    if log_file_path_cfg_val and log_file_path_cfg_val.upper() != "NONE":
+        log_file_to_use_path_val = Path(log_file_path_cfg_val)
+    elif not log_file_path_cfg_val:
+        log_dir_path_obj_item: Path = Path(log_dir_str_val)
+        log_file_to_use_path_val = log_dir_path_obj_item / "sourcelens.log"
 
-    handlers_to_add: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
-    if log_file_to_use:
+    if log_file_to_use_path_val:
         try:
-            log_file_to_use.parent.mkdir(parents=True, exist_ok=True)
-            handlers_to_add.append(logging.FileHandler(log_file_to_use, encoding="utf-8", mode="a"))
-            logger_main.info("File logging enabled at: %s", log_file_to_use.resolve())
-        except OSError as e_os_err:  # pragma: no cover
-            print(f"ERROR: Failed to create log file at '{log_file_to_use}': {e_os_err}", file=sys.stderr)
+            log_file_to_use_path_val.parent.mkdir(parents=True, exist_ok=True)
+            file_handler_obj = logging.FileHandler(log_file_to_use_path_val, encoding="utf-8", mode="a")
+            log_handlers_list.append(file_handler_obj)
+            logger_main.info("File logging enabled at: %s", log_file_to_use_path_val.resolve())
+        except OSError as e_os_log_err_val:  # pragma: no cover
+            print(
+                f"ERROR: Failed to create log file at '{log_file_to_use_path_val}': {e_os_log_err_val}", file=sys.stderr
+            )
             logger_main.error("File logging disabled due to setup error. Using console only.")
     else:
         logger_main.info("File logging is disabled.")
 
-    logging.basicConfig(level=log_level, format=_DEFAULT_LOG_FORMAT_MAIN, handlers=handlers_to_add, force=True)
-    logger_main.info("Logging initialized with level %s.", log_level_str)
+    logging.basicConfig(
+        level=log_level_int_val, format=_DEFAULT_LOG_FORMAT_MAIN, handlers=log_handlers_list, force=True
+    )
+    logger_main.info("Logging initialized with level %s.", log_level_str_val_upper)
 
 
 def parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments for the SourceLens tool using subparsers.
 
+    Defines arguments for global configuration, output naming, logging, LLM overrides,
+    and flow-specific subcommands ("code" and "web") with their respective source options.
+
     Returns:
-        An object containing the parsed command-line arguments.
+        An object containing all parsed command-line arguments.
+        Each argument is accessible as an attribute of this object
+        (e.g., `args.config`, `args.flow_command`, `args.repo`).
     """
-    parser = argparse.ArgumentParser(
+    parser_obj = argparse.ArgumentParser(
         description="SourceLens: Generate tutorials from codebases or web content using AI.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--config", default="config.json", metavar="FILE_PATH", help="Path to global config JSON file.")
-    parser.add_argument(
+    parser_obj.add_argument(
+        "--config", default="config.json", metavar="FILE_PATH", help="Path to global config JSON file."
+    )
+    parser_obj.add_argument(
         "-n", "--name", metavar="OUTPUT_NAME", help="Override default output name for the tutorial/summary."
     )
-    parser.add_argument(
+    parser_obj.add_argument(
         "-o",
         "--output",
         metavar="MAIN_OUTPUT_DIR",
         type=Path,
         help="Override main output directory for generated files.",
     )
-    parser.add_argument(
+    parser_obj.add_argument(
         "--language", metavar="LANG", help="Override generated text language (e.g., 'english', 'slovak')."
     )
-    parser.add_argument(
+    parser_obj.add_argument(
         "--log-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         help="Override logging level from config.",
     )
-    parser.add_argument(
+    parser_obj.add_argument(
         "--log-file",
         metavar="PATH_OR_NONE",
         help="Path to log file. Use 'NONE' to disable file logging if enabled by config.",
     )
 
-    llm_overrides_group = parser.add_argument_group("LLM Overrides (common to all flows)")
-    llm_overrides_group.add_argument(
+    llm_overrides_group_obj = parser_obj.add_argument_group("LLM Overrides (common to all flows)")
+    llm_overrides_group_obj.add_argument(
         "--llm-provider", metavar="ID", help="Override active LLM provider ID from config."
     )
-    llm_overrides_group.add_argument("--llm-model", metavar="NAME", help="Override LLM model name.")
-    llm_overrides_group.add_argument("--api-key", metavar="KEY", help="Override LLM API key directly.")
-    llm_overrides_group.add_argument("--base-url", metavar="URL", help="Override LLM API base URL.")
+    llm_overrides_group_obj.add_argument("--llm-model", metavar="NAME", help="Override LLM model name.")
+    llm_overrides_group_obj.add_argument("--api-key", metavar="KEY", help="Override LLM API key directly.")
+    llm_overrides_group_obj.add_argument("--base-url", metavar="URL", help="Override LLM API base URL.")
 
-    subparsers = parser.add_subparsers(dest="flow_command", required=True, help="The type of analysis to perform.")
+    subparsers_obj = parser_obj.add_subparsers(
+        dest="flow_command", required=True, help="The type of analysis to perform."
+    )
 
-    code_parser = subparsers.add_parser(
+    code_parser_obj = subparsers_obj.add_parser(
         "code",
         aliases=["code_analysis"],
         help="Analyze source code from a repository or local directory.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    code_source_group = code_parser.add_mutually_exclusive_group(required=True)
-    code_source_group.add_argument("--dir", metavar="LOCAL_DIR", type=Path, help="Path to local codebase directory.")
-    code_source_group.add_argument("--repo", metavar="REPO_URL", help="URL of the GitHub repository.")
-    code_parser.add_argument("-i", "--include", nargs="+", metavar="PATTERN", help="Override include file patterns.")
-    code_parser.add_argument("-e", "--exclude", nargs="+", metavar="PATTERN", help="Override exclude file patterns.")
-    code_parser.add_argument("-s", "--max-size", type=int, metavar="BYTES", help="Override max file size (bytes).")
-    code_parser.set_defaults(internal_flow_name="FL01_code_analysis")
+    code_source_group_obj = code_parser_obj.add_mutually_exclusive_group(required=True)
+    code_source_group_obj.add_argument(
+        "--dir", metavar="LOCAL_DIR", type=Path, help="Path to local codebase directory."
+    )
+    code_source_group_obj.add_argument("--repo", metavar="REPO_URL", help="URL of the GitHub repository.")
+    code_parser_obj.add_argument(
+        "-i", "--include", nargs="+", metavar="PATTERN", help="Override include file patterns."
+    )
+    code_parser_obj.add_argument(
+        "-e", "--exclude", nargs="+", metavar="PATTERN", help="Override exclude file patterns."
+    )
+    code_parser_obj.add_argument("-s", "--max-size", type=int, metavar="BYTES", help="Override max file size (bytes).")
+    code_parser_obj.set_defaults(internal_flow_name="FL01_code_analysis")
 
-    web_parser = subparsers.add_parser(
+    web_parser_obj = subparsers_obj.add_parser(
         "web",
         aliases=["web_crawling"],
         help="Crawl and analyze content from web URLs, sitemaps, or files.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    web_source_group = web_parser.add_mutually_exclusive_group(required=True)
-    web_source_group.add_argument("--crawl-url", metavar="WEB_URL", help="Root URL of a website to crawl.")
-    web_source_group.add_argument("--crawl-sitemap", metavar="SITEMAP_URL", help="URL of a sitemap.xml to crawl.")
-    web_source_group.add_argument(
+    web_source_group_obj = web_parser_obj.add_mutually_exclusive_group(required=True)
+    web_source_group_obj.add_argument("--crawl-url", metavar="WEB_URL", help="Root URL of a website to crawl.")
+    web_source_group_obj.add_argument("--crawl-sitemap", metavar="SITEMAP_URL", help="URL of a sitemap.xml to crawl.")
+    web_source_group_obj.add_argument(
         "--crawl-file", metavar="FILE_URL_OR_PATH", help="URL or local path to a single text/markdown file."
     )
-    web_parser.add_argument("--crawl-depth", type=int, metavar="N", help="Override max crawl recursion depth.")
-    web_parser.add_argument(
-        "--crawl-output-subdir", metavar="NAME", help="Override subdir name for raw crawled web content."
+    web_parser_obj.add_argument("--crawl-depth", type=int, metavar="N", help="Override max crawl recursion depth.")
+    web_parser_obj.add_argument(
+        "--processing-mode",
+        choices=["minimalistic", "llm_extended"],
+        default=None,
+        help="Override web content processing mode (minimalistic or llm_extended).",
     )
-    web_parser.set_defaults(internal_flow_name="FL02_web_crawling")
+    web_parser_obj.set_defaults(internal_flow_name="FL02_web_crawling")
 
-    return parser.parse_args()
+    return parser_obj.parse_args()
 
 
 def _get_internal_flow_name(cli_flow_command: str) -> str:
-    """Map CLI flow command to internal flow package name.
+    """Map CLI flow command (e.g., "code") to internal flow package name.
 
     Args:
-        cli_flow_command: The flow command provided by the user via CLI.
+        cli_flow_command: The flow command string provided by the user via CLI.
 
     Returns:
         The corresponding internal flow name (e.g., "FL01_code_analysis").
@@ -248,274 +289,341 @@ def _get_internal_flow_name(cli_flow_command: str) -> str:
     Raises:
         ValueError: If the `cli_flow_command` is not a recognized command.
     """
-    internal_name = CLI_COMMAND_TO_INTERNAL_FLOW_MAP.get(cli_flow_command)
-    if internal_name is None:  # Should not happen due to argparse choices
+    internal_name_val: Optional[str] = CLI_COMMAND_TO_INTERNAL_FLOW_MAP.get(cli_flow_command)
+    if internal_name_val is None:  # Should not happen with argparse choices
         raise ValueError(f"Unknown CLI flow command: {cli_flow_command}")  # pragma: no cover
-    return internal_name
+    return internal_name_val
 
 
 def _initialize_app_config_and_logging(args: argparse.Namespace) -> tuple[ResolvedFlowConfigData, str]:
     """Initialize configuration loader, resolve flow-specific config, and set up logging.
 
+    This function handles the core setup for application configuration and logging
+    before any flow execution begins. It determines which flow is being run and loads
+    the appropriate default configuration, merging it with global settings and
+    any overrides specified via command-line arguments.
+
     Args:
-        args: Parsed command-line arguments. `args.internal_flow_name` must be set.
+        args: Parsed command-line arguments from `parse_arguments()`.
+              The `args.internal_flow_name` attribute must be set by the subparser.
 
     Returns:
-        A tuple: (resolved_flow_config, internal_flow_name).
+        A tuple containing:
+            - `resolved_flow_config`: The fully resolved
+              configuration dictionary for the specified flow.
+            - `internal_flow_name`: The internal name of the flow being executed
+              (e.g., "FL01_code_analysis").
+
+    Raises:
+        SystemExit: If critical errors occur during configuration loading or logging setup,
+                    such as missing default configuration files or unrecoverable parsing errors.
     """
     try:
-        config_loader = ConfigLoader(str(args.config))
-        internal_flow_name: str = args.internal_flow_name
+        config_loader_instance_obj = ConfigLoader(str(args.config))
+        internal_flow_name_str_val: str = args.internal_flow_name
 
-        current_script_dir = Path(__file__).resolve().parent
-        project_src_root = current_script_dir.parent
-        flow_default_config_filename = "config.default.json"
-        # Construct path to flow-specific default config relative to project structure
-        # Assumes FL0X_... are directories at the same level as 'sourcelens' dir under 'src'
-        flow_default_path = project_src_root / internal_flow_name / flow_default_config_filename
+        current_script_dir_path_obj: Path = Path(__file__).resolve().parent
+        project_src_root_path_obj: Path = current_script_dir_path_obj.parent
+        flow_default_config_filename_str_val: str = "config.default.json"
+        flow_default_path_obj_val: Path = (
+            project_src_root_path_obj / internal_flow_name_str_val / flow_default_config_filename_str_val
+        )
 
-        if not flow_default_path.is_file():
-            err_msg = f"Default config for flow '{internal_flow_name}' not found at: {flow_default_path}"
-            print(f"CRITICAL ERROR: {err_msg}", file=sys.stderr)
-            raise ConfigError(err_msg)
+        if not flow_default_path_obj_val.is_file():  # pragma: no cover
+            err_msg_str_val: str = (
+                f"Default config for flow '{internal_flow_name_str_val}' "
+                f"not found at expected path: {flow_default_path_obj_val}"
+            )
+            print(f"CRITICAL ERROR: {err_msg_str_val}", file=sys.stderr)
+            raise ConfigError(err_msg_str_val)
 
-        resolved_flow_config: ResolvedFlowConfigData = config_loader.get_resolved_flow_config(
-            flow_name=internal_flow_name,
-            flow_default_config_path=flow_default_path,
+        resolved_flow_config_dict_val: ResolvedFlowConfigData = config_loader_instance_obj.get_resolved_flow_config(
+            flow_name=internal_flow_name_str_val,
+            flow_default_config_path=flow_default_path_obj_val,
             cli_args=args,
         )
 
-        common_config_final: dict[str, Any] = resolved_flow_config.get("common", {})
-        logging_settings_final: dict[str, Any] = common_config_final.get("logging", {})
-        if args.log_file is not None:  # Honor CLI override for log_file path or NONE
-            logging_settings_final["log_file"] = str(args.log_file)
+        common_config_dict_final_item: dict[str, Any] = resolved_flow_config_dict_val.get("common", {})
+        logging_settings_dict_final_item: dict[str, Any] = common_config_dict_final_item.get("logging", {})
+        if hasattr(args, "log_file") and args.log_file is not None:
+            log_file_cli_val_any_item: Any = args.log_file
+            logging_settings_dict_final_item["log_file"] = (
+                str(log_file_cli_val_any_item) if log_file_cli_val_any_item else None
+            )
 
-        setup_logging(logging_settings_final)
+        setup_logging(logging_settings_dict_final_item)
+        logger_main.info("Global and flow-specific configuration loaded for flow: %s", internal_flow_name_str_val)
+        return resolved_flow_config_dict_val, internal_flow_name_str_val
 
-        log_msg_main = "Global and flow-specific configuration loaded and processed successfully for flow: %s"
-        logger_main.info(log_msg_main, internal_flow_name)
-        return resolved_flow_config, internal_flow_name
-
-    except ConfigError as e_conf:
-        print(f"ERROR: Configuration setup failed: {e_conf!s}", file=sys.stderr)
-        if not logger_main.handlers:  # pragma: no cover
-            logging.basicConfig(level=logging.ERROR, format=_DEFAULT_LOG_FORMAT_MAIN, stream=sys.stderr)
-        logger_main.critical("Configuration error: %s", e_conf, exc_info=True)
-        sys.exit(1)
-    except (FileNotFoundError, ValueError) as e_file_val:  # pragma: no cover
-        print(f"ERROR: File or value error during config setup: {e_file_val!s}", file=sys.stderr)
+    except ConfigError as e_config_err_init_val:  # pragma: no cover
+        print(f"ERROR: Configuration setup failed: {e_config_err_init_val!s}", file=sys.stderr)
         if not logger_main.handlers:
             logging.basicConfig(level=logging.ERROR, format=_DEFAULT_LOG_FORMAT_MAIN, stream=sys.stderr)
-        logger_main.critical("File/Value error during config: %s", e_file_val, exc_info=True)
+        logger_main.critical("Configuration error: %s", e_config_err_init_val, exc_info=True)
         sys.exit(1)
-    except (ImportError, AttributeError, RuntimeError, OSError) as e_unexpected:  # pragma: no cover
-        print(f"ERROR: Unexpected error during app initialization: {e_unexpected!s}", file=sys.stderr)
+    except (FileNotFoundError, ValueError) as e_file_val_err_init_val:  # pragma: no cover
+        print(f"ERROR: File or value error during config setup: {e_file_val_err_init_val!s}", file=sys.stderr)
         if not logger_main.handlers:
             logging.basicConfig(level=logging.ERROR, format=_DEFAULT_LOG_FORMAT_MAIN, stream=sys.stderr)
-        logger_main.critical("Unexpected initialization error: %s", e_unexpected, exc_info=True)
+        logger_main.critical("File/Value error during config: %s", e_file_val_err_init_val, exc_info=True)
+        sys.exit(1)
+    except (ImportError, AttributeError, RuntimeError, OSError) as e_unexpected_init_err_val:  # pragma: no cover
+        print(f"ERROR: Unexpected error during app initialization: {e_unexpected_init_err_val!s}", file=sys.stderr)
+        if not logger_main.handlers:
+            logging.basicConfig(level=logging.ERROR, format=_DEFAULT_LOG_FORMAT_MAIN, stream=sys.stderr)
+        logger_main.critical("Unexpected initialization error: %s", e_unexpected_init_err_val, exc_info=True)
         sys.exit(1)
 
 
-# --- Name Derivation Functions ---
-def _derive_name_from_web_source(args: argparse.Namespace) -> str:
-    """Derive an output name specifically for web sources.
-
-    Args:
-        args: Parsed command-line arguments.
+def _get_timestamp_prefix() -> str:
+    """Generate a timestamp prefix in YYYYMMDD_HHMM format.
 
     Returns:
-        A derived name for web analysis.
+        The formatted timestamp string (e.g., "20250611_1910").
     """
-    source_val: Any = args.crawl_url or args.crawl_sitemap or args.crawl_file
-    name_candidate: str = ""
-
-    if source_val:
-        source_str = str(source_val)
-        try:
-            parsed_url_obj = urlparse(source_str)
-            # If it has a scheme and netloc, it's likely a URL
-            if parsed_url_obj.scheme and parsed_url_obj.netloc:
-                name_candidate = parsed_url_obj.netloc or Path(parsed_url_obj.path).stem or ""
-            else:  # Otherwise, treat as a file path
-                name_candidate = Path(source_str).stem
-            if name_candidate:
-                return sanitize_filename(name_candidate, max_len=_MAX_PROJECT_NAME_LEN_MAIN)
-        except (ValueError, TypeError, AttributeError, OSError) as e:  # More specific exceptions
-            logger_main.warning("Could not derive name from web source '%s': %s", source_str, e)
-    return _DEFAULT_WEB_OUTPUT_NAME_FALLBACK_MAIN
+    return datetime.now().strftime("%Y%m%d_%H%M")
 
 
-def _derive_name_from_code_source(args: argparse.Namespace) -> str:
-    """Derive an output name specifically for code sources.
+def _derive_base_name_for_web_source(
+    args: argparse.Namespace,
+) -> tuple[str, str, Optional[str], Optional[str]]:
+    """Derive a base name, type prefix, video ID, and title for web sources.
+
+    Fetches YouTube title if applicable. Uses POSIX-style path separators.
 
     Args:
-        args: Parsed command-line arguments.
+        args: Parsed command-line arguments from `argparse.ArgumentParser`.
+              Expected to have one of `crawl_url`, `crawl_sitemap`, or `crawl_file`.
 
     Returns:
-        A derived name for code analysis.
+        A tuple (base_name, type_prefix, video_id, video_title).
+        `base_name` is sanitized. `type_prefix` is "_yt_" or "_web_".
+        `video_id` and `video_title` are non-None for YouTube URLs.
     """
-    repo_url_val: Any = args.repo
-    local_dir_val: Any = args.dir
-    repo_url: Optional[str] = str(repo_url_val) if isinstance(repo_url_val, str) else None
-    local_dir_path: Optional[Path] = local_dir_val if isinstance(local_dir_val, Path) else None
-    name_candidate: str = ""
+    source_url_str_val_item: Optional[str] = None
+    video_id_val_opt_item_val: Optional[str] = None
+    video_title_val_opt_item_val: Optional[str] = None
+    type_prefix_str_val_item: str = "_web_"
+    base_name_str_val_item: str = _DEFAULT_WEB_BASE_NAME_FALLBACK_MAIN
 
-    if repo_url:
-        with contextlib.suppress(ValueError, TypeError, AttributeError, OSError, IndexError):
-            parsed_url_obj = urlparse(repo_url)
-            if parsed_url_obj.path:
-                name_part = parsed_url_obj.path.strip("/").split("/")[-1]
-                name_candidate = name_part.removesuffix(".git")
-    elif local_dir_path:
-        with contextlib.suppress(OSError, ValueError, TypeError):
-            name_candidate = local_dir_path.name
-    return (
-        sanitize_filename(name_candidate, max_len=_MAX_PROJECT_NAME_LEN_MAIN)
-        if name_candidate
-        else _DEFAULT_CODE_OUTPUT_NAME_FALLBACK_MAIN
-    )
-
-
-def _derive_name_from_source_if_auto(args: argparse.Namespace, config_output_name: str, internal_flow_name: str) -> str:
-    """Derive the output name from source if config_output_name is 'auto-generated'.
-
-    Args:
-        args: Parsed command-line arguments.
-        config_output_name: The output name from the configuration.
-        internal_flow_name: The internal name of the flow being run.
-
-    Returns:
-        The final output name.
-    """
-    if config_output_name != AUTO_DETECT_OUTPUT_NAME:
-        return config_output_name
-
-    if args.name:
-        return str(args.name)
-
-    derived_name: str
-    if internal_flow_name == "FL01_code_analysis":
-        derived_name = _derive_name_from_code_source(args)
-    elif internal_flow_name == "FL02_web_crawling":
-        derived_name = _derive_name_from_web_source(args)
+    if args.crawl_url:
+        source_url_str_val_item = str(args.crawl_url)
+    elif args.crawl_sitemap:
+        source_url_str_val_item = str(args.crawl_sitemap)  # pragma: no cover
+    elif args.crawl_file:
+        source_url_str_val_item = str(args.crawl_file)
     else:  # pragma: no cover
-        logger_main.warning("Unknown flow_name '%s' for name derivation. Using generic fallback.", internal_flow_name)
-        derived_name = "unknown_flow_output"
-
-    if not derived_name:  # pragma: no cover
-        logger_main.error("Name derivation failed unexpectedly, using generic flow-based fallback.")
-        derived_name = (
-            _DEFAULT_CODE_OUTPUT_NAME_FALLBACK_MAIN
-            if internal_flow_name == "FL01_code_analysis"
-            else _DEFAULT_WEB_OUTPUT_NAME_FALLBACK_MAIN
+        return (
+            base_name_str_val_item,
+            type_prefix_str_val_item,
+            video_id_val_opt_item_val,
+            video_title_val_opt_item_val,
         )
-    return derived_name
+
+    if source_url_str_val_item:
+        if is_youtube_url(source_url_str_val_item):
+            fetched_id_val_item, fetched_title_val_item = get_youtube_video_title_and_id(source_url_str_val_item)
+            if fetched_id_val_item:
+                video_id_val_opt_item_val, video_title_val_opt_item_val = fetched_id_val_item, fetched_title_val_item
+                type_prefix_str_val_item = "_yt_"
+                base_name_str_val_item = sanitize_filename(
+                    video_title_val_opt_item_val or _DEFAULT_YT_BASE_NAME_FALLBACK_MAIN, max_len=_MAX_BASE_NAME_LEN_MAIN
+                )
+        if type_prefix_str_val_item == "_web_":
+            parsed_url_obj_val_item = urlparse(source_url_str_val_item)
+            if parsed_url_obj_val_item.scheme and parsed_url_obj_val_item.netloc:
+                base_name_str_val_item = sanitize_filename(
+                    parsed_url_obj_val_item.netloc
+                    or Path(source_url_str_val_item).stem
+                    or _DEFAULT_WEB_BASE_NAME_FALLBACK_MAIN,
+                    max_len=_MAX_BASE_NAME_LEN_MAIN,
+                )
+            else:
+                base_name_str_val_item = sanitize_filename(
+                    Path(source_url_str_val_item).stem or _DEFAULT_WEB_BASE_NAME_FALLBACK_MAIN,
+                    max_len=_MAX_BASE_NAME_LEN_MAIN,
+                )
+    final_base_name = base_name_str_val_item or _DEFAULT_WEB_BASE_NAME_FALLBACK_MAIN
+    logger_main.debug(
+        "_derive_base_name_for_web_source returning: base_name='%s', type_prefix='%s', id='%s', title='%s'",
+        final_base_name,
+        type_prefix_str_val_item,
+        video_id_val_opt_item_val,
+        video_title_val_opt_item_val,
+    )
+    return final_base_name, type_prefix_str_val_item, video_id_val_opt_item_val, video_title_val_opt_item_val
 
 
-def _prepare_runtime_initial_context(  # noqa: C901
-    args: argparse.Namespace, resolved_flow_config: ResolvedFlowConfigData, internal_flow_name: str
+def _derive_base_name_for_code_source(args: argparse.Namespace) -> str:
+    """Derive a base name for code analysis sources (repository URL or local directory).
+
+    Prioritizes repository URL's last path component (without .git).
+    If no repo URL, uses the name of the local directory.
+    The derived name is sanitized for filesystem path compatibility.
+
+    Args:
+        args: Parsed command-line arguments from `argparse.ArgumentParser`.
+              Expected to have `repo` (Optional[str]) and `dir` (Optional[Path]) attributes.
+
+    Returns:
+        A sanitized, derived base name suitable for use in output directory names.
+        Returns a default name if derivation from source fails.
+    """
+    repo_url_val_any_item_val: Any = args.repo
+    local_dir_val_any_item_val: Any = args.dir
+    repo_url_str_opt_val_item: Optional[str] = (
+        str(repo_url_val_any_item_val) if isinstance(repo_url_val_any_item_val, str) else None
+    )
+    local_dir_path_obj_opt_val_item: Optional[Path] = (
+        local_dir_val_any_item_val if isinstance(local_dir_val_any_item_val, Path) else None
+    )
+    name_candidate_str_val_item: str = ""
+
+    if repo_url_str_opt_val_item:
+        with contextlib.suppress(ValueError, TypeError, AttributeError, OSError, IndexError):
+            parsed_url_val_item = urlparse(repo_url_str_opt_val_item)
+            if parsed_url_val_item.path:
+                name_part_str_val_item = parsed_url_val_item.path.strip("/").split("/")[-1]
+                name_candidate_str_val_item = name_part_str_val_item.removesuffix(".git")
+    elif local_dir_path_obj_opt_val_item:
+        with contextlib.suppress(OSError, ValueError, TypeError):
+            name_candidate_str_val_item = local_dir_path_obj_opt_val_item.name
+
+    sanitized_base_name_val = (
+        sanitize_filename(name_candidate_str_val_item, max_len=_MAX_BASE_NAME_LEN_MAIN)
+        or _DEFAULT_CODE_BASE_NAME_FALLBACK_MAIN
+    )
+    logger_main.debug(
+        "_derive_base_name_for_code_source returning: '%s' (from candidate: '%s')",
+        sanitized_base_name_val,
+        name_candidate_str_val_item,
+    )
+    return sanitized_base_name_val
+
+
+def _derive_project_name_from_source(
+    args: argparse.Namespace, config_output_name: str, internal_flow_name: str
+) -> tuple[str, Optional[str], Optional[str]]:
+    """Derive the final project name for the run, including timestamp and type prefix.
+
+    If a name is provided via CLI (`args.name`), it takes highest precedence.
+    If `config_output_name` is not the auto-detect sentinel, it's used next.
+    Otherwise, a name is derived from the source (URL or directory path),
+    prefixed with a timestamp. The type prefix (e.g., "_code-", "_yt_", "_web_")
+    is chosen based on `internal_flow_name` and source type.
+
+    Args:
+        args: Parsed command-line arguments.
+        config_output_name: The `default_output_name` from the loaded configuration.
+        internal_flow_name: The internal name of the flow being run (e.g., "FL01_code_analysis").
+
+    Returns:
+        A tuple: (final_project_name, video_id, video_title).
+        `video_id` and `video_title` are relevant and non-None only for YouTube
+        web crawling flows; otherwise, they are None.
+    """
+    logger_main.debug(
+        "Deriving project name. CLI --name: '%s', Config default_output_name: '%s', Flow: '%s'",
+        args.name,
+        config_output_name,
+        internal_flow_name,
+    )
+    if args.name:
+        logger_main.debug("Using project name from CLI --name argument: '%s'", args.name)
+        return str(args.name), None, None
+    if config_output_name != AUTO_DETECT_OUTPUT_NAME:
+        logger_main.debug(
+            "Using project name from 'common.common_output_settings.default_output_name' in config: '%s'",
+            config_output_name,
+        )
+        return config_output_name, None, None
+
+    timestamp_prefix_str_val_item: str = _get_timestamp_prefix()
+    logger_main.debug("Generated timestamp prefix for auto-name: '%s'", timestamp_prefix_str_val_item)
+
+    base_name_str_item_val: str
+    type_prefix_str_item_val: str
+    video_id_val_opt_str_item: Optional[str] = None
+    video_title_val_opt_str_item: Optional[str] = None
+
+    if internal_flow_name == "FL01_code_analysis":
+        base_name_str_item_val = _derive_base_name_for_code_source(args)
+        type_prefix_str_item_val = "_code-"
+    elif internal_flow_name == "FL02_web_crawling":
+        base_name_str_item_val, type_prefix_str_item_val, video_id_val_opt_str_item, video_title_val_opt_str_item = (
+            _derive_base_name_for_web_source(args)
+        )
+    else:  # pragma: no cover
+        logger_main.warning(
+            "Unknown internal_flow_name '%s' for project name derivation. Using generic fallback.", internal_flow_name
+        )
+        base_name_str_item_val = "unknown_project"
+        type_prefix_str_item_val = "_flow_"
+
+    final_project_name_str_val_item = (
+        f"{timestamp_prefix_str_val_item}{type_prefix_str_item_val}{base_name_str_item_val}"
+    )
+    logger_main.debug(
+        "Auto-derived project name: '%s' (components: timestamp='%s', type_prefix='%s', base_name='%s')",
+        final_project_name_str_val_item,
+        timestamp_prefix_str_val_item,
+        type_prefix_str_item_val,
+        base_name_str_item_val,
+    )
+    return final_project_name_str_val_item, video_id_val_opt_str_item, video_title_val_opt_str_item
+
+
+def _prepare_common_initial_context(
+    args: argparse.Namespace,
+    resolved_flow_config: ResolvedFlowConfigData,
+    internal_flow_name: str,
+    final_project_name: str,
 ) -> SharedContextDict:
-    """Prepare the initial shared context for the specific flow to be run.
+    """Prepare the common part of the initial_context for any flow.
+
+    This initializes shared context entries like resolved configurations,
+    project name, output directory, language, and placeholders for flow outputs.
 
     Args:
         args: Parsed command-line arguments.
         resolved_flow_config: The fully resolved configuration for the current flow.
         internal_flow_name: The internal name of the flow being executed.
+        final_project_name: The derived project name for this specific run.
 
     Returns:
-        The initial_context dictionary for the pipeline.
+        The base `SharedContextDict` populated with common parameters.
     """
-    logger_main.debug("Preparing initial_context for flow: %s", internal_flow_name)
-
-    common_settings: dict[str, Any] = resolved_flow_config.get("common", {})
-    common_output_settings: dict[str, Any] = common_settings.get("common_output_settings", {})
-
-    output_name_from_config = str(common_output_settings.get("default_output_name", AUTO_DETECT_OUTPUT_NAME))
-    final_output_name = _derive_name_from_source_if_auto(args, output_name_from_config, internal_flow_name)
-
-    main_out_dir_from_config = str(common_output_settings.get("main_output_directory", _DEFAULT_MAIN_OUTPUT_DIR_MAIN))
-    final_main_out_dir = str(args.output) if args.output else main_out_dir_from_config
-
-    gen_text_lang_from_config = str(
-        common_output_settings.get("generated_text_language", _DEFAULT_GENERATED_TEXT_LANGUAGE_MAIN)
+    common_settings_dict_val_item: dict[str, Any] = resolved_flow_config.get("common", {})
+    common_output_settings_dict_item_val: dict[str, Any] = common_settings_dict_val_item.get(
+        "common_output_settings", {}
     )
-    final_gen_text_lang = str(args.language) if args.language else gen_text_lang_from_config
+    flow_specific_config_dict_item_val: dict[str, Any] = resolved_flow_config.get(internal_flow_name, {})
 
-    flow_specific_config_block: dict[str, Any] = resolved_flow_config.get(internal_flow_name, {})
+    main_out_dir_cfg_str_val_item: str = str(
+        common_output_settings_dict_item_val.get("main_output_directory", _DEFAULT_MAIN_OUTPUT_DIR_MAIN)
+    )
+    final_main_out_dir_str_val_item: str = str(args.output) if args.output else main_out_dir_cfg_str_val_item
 
-    initial_context: SharedContextDict = {
+    gen_text_lang_cfg_str_val_item: str = str(
+        common_output_settings_dict_item_val.get("generated_text_language", _DEFAULT_GENERATED_TEXT_LANGUAGE_MAIN)
+    )
+    final_gen_text_lang_str_val_item: str = str(args.language) if args.language else gen_text_lang_cfg_str_val_item
+
+    initial_context_dict_val_obj: SharedContextDict = {
         "config": resolved_flow_config,
         "llm_config": resolved_flow_config.get("resolved_llm_config", {}),
-        "cache_config": common_settings.get("cache_settings", {}),
-        "project_name": final_output_name,
-        "output_dir": final_main_out_dir,
-        "language": final_gen_text_lang,
+        "cache_config": common_settings_dict_val_item.get("cache_settings", {}),
+        "project_name": final_project_name,
+        "output_dir": final_main_out_dir_str_val_item,
+        "language": final_gen_text_lang_str_val_item,
         "current_operation_mode": internal_flow_name,
-        "current_mode_output_options": flow_specific_config_block.get("output_options", {}),
+        "current_mode_output_options": flow_specific_config_dict_item_val.get("output_options", {}),
     }
+    logger_main.debug(
+        "_prepare_common_initial_context resulted in 'project_name': '%s'", initial_context_dict_val_obj["project_name"]
+    )
 
-    if args.internal_flow_name == "FL01_code_analysis":
-        initial_context.update(
-            {
-                "repo_url": args.repo,
-                "local_dir": str(args.dir) if args.dir else None,
-                "local_dir_display_root": _get_local_dir_display_root(str(args.dir)) if args.dir else "",
-                "source_config": flow_specific_config_block.get("source_config", {}),
-                "github_token": flow_specific_config_block.get("resolved_github_token"),
-                "include_patterns": set(
-                    args.include or flow_specific_config_block.get("source_options", {}).get("include_patterns", [])
-                ),
-                "exclude_patterns": set(
-                    args.exclude
-                    or flow_specific_config_block.get("source_options", {}).get("default_exclude_patterns", [])
-                ),
-                "max_file_size": args.max_size
-                if args.max_size is not None
-                else flow_specific_config_block.get("source_options", {}).get(
-                    "max_file_size_bytes", _DEFAULT_MAX_FILE_SIZE_MAIN
-                ),
-                "use_relative_paths": bool(
-                    flow_specific_config_block.get("source_options", {}).get("use_relative_paths", True)
-                ),
-            }
-        )
-    elif args.internal_flow_name == "FL02_web_crawling":
-        crawl_file_val: Any = args.crawl_file
-        crawl_file_final: Optional[str] = None
-        if crawl_file_val:
-            crawl_file_str = str(crawl_file_val)
-            try:
-                p_crawl_file = Path(crawl_file_str)
-                is_likely_path = os.sep in crawl_file_str or (os.path.altsep and os.path.altsep in crawl_file_str)
-                if not urlparse(crawl_file_str).scheme and (
-                    p_crawl_file.is_file() or (is_likely_path and not p_crawl_file.exists())
-                ):
-                    crawl_file_final = str(p_crawl_file.resolve())
-                else:
-                    crawl_file_final = crawl_file_str
-            except (ValueError, TypeError, OSError) as e_path:  # pragma: no cover
-                logger_main.warning(
-                    "Could not definitively resolve --crawl-file '%s' as local path: %s. Treating as string.",
-                    crawl_file_str,
-                    e_path,
-                )
-                crawl_file_final = crawl_file_str
-
-        initial_context.update(
-            {
-                "crawl_url": args.crawl_url,
-                "crawl_sitemap": args.crawl_sitemap,
-                "crawl_file": crawl_file_final,
-                # These overrides are now correctly pulled from flow_specific_config_block
-                # which gets them from resolved_flow_config (already merged with CLI args)
-                "cli_crawl_depth": flow_specific_config_block.get("crawler_options", {}).get("max_depth_recursive"),
-                "cli_crawl_output_subdir": flow_specific_config_block.get("crawler_options", {}).get(
-                    "default_output_subdir_name"
-                ),
-            }
-        )
-
-    placeholders: dict[str, Any] = {
+    placeholder_keys_dict_val_item: dict[str, Any] = {
         "files": [],
         "text_concepts": [],
         "abstractions": [],
@@ -538,269 +646,511 @@ def _prepare_runtime_initial_context(  # noqa: C901
         "file_structure_diagram_markup": None,
         "sequence_diagrams_markup": [],
     }
-    for key, default_val in placeholders.items():
-        initial_context.setdefault(key, default_val)
+    for key_ph_str_val, default_val_ph_item_obj in placeholder_keys_dict_val_item.items():
+        initial_context_dict_val_obj.setdefault(key_ph_str_val, default_val_ph_item_obj)
+    return initial_context_dict_val_obj
 
+
+def _add_code_analysis_context_overrides(
+    initial_context: SharedContextDict, args: argparse.Namespace, resolved_flow_config: ResolvedFlowConfigData
+) -> None:
+    """Add specific context items for FL01_code_analysis flow to the initial context.
+
+    Args:
+        initial_context: The initial context dictionary to update.
+        args: Parsed command-line arguments relevant to code analysis.
+        resolved_flow_config: The fully resolved configuration for the code analysis flow.
+    """
+    flow_specific_cfg_block_val_obj: dict[str, Any] = resolved_flow_config.get("FL01_code_analysis", {})
+    source_options_cfg_val_obj: dict[str, Any] = flow_specific_cfg_block_val_obj.get("source_options", {})
+
+    initial_context.update(
+        {
+            "repo_url": args.repo,
+            "local_dir": str(args.dir) if args.dir else None,
+            "local_dir_display_root": _get_local_dir_display_root(str(args.dir) if args.dir else None),
+            "source_config": flow_specific_cfg_block_val_obj.get("source_config", {}),
+            "github_token": flow_specific_cfg_block_val_obj.get("resolved_github_token"),
+            "include_patterns": set(source_options_cfg_val_obj.get("include_patterns", [])),
+            "exclude_patterns": set(source_options_cfg_val_obj.get("default_exclude_patterns", [])),
+            "max_file_size": source_options_cfg_val_obj.get("max_file_size_bytes"),
+            "use_relative_paths": bool(source_options_cfg_val_obj.get("use_relative_paths", True)),
+        }
+    )
+
+
+def _add_web_crawling_context_overrides(
+    initial_context: SharedContextDict,
+    args: argparse.Namespace,
+    resolved_flow_config: ResolvedFlowConfigData,
+    yt_video_id: Optional[str],
+    yt_video_title: Optional[str],
+) -> None:
+    """Add specific context items for FL02_web_crawling flow to the initial context.
+
+    Args:
+        initial_context: The initial context dictionary to update.
+        args: Parsed command-line arguments relevant to web crawling.
+        resolved_flow_config: The fully resolved configuration for the web crawling flow.
+        yt_video_id: Extracted YouTube video ID, if the source URL was a YouTube video.
+        yt_video_title: Extracted YouTube video title, if applicable.
+    """
+    flow_specific_cfg_block_web_val_obj: dict[str, Any] = resolved_flow_config.get("FL02_web_crawling", {})
+    crawler_options_cfg_val_obj: dict[str, Any] = flow_specific_cfg_block_web_val_obj.get("crawler_options", {})
+    crawl_file_final_path_str_obj: Optional[str] = None
+
+    if args.crawl_file:
+        crawl_file_str_item_obj: str = str(args.crawl_file)
+        if not is_youtube_url(crawl_file_str_item_obj):
+            try:
+                path_obj_crawl_file_item_obj = Path(crawl_file_str_item_obj)
+                is_likely_local_path_bool_obj = os.sep in crawl_file_str_item_obj or (
+                    os.path.altsep and os.path.altsep in crawl_file_str_item_obj
+                )
+                if not urlparse(crawl_file_str_item_obj).scheme and (
+                    path_obj_crawl_file_item_obj.is_file()
+                    or (is_likely_local_path_bool_obj and not path_obj_crawl_file_item_obj.exists())
+                ):  # pragma: no cover
+                    crawl_file_final_path_str_obj = str(path_obj_crawl_file_item_obj.resolve())
+                else:  # pragma: no cover
+                    crawl_file_final_path_str_obj = crawl_file_str_item_obj
+            except (OSError, ValueError, TypeError) as e_path_resolve_err_obj:  # pragma: no cover
+                logger_main.warning(
+                    "Could not resolve --crawl-file '%s' as local path: %s. Treating as string.",
+                    crawl_file_str_item_obj,
+                    e_path_resolve_err_obj,
+                )
+                crawl_file_final_path_str_obj = crawl_file_str_item_obj
+        else:
+            crawl_file_final_path_str_obj = crawl_file_str_item_obj
+
+    initial_context.update(
+        {
+            "crawl_url": args.crawl_url,
+            "crawl_sitemap": args.crawl_sitemap,
+            "crawl_file": crawl_file_final_path_str_obj,
+            "cli_crawl_depth": crawler_options_cfg_val_obj.get("max_depth_recursive"),
+            "processing_mode": crawler_options_cfg_val_obj.get("processing_mode"),
+            "current_youtube_video_id": yt_video_id,
+            "current_youtube_video_title": yt_video_title,
+            "cli_extract_audio_enabled": getattr(args, "extract_audio", False)
+            if hasattr(args, "extract_audio")
+            else False,
+        }
+    )
+
+
+def _prepare_runtime_initial_context(
+    args: argparse.Namespace, resolved_flow_config: ResolvedFlowConfigData, internal_flow_name: str
+) -> SharedContextDict:
+    """Prepare the initial shared context for the specific flow to be run.
+
+    This orchestrates the derivation of the project name and then populates
+    the `initial_context` with common settings, followed by flow-specific settings.
+
+    Args:
+        args: Parsed command-line arguments from `argparse.ArgumentParser`.
+        resolved_flow_config: The fully resolved configuration for the current flow.
+        internal_flow_name: The internal name of the flow being executed
+                            (e.g., "FL01_code_analysis").
+
+    Returns:
+        The fully prepared initial context dictionary for the pipeline.
+    """
+    logger_main.debug("Preparing initial_context for flow: '%s'. Args passed: %s", internal_flow_name, args)
+    common_output_settings_dict_item_obj: dict[str, Any] = resolved_flow_config.get("common", {}).get(
+        "common_output_settings", {}
+    )
+    output_name_from_config_str_obj: str = str(
+        common_output_settings_dict_item_obj.get("default_output_name", AUTO_DETECT_OUTPUT_NAME)
+    )
     logger_main.debug(
-        "Runtime initial context prepared for flow '%s'. Project name: '%s'", internal_flow_name, final_output_name
+        "Output name from config (before CLI override check in _derive_project_name_from_source): '%s'",
+        output_name_from_config_str_obj,
+    )
+
+    final_project_name_str_obj: str
+    yt_video_id_val_opt_obj: Optional[str]
+    yt_video_title_val_opt_obj: Optional[str]
+    final_project_name_str_obj, yt_video_id_val_opt_obj, yt_video_title_val_opt_obj = _derive_project_name_from_source(
+        args, output_name_from_config_str_obj, internal_flow_name
+    )
+    logger_main.debug(
+        "Derived final_project_name: '%s', yt_video_id: '%s', yt_video_title: '%s'",
+        final_project_name_str_obj,
+        yt_video_id_val_opt_obj,
+        yt_video_title_val_opt_obj,
+    )
+
+    initial_context_dict_val_obj_item: SharedContextDict = _prepare_common_initial_context(
+        args, resolved_flow_config, internal_flow_name, final_project_name_str_obj
+    )
+    logger_main.debug(
+        "Initial context after _prepare_common_initial_context, 'project_name': '%s'",
+        initial_context_dict_val_obj_item["project_name"],
+    )
+
+    if internal_flow_name == "FL01_code_analysis":
+        _add_code_analysis_context_overrides(initial_context_dict_val_obj_item, args, resolved_flow_config)
+    elif internal_flow_name == "FL02_web_crawling":
+        _add_web_crawling_context_overrides(
+            initial_context_dict_val_obj_item,
+            args,
+            resolved_flow_config,
+            yt_video_id_val_opt_obj,
+            yt_video_title_val_opt_obj,
+        )
+    logger_main.debug(
+        "Runtime initial_context for flow '%s'. Project name: '%s'",
+        internal_flow_name,
+        initial_context_dict_val_obj_item["project_name"],
     )
     if logger_main.isEnabledFor(logging.DEBUG):  # pragma: no cover
         try:
-            log_context_copy = json.loads(json.dumps(initial_context))
-            if "llm_config" in log_context_copy and isinstance(log_context_copy["llm_config"], dict):
-                log_context_copy["llm_config"]["api_key"] = "***REDACTED***"
-            if "github_token" in log_context_copy:
-                log_context_copy["github_token"] = "***REDACTED***"
-            logger_main.debug("Full initial_context (redacted): %s", json.dumps(log_context_copy, indent=2))
-        except (TypeError, ValueError) as e_json_dump:
-            logger_main.debug("Could not serialize initial_context for debug logging: %s", e_json_dump)
-    return initial_context
+            log_context_copy_dict_obj: dict[str, Any] = json.loads(
+                json.dumps(initial_context_dict_val_obj_item, default=str)
+            )
+            if (
+                "llm_config" in log_context_copy_dict_obj
+                and isinstance(log_context_copy_dict_obj["llm_config"], dict)
+                and "api_key" in log_context_copy_dict_obj["llm_config"]
+            ):
+                log_context_copy_dict_obj["llm_config"]["api_key"] = "***REDACTED***"
+            if "github_token" in log_context_copy_dict_obj:
+                log_context_copy_dict_obj["github_token"] = "***REDACTED***"
+            logger_main.debug("Full initial_context (redacted): %s", json.dumps(log_context_copy_dict_obj, indent=2))
+        except (TypeError, ValueError) as e_json_dump_err_obj:
+            logger_main.debug("Could not serialize initial_context for debug logging: %s", e_json_dump_err_obj)
+    return initial_context_dict_val_obj_item
 
 
 def _get_flow_creator_function(internal_flow_name: str) -> Callable[[SharedContextDict], SourceLensFlow]:
-    """Dynamically import and retrieve the flow creation function.
+    """Dynamically import and retrieve the flow creation function for the specified flow.
+
+    Uses `FLOW_MODULE_LOOKUP` to find the module path and function name.
 
     Args:
         internal_flow_name: The internal name of the flow (e.g., "FL01_code_analysis").
 
     Returns:
-        The callable function (e.g., `create_code_analysis_flow`).
+        The flow creation function.
+
+    Raises:
+        ValueError: If `internal_flow_name` is not supported.
+        ImportError: If the flow module cannot be imported.
+        AttributeError: If the creator function is not found in the module.
     """
     logger_main.debug("Attempting to get flow creator for internal flow: %s", internal_flow_name)
     if internal_flow_name not in FLOW_MODULE_LOOKUP:  # pragma: no cover
-        supported_keys = list(FLOW_MODULE_LOOKUP.keys())
-        raise ValueError(f"Internal flow '{internal_flow_name}' is not supported. Supported: {supported_keys}")
-
-    module_path_str, creator_func_name = FLOW_MODULE_LOOKUP[internal_flow_name]
-
-    try:
-        # Ensure that import paths are relative to the 'src' directory if needed
-        # by making sure the top-level package 'sourcelens' and sibling flow packages
-        # like 'FL01_code_analysis' are correctly discoverable.
-        # This often means running python from the directory above 'src', or having 'src' in PYTHONPATH.
-        module = importlib.import_module(module_path_str)
-        logger_main.info("Successfully imported module: %s", module_path_str)
-    except ImportError as e_import_err:  # pragma: no cover
-        logger_main.error("Failed to import module %s: %s", module_path_str, e_import_err)
-        error_msg = (
-            f"Could not import module '{module_path_str}' for internal flow '{internal_flow_name}'. "
-            "Ensure the flow package is correctly installed and accessible in PYTHONPATH. "
-            "Try running from the project root directory."
+        supported_keys_str_val_obj: str = ", ".join(list(FLOW_MODULE_LOOKUP.keys()))
+        raise ValueError(
+            f"Internal flow '{internal_flow_name}' not supported. Supported: [{supported_keys_str_val_obj}]"
         )
-        raise ImportError(error_msg) from e_import_err
+
+    module_path_str_item_obj, creator_func_name_str_obj = FLOW_MODULE_LOOKUP[internal_flow_name]
 
     try:
-        creator_func = cast(Callable[[SharedContextDict], SourceLensFlow], getattr(module, creator_func_name))
+        flow_module_obj_val_obj = importlib.import_module(module_path_str_item_obj)
+        logger_main.info("Successfully imported module: %s", module_path_str_item_obj)
+    except ImportError as e_import_module_err_obj:  # pragma: no cover
+        logger_main.error("Failed to import module %s: %s", module_path_str_item_obj, e_import_module_err_obj)
+        err_msg_import_val_obj: str = (
+            f"Could not import module '{module_path_str_item_obj}' for internal flow '{internal_flow_name}'. "
+            "Ensure flow package is correctly installed and accessible."
+        )
+        raise ImportError(err_msg_import_val_obj) from e_import_module_err_obj
+
+    try:
+        creator_function_val_obj: Callable[[SharedContextDict], SourceLensFlow] = cast(
+            Callable[[SharedContextDict], SourceLensFlow], getattr(flow_module_obj_val_obj, creator_func_name_str_obj)
+        )
         logger_main.info(
-            "Successfully retrieved creator function: %s from %s",
-            creator_func_name,
-            module_path_str,
+            "Successfully retrieved creator: %s from %s", creator_func_name_str_obj, module_path_str_item_obj
         )
-        return creator_func
-    except AttributeError as e_attr_err:  # pragma: no cover
+        return creator_function_val_obj
+    except AttributeError as e_attr_creator_err_obj:  # pragma: no cover
         logger_main.error(
             "Creator function %s not found in module %s: %s",
-            creator_func_name,
-            module_path_str,
-            e_attr_err,
+            creator_func_name_str_obj,
+            module_path_str_item_obj,
+            e_attr_creator_err_obj,
         )
-        error_msg = (
-            f"Creator function '{creator_func_name}' not found in "
-            f"module '{module_path_str}' for internal flow '{internal_flow_name}'."
+        err_msg_attr_val_obj: str = (
+            f"Creator function '{creator_func_name_str_obj}' not found in module '{module_path_str_item_obj}'."
         )
-        raise ValueError(error_msg) from e_attr_err
+        raise AttributeError(err_msg_attr_val_obj) from e_attr_creator_err_obj
 
 
 def _log_run_flow_startup_info(initial_context: SharedContextDict, internal_flow_name: str) -> None:
     """Log essential startup information before running the processing flow.
 
+    This includes the source type, project name, output directory, language,
+    and active LLM provider/model for the current flow execution.
+
     Args:
-        initial_context: The prepared shared context.
+        initial_context: The prepared shared context for the flow.
         internal_flow_name: The internal name of the flow being run.
     """
-    source_description: str = "N/A"
+    source_description_str_val_obj: str = "N/A"
     if internal_flow_name == "FL01_code_analysis":
-        source_val = initial_context.get("repo_url") or initial_context.get("local_dir")
-        source_description = str(source_val) if source_val is not None else "N/A"
-        logger_main.info("Starting code analysis for: %s", source_description)
-        code_source_cfg: dict[str, Any] = initial_context.get("source_config", {})
-        lang_name = code_source_cfg.get("language_name_for_llm", "N/A")
-        parser_type = code_source_cfg.get("parser_type", "N/A")
-        logger_main.info("Active Code Language Profile: %s (Parser: %s)", lang_name, parser_type)
+        source_val_code_item_obj: Optional[Any] = initial_context.get("repo_url") or initial_context.get("local_dir")
+        source_description_str_val_obj = (
+            str(source_val_code_item_obj) if source_val_code_item_obj is not None else "N/A"
+        )
+        logger_main.info("Starting code analysis for: %s", source_description_str_val_obj)
+
+        source_config_dict_item_obj: dict[str, Any] = cast(dict, initial_context.get("source_config", {}))
+        lang_name_val_str_item_obj: str = str(source_config_dict_item_obj.get("language_name_for_llm", "N/A"))
+        parser_type_val_str_item_obj: str = str(source_config_dict_item_obj.get("parser_type", "N/A"))
+        logger_main.info(
+            "Active Code Language Profile: %s (Parser: %s)", lang_name_val_str_item_obj, parser_type_val_str_item_obj
+        )
+
     elif internal_flow_name == "FL02_web_crawling":
-        source_val = (
+        source_val_web_item_obj: Optional[Any] = (
             initial_context.get("crawl_url")
             or initial_context.get("crawl_sitemap")
             or initial_context.get("crawl_file")
         )
-        source_description = str(source_val) if source_val is not None else "N/A"
-        logger_main.info("Starting web content analysis for: %s", source_description)
+        source_description_str_val_obj = str(source_val_web_item_obj) if source_val_web_item_obj is not None else "N/A"
+        if initial_context.get("current_youtube_video_id"):
+            yt_title_val_str_item_obj: str = str(initial_context.get("current_youtube_video_title", "N/A"))
+            source_description_str_val_obj += f" (YouTube Title: {yt_title_val_str_item_obj})"
+        logger_main.info("Starting web content analysis for: %s", source_description_str_val_obj)
     else:  # pragma: no cover
         logger_main.error("Unknown internal flow name '%s' for startup info logging.", internal_flow_name)
 
-    logger_main.info("Output Name for this run: %s", initial_context.get("project_name"))
+    logger_main.info("Output Project Name (used for dir): %s", initial_context.get("project_name"))
     logger_main.info("Main Output Directory Base: %s", initial_context.get("output_dir"))
     logger_main.info("Generated Text Language: %s", initial_context.get("language"))
 
-    llm_cfg_for_log: dict[str, Any] = initial_context.get("llm_config", {})
-    provider = llm_cfg_for_log.get("provider", "N/A")
-    llm_type = "local" if llm_cfg_for_log.get("is_local_llm") else "cloud"
-    model = llm_cfg_for_log.get("model", "N/A")
-    logger_main.info(f"Active LLM Provider for flow '{internal_flow_name}': {provider} ({llm_type})")
-    logger_main.info(f"Active LLM Model for flow '{internal_flow_name}': {model}")
+    llm_config_for_log_val_obj: dict[str, Any] = cast(dict, initial_context.get("llm_config", {}))
+    provider_name_str_val_obj: str = str(llm_config_for_log_val_obj.get("provider", "N/A"))
+    is_local_llm_bool_val_obj: Any = llm_config_for_log_val_obj.get("is_local_llm")
+    llm_type_str_val_obj: str = (
+        "local" if isinstance(is_local_llm_bool_val_obj, bool) and is_local_llm_bool_val_obj else "cloud"
+    )
+    model_name_str_val_obj: str = str(llm_config_for_log_val_obj.get("model", "N/A"))
+    log_msg_l1: str = (
+        f"Active LLM Provider for flow '{internal_flow_name}': {provider_name_str_val_obj} ({llm_type_str_val_obj})"
+    )
+    log_msg_l2: str = f"Active LLM Model for flow '{internal_flow_name}': {model_name_str_val_obj}"
+    logger_main.info(log_msg_l1)
+    logger_main.info(log_msg_l2)
 
 
 def _check_operation_mode_enabled(internal_flow_name: str, resolved_config: ResolvedFlowConfigData) -> None:
     """Verify if the determined flow is enabled in the configuration.
 
+    Exits the application with an error if the flow is disabled.
+
     Args:
         internal_flow_name: The internal name of the flow (e.g., "FL01_code_analysis").
         resolved_config: The fully resolved configuration for this specific flow.
     """
-    flow_specific_settings: dict[str, Any] = resolved_config.get(internal_flow_name, {})
-    is_enabled: bool = bool(flow_specific_settings.get("enabled", False))
+    flow_specific_settings_dict_val_obj: dict[str, Any] = resolved_config.get(internal_flow_name, {})
+    is_enabled_bool_val_obj: bool = bool(flow_specific_settings_dict_val_obj.get("enabled", False))
 
-    if not is_enabled:
-        msg = (
-            f"Flow '{internal_flow_name}' is disabled in the configuration (expected "
-            f"'{internal_flow_name}.enabled=true'). Halting execution."
-        )
-        logger_main.error(msg)
-        print(f"\n❌ ERROR: {msg}", file=sys.stderr)
+    if not is_enabled_bool_val_obj:  # pragma: no cover
+        disabled_msg_str_val_obj: str = f"Flow '{internal_flow_name}' disabled in configuration. Halting."
+        logger_main.error(disabled_msg_str_val_obj)
+        print(f"\n❌ ERROR: {disabled_msg_str_val_obj}", file=sys.stderr)
         sys.exit(1)
 
 
 def _validate_flow_output_or_exit(initial_context: SharedContextDict, internal_flow_name: str) -> None:
     """Validate if essential output was generated by the flow; exit if not.
 
+    For web crawling in "minimalistic" mode, checks if the raw crawl output directory
+    was set. For "llm_extended" mode, checks if any files were populated for LLM analysis.
+    Currently, no specific output validation is implemented for "FL01_code_analysis" here.
+
     Args:
         initial_context: The shared context after the flow has run.
         internal_flow_name: The internal name of the flow that was run.
     """
-    if internal_flow_name == "FL01_code_analysis":  # pragma: no cover
-        # Code analysis flow validation might check `final_output_dir` or `chapters`
+    if internal_flow_name == "FL01_code_analysis":
         pass
     elif internal_flow_name == "FL02_web_crawling":
-        web_files_populated = bool(initial_context.get("files"))
-        raw_crawl_output_dir_set = bool(initial_context.get("final_output_dir_web_crawl"))
+        web_files_populated_bool_obj: bool = bool(initial_context.get("files"))
+        raw_crawl_output_dir_set_bool_obj: bool = bool(initial_context.get("final_output_dir_web_crawl"))
 
-        # Get processing_mode from the resolved_config stored in initial_context
-        resolved_flow_config: ResolvedFlowConfigData = cast(ResolvedFlowConfigData, initial_context.get("config", {}))
-        web_flow_settings: dict[str, Any] = resolved_flow_config.get(internal_flow_name, {})
-        crawler_opts: dict[str, Any] = web_flow_settings.get("crawler_options", {})
-        processing_mode_web = str(crawler_opts.get("processing_mode", "minimalistic"))
+        resolved_flow_config_val_dict_obj: ResolvedFlowConfigData = cast(
+            ResolvedFlowConfigData, initial_context.get("config", {})
+        )
+        web_flow_settings_val_dict_obj: dict[str, Any] = resolved_flow_config_val_dict_obj.get(internal_flow_name, {})
+        crawler_options_config: dict[str, Any] = web_flow_settings_val_dict_obj.get("crawler_options", {})
+        processing_mode_web_str_val_obj: str = str(crawler_options_config.get("processing_mode", "minimalistic"))
 
-        essential_output_missing = False
-        if processing_mode_web == "llm_extended" and not web_files_populated:
-            essential_output_missing = True
-            msg1 = "Halting: No web content in shared_context['files'] for LLM analysis "
-            msg2 = "after FetchWebPage (llm_extended mode)."
-            logger_main.error(msg1 + msg2)
-        elif processing_mode_web == "minimalistic" and not raw_crawl_output_dir_set:
-            # In minimalistic mode, we only expect FetchWebPage to run and set
-            # final_output_dir_web_crawl. If it's not set, something went wrong.
-            essential_output_missing = True
-            logger_main.error("Halting: Raw crawl output directory not set after FetchWebPage (minimalistic mode).")
+        essential_output_is_missing_bool_obj: bool = False
+        if processing_mode_web_str_val_obj == "llm_extended" and not web_files_populated_bool_obj:  # pragma: no cover
+            essential_output_is_missing_bool_obj = True
+            logger_main.error("Halting: No web content for LLM analysis after fetch (llm_extended mode).")
+        elif (
+            processing_mode_web_str_val_obj == "minimalistic" and not raw_crawl_output_dir_set_bool_obj
+        ):  # pragma: no cover
+            if not initial_context.get("current_youtube_video_id") and not initial_context.get("final_output_dir"):
+                essential_output_is_missing_bool_obj = True
+                logger_main.error("Halting: Raw crawl output dir not set after fetch (minimalistic general web).")
 
-        if essential_output_missing:  # pragma: no cover
-            err_msg_l1 = "\n❌ ERROR: No web content was successfully fetched or processed for the selected mode."
-            err_msg_l2_parts = [
-                "       Please check the target URL/sitemap, network connection, ",
-                "and crawler/configuration options.",
-            ]
-            print(err_msg_l1, file=sys.stderr)
-            print("".join(err_msg_l2_parts), file=sys.stderr)
+        if essential_output_is_missing_bool_obj:  # pragma: no cover
+            err_msg_l1_item: str = "\n❌ ERROR: No web content was successfully fetched or processed for selected mode."
+            err_msg_l2_item: str = "       Please check target URL/sitemap, network, and config."
+            print(err_msg_l1_item, file=sys.stderr)
+            print(err_msg_l2_item, file=sys.stderr)
             sys.exit(1)
 
 
 def _handle_flow_completion(initial_context: SharedContextDict, internal_flow_name: str) -> None:
     """Handle logging and printing messages after the main processing flow completes.
 
+    Determines the type of output generated based on the flow and processing mode
+    and prints a success message with the path to the main output directory.
+
     Args:
         initial_context: The shared context after flow execution.
         internal_flow_name: The internal name of the flow that was run.
     """
-    final_dir_main_output_any: Any = initial_context.get("final_output_dir")
-    final_output_path_confirmed: Optional[Path] = None
-    msg_type: str = "Analysis"
+    final_output_path_str: Optional[str] = cast(Optional[str], initial_context.get("final_output_dir"))
+    if not final_output_path_str and internal_flow_name == "FL02_web_crawling":
+        final_output_path_str = cast(Optional[str], initial_context.get("final_output_dir_web_crawl"))
 
-    if final_dir_main_output_any and isinstance(final_dir_main_output_any, str):
-        final_output_path_confirmed = Path(final_dir_main_output_any)
-        msg_type = "Web summary/tutorial" if internal_flow_name == "FL02_web_crawling" else "Code tutorial"
-    elif internal_flow_name == "FL02_web_crawling":
-        # If main output dir isn't set by CombineWebSummary (e.g. minimalistic mode),
-        # use the raw crawl output dir set by FetchWebPage
-        final_dir_crawl_raw_any: Any = initial_context.get("final_output_dir_web_crawl")
-        if final_dir_crawl_raw_any and isinstance(final_dir_crawl_raw_any, str):
-            final_output_path_confirmed = Path(final_dir_crawl_raw_any)
-            msg_part1 = "Raw crawled web content (summary/tutorial generation "
-            msg_part2 = "may have been skipped or failed)"
-            msg_type = msg_part1 + msg_part2
-        else:  # pragma: no cover
-            err_msg = "Web flow finished, but no output directory was confirmed for raw or summarized content."
-            logger_main.error(err_msg)
-    else:  # pragma: no cover
-        logger_main.error("Code analysis flow finished, but 'final_output_dir' was not set in shared_context.")
+    final_output_path_obj_item: Path
+    if not final_output_path_str:
+        base_output_dir_path_obj_item: Path = Path(str(initial_context.get("output_dir")))
+        project_name_dir_path_obj_item: Path = Path(str(initial_context.get("project_name")))
+        final_output_path_obj_item = base_output_dir_path_obj_item / project_name_dir_path_obj_item
+        # final_output_path_str = str(final_output_path_obj_item) # No longer needed as separate str
+        logger_main.debug(
+            "_handle_flow_completion: Using project_name from context: '%s' to form final_output_path: '%s'",
+            initial_context.get("project_name"),
+            str(final_output_path_obj_item),  # Log the string representation
+        )
+    else:
+        final_output_path_obj_item = Path(final_output_path_str)
+        log_msg_comp: str = (
+            f"_handle_flow_completion: Using final_output_path directly from context: '{final_output_path_str}'"
+        )
+        logger_main.debug(log_msg_comp)
 
-    if final_output_path_confirmed and final_output_path_confirmed.exists() and final_output_path_confirmed.is_dir():
-        resolved_path_str = str(final_output_path_confirmed.resolve())
-        logger_main.info("%s processing completed. Output in: %s", msg_type.capitalize(), resolved_path_str)
-        print(f"\n✅ {msg_type.capitalize()} processing complete! Files are in: {resolved_path_str}")
+    output_type_message_str_obj: str = "Analysis"
+    if internal_flow_name == "FL02_web_crawling":
+        resolved_conf_val_dict_item_obj: Any = initial_context.get("config", {})
+        resolved_conf_obj_item_obj: ResolvedFlowConfigData = cast(
+            ResolvedFlowConfigData, resolved_conf_val_dict_item_obj
+        )
+        web_flow_opts_dict_item_obj: dict[str, Any] = resolved_conf_obj_item_obj.get(internal_flow_name, {})
+        crawler_options_config: dict[str, Any] = web_flow_opts_dict_item_obj.get("crawler_options", {})
+        processing_mode_val_str_item_obj: str = str(crawler_options_config.get("processing_mode", "minimalistic"))
+
+        if initial_context.get("current_youtube_video_id"):
+            output_type_message_str_obj = "YouTube content summary/transcript"
+        elif processing_mode_val_str_item_obj == "minimalistic":
+            output_type_message_str_obj = "Raw crawled web content (summary/tutorial generation skipped)"
+        else:
+            output_type_message_str_obj = "Web summary/tutorial"
+
+    elif internal_flow_name == "FL01_code_analysis":
+        output_type_message_str_obj = "Code tutorial"
+
+    if final_output_path_obj_item.exists() and final_output_path_obj_item.is_dir():
+        resolved_path_str_item_obj: str = str(final_output_path_obj_item.resolve())
+        logger_main.info(
+            "%s processing completed. Output in: %s",
+            output_type_message_str_obj.capitalize(),
+            resolved_path_str_item_obj,
+        )
+        print(
+            f"\n✅ {output_type_message_str_obj.capitalize()} processing complete! "
+            f"Files are in: {resolved_path_str_item_obj}"
+        )
         return
 
-    log_msg_fail = "Flow finished, but a valid final output directory was not confirmed or found."
-    print(f"\n⚠️ ERROR: {log_msg_fail}", file=sys.stderr)  # pragma: no cover
-    logger_main.error(log_msg_fail + f" (Flow: {internal_flow_name})")  # pragma: no cover
+    log_msg_failure_str_item: str = (
+        "Flow finished, but final output directory was not found or is not a directory."  # pragma: no cover
+    )
+    print(
+        f"\n⚠️ ERROR: {log_msg_failure_str_item} Path: {final_output_path_obj_item.resolve()}", file=sys.stderr
+    )  # pragma: no cover
+    logger_main.error(log_msg_failure_str_item + f" (Flow: {internal_flow_name})")  # pragma: no cover
     sys.exit(1)  # pragma: no cover
 
 
 def _run_flow(initial_context: SharedContextDict, internal_flow_name: str) -> None:
-    """Instantiate and execute the appropriate processing flow.
+    """Instantiate and execute the appropriate processing flow based on `internal_flow_name`.
+
+    This function performs critical pre-run checks (e.g., if the flow is enabled),
+    logs startup information, dynamically creates the flow instance, runs it,
+    validates essential outputs, and handles final completion messages or errors.
 
     Args:
         initial_context: The prepared initial shared context for the flow.
-        internal_flow_name: The internal name of the flow to run.
+        internal_flow_name: The internal name of the flow to run (e.g., "FL01_code_analysis").
+
+    Raises:
+        SystemExit: If the flow is disabled, fails to create, encounters a critical
+                    execution error, or if essential outputs are missing post-execution.
     """
     _check_operation_mode_enabled(internal_flow_name, cast(ResolvedFlowConfigData, initial_context.get("config", {})))
     _log_run_flow_startup_info(initial_context, internal_flow_name)
 
-    processing_flow: Optional[SourceLensFlow] = None
+    processing_flow_instance_obj_item_val: Optional[SourceLensFlow] = None
     try:
-        create_flow_function: Callable[[SharedContextDict], SourceLensFlow] = _get_flow_creator_function(
-            internal_flow_name
+        create_flow_function_val_obj_item_val: Callable[[SharedContextDict], SourceLensFlow] = (
+            _get_flow_creator_function(internal_flow_name)
         )
-        processing_flow = create_flow_function(initial_context)
+        processing_flow_instance_obj_item_val = create_flow_function_val_obj_item_val(initial_context)
         logger_main.info("Pipeline for flow '%s' created successfully.", internal_flow_name)
-    except (ImportError, ValueError, AttributeError) as e_create_flow:  # pragma: no cover
+    except (ImportError, ValueError, AttributeError) as e_create_flow_err_val_item_val_item:  # pragma: no cover
         logger_main.critical(
-            "Failed to create pipeline for flow '%s': %s", internal_flow_name, e_create_flow, exc_info=True
+            "Failed to create pipeline for %s: %s",
+            internal_flow_name,
+            e_create_flow_err_val_item_val_item,
+            exc_info=True,
         )
         sys.exit(1)
 
-    if not processing_flow:  # pragma: no cover
+    if not processing_flow_instance_obj_item_val:  # pragma: no cover
         logger_main.error("Pipeline for flow '%s' could not be instantiated. Halting.", internal_flow_name)
         sys.exit(1)
 
     try:
         logger_main.info("Running the %s pipeline...", internal_flow_name)
-        processing_flow.run_standalone(initial_context)
+        processing_flow_instance_obj_item_val.run_standalone(initial_context)
         _validate_flow_output_or_exit(initial_context, internal_flow_name)
         _handle_flow_completion(initial_context, internal_flow_name)
 
-    except (ConfigError, ValueError, TypeError, KeyError, AttributeError, RuntimeError, OSError, ImportError) as e_flow:
+    except (
+        ConfigError,
+        ValueError,
+        TypeError,
+        KeyError,
+        AttributeError,
+        RuntimeError,
+        OSError,
+        ImportError,
+        LlmApiError,
+    ) as e_flow_exec_val_item_val_item_val:
         if (
             internal_flow_name == "FL01_code_analysis"
-            and NoFilesFetchedError is not None  # Ensure NoFilesFetchedError is not None
-            and isinstance(e_flow, NoFilesFetchedError)
-        ):
-            logger_main.error(
-                "No files fetched during code analysis flow: %s. This is a critical error.", e_flow, exc_info=False
+            and NoFilesFetchedError is not None
+            and isinstance(e_flow_exec_val_item_val_item_val, NoFilesFetchedError)
+        ):  # pragma: no cover
+            err_msg_no_files_item: str = "No files fetched for code analysis. This is a critical error."
+            logger_main.error("%s: %s", err_msg_no_files_item, e_flow_exec_val_item_val_item_val, exc_info=False)
+            print(
+                f"\n❌ CRITICAL ERR : No source files found for analysis. Details: {e_flow_exec_val_item_val_item_val}",
+                file=sys.stderr,
             )
-            print(f"\n❌ CRITICAL ERROR: No source files were found for analysis. Details: {e_flow}", file=sys.stderr)
             sys.exit(1)
         else:  # pragma: no cover
-            logger_main.critical("Error during %s pipeline execution: %s", internal_flow_name, e_flow, exc_info=True)
-            print(f"\n❌ ERROR: Pipeline execution failed: {e_flow!s}", file=sys.stderr)
+            logger_main.critical(
+                "Error during %s pipeline execution: %s",
+                internal_flow_name,
+                e_flow_exec_val_item_val_item_val,
+                exc_info=True,
+            )
+            print(f"\n❌ ERROR: Pipeline execution failed: {e_flow_exec_val_item_val_item_val!s}", file=sys.stderr)
             sys.exit(1)
     except KeyboardInterrupt:  # pragma: no cover
         logger_main.warning("Execution interrupted by user (KeyboardInterrupt).")
@@ -809,13 +1159,23 @@ def _run_flow(initial_context: SharedContextDict, internal_flow_name: str) -> No
 
 
 def main() -> None:
-    """Run the main command-line entry point for the SourceLens application."""
-    args: argparse.Namespace = parse_arguments()
-    resolved_flow_config, internal_flow_name_to_run = _initialize_app_config_and_logging(args)
-    initial_shared_context: SharedContextDict = _prepare_runtime_initial_context(
-        args, resolved_flow_config, internal_flow_name_to_run
+    """Run the main command-line entry point for the SourceLens application.
+
+    Parses arguments, initializes configuration and logging, prepares the
+    initial shared context based on the chosen flow (code or web), and then
+    runs the selected processing flow.
+    """
+    args_parsed_ns_val_obj_item: argparse.Namespace = parse_arguments()
+    internal_flow_name_to_run_str_val_obj_item: str = args_parsed_ns_val_obj_item.internal_flow_name
+    resolved_flow_configuration_val_dict_obj_item: ResolvedFlowConfigData
+    resolved_flow_configuration_val_dict_obj_item, _ = _initialize_app_config_and_logging(args_parsed_ns_val_obj_item)
+
+    initial_shared_context_val_dict_obj_item: SharedContextDict = _prepare_runtime_initial_context(
+        args_parsed_ns_val_obj_item,
+        resolved_flow_configuration_val_dict_obj_item,
+        internal_flow_name_to_run_str_val_obj_item,
     )
-    _run_flow(initial_shared_context, internal_flow_name_to_run)
+    _run_flow(initial_shared_context_val_dict_obj_item, internal_flow_name_to_run_str_val_obj_item)
 
 
 if __name__ == "__main__":  # pragma: no cover

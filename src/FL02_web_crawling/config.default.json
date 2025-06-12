@@ -1,11 +1,10 @@
 {
-  "FL02_web_crawling": { 
+  "FL02_web_crawling": {
     "enabled": true,
     "active_llm_provider_id": "gemini_flash_main",
     "crawler_options": {
-      "default_output_subdir_name": "crawled_web_content_standalone",
-      "processing_mode": "llm_extended",
-      "max_depth_recursive": 2,
+      "processing_mode": "minimalistic",
+      "max_depth_recursive": 1,
       "user_agent": "SourceLensBot/0.1 (https://github.com/openXFlow/sourceLensAI)",
       "respect_robots_txt": true,
       "max_concurrent_requests": 3,
@@ -16,7 +15,12 @@
       "enabled": true,
       "min_chunk_char_length": 150,
       "heading_levels_to_split_on": [1, 2, 3]
-    },    
+    },
+    "youtube_processing": {
+      "expected_transcript_languages_on_yt": [
+        "en", "sk"
+      ]
+    },
     "output_options": {
       "include_content_inventory": true,
       "include_content_review": true

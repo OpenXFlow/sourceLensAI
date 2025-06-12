@@ -1,11 +1,11 @@
 {
-"common": {
+  "common": {
     "common_output_settings": {
       "default_output_name": "auto-generated",
       "main_output_directory": "output",
-      "generated_text_language": "english"
-    },    
-	"logging": {
+      "generated_text_language": "slovak"
+    },
+    "logging": {
       "log_dir": "logs",
       "log_level": "DEBUG"
     },
@@ -18,11 +18,12 @@
       "retry_wait_seconds": 20
     }
   },
-  "code_analysis": {
+  "FL01_code_analysis": {
     "enabled": true,
     "github_token_env_var": "GITHUB_TOKEN",
-    "github_token": "YOUR_GIT_HUB_TOKEN",
+    "github_token": "YOUR_TOKEN",
     "active_language_profile_id": "python_ast_default",
+    "active_llm_provider_id": "gemini_flash_main",
     "source_options": {
       "max_file_size_bytes": 150000,
       "use_relative_paths": true,
@@ -53,21 +54,29 @@
     "output_options": {
       "include_source_index": true,
       "include_project_review": true
-    },
-    "active_llm_provider_id": "gemini_flash_main"
+    }
   },
-  "web_analysis": {
+  "FL02_web_crawling": {
     "enabled": true,
     "active_llm_provider_id": "gemini_flash_main",
     "crawler_options": {
-      "default_output_subdir_name": "crawled_web_content",
-      "processing_mode": "llm_extended",
+      "processing_mode": "minimalistic",
       "max_depth_recursive": 2,
-      "user_agent": "SourceLensBot/0.1 (https://github.com/OpenXFlow/sourceLensAI)",
+      "user_agent": "SourceLensBot/0.1 (https://github.com/openXFlow/sourceLensAI)",
       "respect_robots_txt": true,
       "max_concurrent_requests": 3,
       "default_page_timeout_ms": 30000,
       "word_count_threshold_for_markdown": 50
+    },
+    "segmentation_options": {
+      "enabled": true,
+      "min_chunk_char_length": 150,
+      "heading_levels_to_split_on": [1, 2, 3]
+    },
+    "youtube_processing": {
+      "expected_transcript_languages_on_yt": [
+        "en", "sk"
+      ]
     },
     "output_options": {
       "include_content_inventory": true,
@@ -206,7 +215,7 @@
         "provider": "gemini",
         "model": "gemini-2.0-flash",
         "api_key_env_var": "GEMINI_API_KEY",
-        "api_key": "YOUR_API_KEY",
+        "api_key": "YOUR_KEY",
         "api_base_url": null
       },
       {

@@ -19,33 +19,32 @@ This package groups all processing nodes (pipeline steps) specifically designed
 for fetching, processing, and analyzing web content.
 """
 
-# Import all node classes from their respective modules within this sub-package.
-# These nodes constitute the building blocks of the web content analysis pipeline.
-
 from .n01_fetch_web_page import FetchWebPage
-from .n01b_segment_web_content import SegmentWebContent  # Pridaný nový node
+from .n01b_segment_web_content import SegmentWebContent
+from .n01c_youtube_content import FetchYouTubeContent
 from .n02_identify_web_concepts import IdentifyWebConcepts
 from .n03_analyze_web_relationships import AnalyzeWebRelationships
 from .n04_order_web_chapters import OrderWebChapters
 from .n05_write_web_chapters import WriteWebChapters
 from .n06_generate_web_inventory import GenerateWebInventory
 from .n07_generate_web_review import GenerateWebReview
-from .n08_combine_web_summary import CombineWebSummary
 
-# Placeholder for future web content analysis nodes, e.g.:
-# from .nXX_generate_web_diagrams import GenerateWebDiagrams
+# Inserting the new translation node before CombineWebSummary
+from .n07b_translate_youtube_transcript import TranslateYouTubeTranscript
+from .n08_combine_web_summary import CombineWebSummary
 
 __all__ = [
     "FetchWebPage",
-    "SegmentWebContent",  # Pridaný nový node do __all__
+    "SegmentWebContent",
+    "FetchYouTubeContent",
     "IdentifyWebConcepts",
     "AnalyzeWebRelationships",
     "OrderWebChapters",
     "WriteWebChapters",
     "GenerateWebInventory",
     "GenerateWebReview",
+    "TranslateYouTubeTranscript",  # Added new node
     "CombineWebSummary",
-    # Add future web node classes here as they are created
 ]
 
 # End of src/FL02_web_crawling/nodes/__init__.py

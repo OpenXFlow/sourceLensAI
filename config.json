@@ -3,7 +3,7 @@
     "common_output_settings": {
       "default_output_name": "auto-generated",
       "main_output_directory": "output",
-      "generated_text_language": "english"
+      "generated_text_language": "slovak"
     },
     "logging": {
       "log_dir": "logs",
@@ -60,8 +60,7 @@
     "enabled": true,
     "active_llm_provider_id": "gemini_flash_main",
     "crawler_options": {
-      "default_output_subdir_name": "crawled_web_content",
-      "processing_mode": "llm_extended",
+      "processing_mode": "minimalistic",
       "max_depth_recursive": 2,
       "user_agent": "SourceLensBot/0.1 (https://github.com/openXFlow/sourceLensAI)",
       "respect_robots_txt": true,
@@ -69,11 +68,16 @@
       "default_page_timeout_ms": 30000,
       "word_count_threshold_for_markdown": 50
     },
-	"segmentation_options": {
-	"enabled": true,
-	"min_chunk_char_length": 150,
-	"heading_levels_to_split_on": [1, 2, 3]
-	},	
+    "segmentation_options": {
+      "enabled": true,
+      "min_chunk_char_length": 150,
+      "heading_levels_to_split_on": [1, 2, 3]
+    },
+    "youtube_processing": {
+      "expected_transcript_languages_on_yt": [
+        "en", "sk"
+      ]
+    },
     "output_options": {
       "include_content_inventory": true,
       "include_content_review": true

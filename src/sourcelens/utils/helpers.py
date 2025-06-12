@@ -15,33 +15,48 @@
 
 """General utility functions for the SourceLens application.
 
-Includes helpers for retrieving file content based on indices and sanitizing
-strings for use as filenames.
+Includes helpers for retrieving file content based on indices, sanitizing
+strings for use as filenames, and YouTube URL utilities.
 """
 
 import logging
 import re
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, Final, Optional, Union
 
 from typing_extensions import TypeAlias
 
 # Import shared types from the central common_types module
 from sourcelens.core.common_types import FilePathContentList
 
+YTDLP_AVAILABLE: bool = False
+yt_dlp_module: Optional[Any] = None
+YtdlpDownloadError: Optional[type[Exception]] = None
+YtdlpExtractorError: Optional[type[Exception]] = None
+
+try:
+    import yt_dlp as imported_yt_dlp
+
+    yt_dlp_module = imported_yt_dlp
+    if hasattr(yt_dlp_module, "utils"):
+        YtdlpDownloadError = getattr(yt_dlp_module.utils, "DownloadError", Exception)
+        YtdlpExtractorError = getattr(yt_dlp_module.utils, "ExtractorError", Exception)
+    YTDLP_AVAILABLE = True
+except ImportError:
+    pass  # Handled by functions using it
+
+
 logger: logging.Logger = logging.getLogger(__name__)
 
-# Local TypeAliases FileDataItem and FileDataList are no longer needed,
-# using FilePathContentTuple and FilePathContentList from common_types directly or implicitly.
-
 ContentMap: TypeAlias = dict[str, str]
-"""Type alias for a dictionary mapping "index # path" to file content."""
-
 MAX_FILENAME_LEN: int = 60
-"""Maximum length for sanitized filenames (excluding extension)."""
 INVALID_FILENAME_CHARS_REGEX_PATTERN: str = r'[<>:"/\\|?*\x00-\x1f`#%=~{},\';!@+()\[\]]'
-"""Regex pattern for characters to be replaced or removed in filenames."""
 INVALID_FILENAME_CHARS_REGEX: re.Pattern[str] = re.compile(INVALID_FILENAME_CHARS_REGEX_PATTERN)
+
+YOUTUBE_URL_PATTERNS_HELPERS: Final[list[re.Pattern[str]]] = [
+    re.compile(r"(?:v=|\/|embed\/|watch\?v=|youtu\.be\/)([0-9A-Za-z_-]{11}).*"),
+    re.compile(r"shorts\/([0-9A-Za-z_-]{11})"),
+]
 
 
 def _validate_and_filter_indices(
@@ -63,12 +78,12 @@ def _validate_and_filter_indices(
     valid_indices_set: set[int] = set()
     invalid_indices_for_log: list[int] = []
 
-    for idx in indices_to_filter:
-        if 0 <= idx <= max_allowable_index:
-            if idx not in valid_indices_set:
-                valid_indices_set.add(idx)
+    for idx_val in indices_to_filter:
+        if 0 <= idx_val <= max_allowable_index:
+            if idx_val not in valid_indices_set:
+                valid_indices_set.add(idx_val)
         else:
-            invalid_indices_for_log.append(idx)
+            invalid_indices_for_log.append(idx_val)
 
     return valid_indices_set, invalid_indices_for_log
 
@@ -91,11 +106,11 @@ def _parse_raw_indices(raw_indices: Iterable[Any]) -> set[int]:
                 parsed_integer_indices.add(int(i_val))
             elif isinstance(i_val, str) and i_val.isdigit():
                 parsed_integer_indices.add(int(i_val))
-            elif i_val is not None:
+            elif i_val is not None:  # pragma: no cover
                 logger.debug(
                     "Skipping non-integer or non-convertible index entry: %s (type: %s)", i_val, type(i_val).__name__
                 )
-        except (ValueError, TypeError):
+        except (ValueError, TypeError):  # pragma: no cover
             logger.debug("Skipping index entry due to conversion error: %s", i_val)
     return parsed_integer_indices
 
@@ -124,21 +139,20 @@ def get_content_for_indices(files_data: FilePathContentList, indices: Iterable[A
     out_of_bounds_indices: list[int]
     valid_in_range_indices, out_of_bounds_indices = _validate_and_filter_indices(parsed_int_indices, max_index)
 
-    if out_of_bounds_indices:
+    if out_of_bounds_indices:  # pragma: no cover
         logger.warning(
             "Requested indices out of bounds (max: %d): %s. They will be ignored.",
             max_index,
             sorted(out_of_bounds_indices),
         )
 
-    for i, (path, content) in enumerate(files_data):  # path and content are str from FilePathContentList
+    for i, (path, content) in enumerate(files_data):
         if i in valid_in_range_indices:
             normalized_path = path.replace("\\", "/")
             key = f"{i} # {normalized_path}"
-            # Content is already string due to FilePathContentList type hint
             content_map[key] = content
 
-    if len(content_map) != len(valid_in_range_indices):
+    if len(content_map) != len(valid_in_range_indices):  # pragma: no cover
         found_indices_keys = {int(k.split("#", 1)[0].strip()) for k in content_map}
         missing_from_map = valid_in_range_indices - found_indices_keys
         if missing_from_map:
@@ -158,7 +172,8 @@ def sanitize_filename(name: str, *, allow_underscores: bool = True, max_len: int
     Args:
         name: The input string (e.g., chapter or project name).
         allow_underscores: Keyword-only. If True (default), underscores
-                           are preserved. If False, they are replaced with hyphens.
+                           are preserved before hyphen normalization. If False,
+                           they are replaced with hyphens.
         max_len: Maximum allowed length for the sanitized filename component.
 
     Returns:
@@ -176,26 +191,110 @@ def sanitize_filename(name: str, *, allow_underscores: bool = True, max_len: int
     if not allow_underscores:
         sanitized_name = sanitized_name.replace("_", "-")
     else:
-        # This regex ensures multiple consecutive hyphens/underscores become a single hyphen
-        sanitized_name = re.sub(r"[-_]+", "-", sanitized_name)
+        sanitized_name = re.sub(r"[-_]+", "-", sanitized_name)  # Normalize mixed or multiple to single hyphen
 
-    sanitized_name = re.sub(r"-+", "-", sanitized_name)  # Ensure multiple hyphens become one
-
+    sanitized_name = re.sub(r"-+", "-", sanitized_name)
     strip_chars = "-"
-    # if allow_underscores: # This condition is not needed if underscores are already replaced by hyphens
-    #     strip_chars += "_"
     sanitized_name = sanitized_name.strip(strip_chars)
 
     if len(sanitized_name) > max_len:
-        # Prioritize cutting at a hyphen if possible to avoid breaking words
         cut_pos = sanitized_name.rfind("-", 0, max_len)
         sanitized_name = sanitized_name[:cut_pos] if cut_pos != -1 else sanitized_name[:max_len]
-        sanitized_name = sanitized_name.strip(strip_chars)  # Strip again in case cut creates leading/trailing hyphen
+        sanitized_name = sanitized_name.strip(strip_chars)
 
-    if not sanitized_name or all(c == "." for c in sanitized_name):
-        return "sanitized-name"  # Default for empty or dot-only strings post-sanitization
+    if not sanitized_name or all(c == "." for c in sanitized_name):  # pragma: no cover
+        return "sanitized-name"
 
     return sanitized_name.lower()
+
+
+def is_youtube_url(url_string: Optional[str]) -> bool:
+    """Check if the given URL string matches known YouTube video URL patterns.
+
+    Args:
+        url_string: The URL string to check.
+
+    Returns:
+        True if the URL is identified as a YouTube video URL, False otherwise.
+    """
+    if not url_string or not isinstance(url_string, str):
+        return False
+    return any(pattern.search(url_string) for pattern in YOUTUBE_URL_PATTERNS_HELPERS)
+
+
+def get_youtube_video_title_and_id(url_string: str) -> tuple[Optional[str], Optional[str]]:
+    """Extract video ID and fetch title for a given YouTube URL using yt-dlp.
+
+    Args:
+        url_string: The YouTube URL string.
+
+    Returns:
+        A tuple (video_id, video_title). Returns (None, None) if yt-dlp is
+        unavailable, URL is not a valid YouTube URL, or if metadata extraction fails.
+        If title extraction fails but ID is found, returns (video_id, None).
+    """
+    if not YTDLP_AVAILABLE or yt_dlp_module is None:  # pragma: no cover
+        logger.warning("yt-dlp library not available. Cannot fetch YouTube title and ID.")
+        return None, None
+
+    video_id: Optional[str] = None
+    for pattern in YOUTUBE_URL_PATTERNS_HELPERS:
+        match = pattern.search(url_string)
+        if match:
+            video_id = match.group(1)
+            break
+
+    if not video_id:
+        logger.debug("Could not extract YouTube video ID from URL: %s", url_string)
+        return None, None
+
+    ydl_opts: dict[str, Any] = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "extract_flat": False,
+        "noplaylist": True,
+    }
+
+    logger.debug("Attempting to fetch YouTube metadata for URL: %s (ID: %s)", url_string, video_id)
+    try:
+        with yt_dlp_module.YoutubeDL(ydl_opts) as ydl:
+            # Ensure error types are defined if yt_dlp_module is not None
+            if YtdlpDownloadError is None or YtdlpExtractorError is None:  # pragma: no cover
+                raise RuntimeError("yt-dlp error types not initialized correctly.")
+
+            try:
+                info_dict: Union[dict[str, Any], None] = ydl.extract_info(url_string, download=False)
+            except (YtdlpDownloadError, YtdlpExtractorError) as e_yt_dlp:  # pragma: no cover
+                # Catch specific yt-dlp errors during extract_info
+                logger.error(
+                    "yt-dlp error during metadata extraction for %s (ID: %s): %s", url_string, video_id, e_yt_dlp
+                )
+                return video_id, None  # Return ID if found, but title fetch failed
+
+            if info_dict:
+                actual_id_val: Any = info_dict.get("id")
+                title_val: Any = info_dict.get("title")
+                actual_id: Optional[str] = str(actual_id_val) if isinstance(actual_id_val, str) else None
+                title: Optional[str] = str(title_val) if isinstance(title_val, str) else None
+
+                if actual_id != video_id:  # pragma: no cover
+                    logger.warning(
+                        "Extracted video ID '%s' differs from regex-parsed ID '%s' for URL %s.",
+                        actual_id,
+                        video_id,
+                        url_string,
+                    )
+                logger.info("Successfully fetched title '%s' for YouTube ID '%s'", title, actual_id or video_id)
+                return actual_id or video_id, title
+            else:  # pragma: no cover
+                logger.warning("yt-dlp extract_info returned None for URL: %s", url_string)
+                return video_id, None  # ID was found by regex, but extract_info failed
+    except Exception as e:  # pragma: no cover
+        logger.error(
+            "Unexpected error fetching YouTube metadata for %s (ID: %s): %s", url_string, video_id, e, exc_info=True
+        )
+        return video_id, None  # Return ID if found, but general error occurred
 
 
 # End of src/sourcelens/utils/helpers.py

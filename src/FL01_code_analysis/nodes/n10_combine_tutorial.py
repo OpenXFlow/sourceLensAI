@@ -16,6 +16,7 @@
 """Node responsible for combining generated tutorial components into final files."""
 
 import json
+import logging
 import re
 import sys
 from dataclasses import dataclass, field
@@ -25,15 +26,14 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
 from typing_extensions import TypeAlias
 
 from sourcelens.core import BaseNode, SLSharedContext
-from sourcelens.core.common_types import (  # Import central types
+from sourcelens.core.common_types import (
     CodeAbstractionsList,
     CodeRelationshipsDict,
 )
-from sourcelens.utils import LlmApiError  # Assuming LlmApiError might be raised by dependencies
+from sourcelens.utils import LlmApiError
 from sourcelens.utils.helpers import sanitize_filename
 
 if TYPE_CHECKING:  # pragma: no cover
-    # Type aliases for configurations if needed for type hinting complex structures
     ConfigDataInternal: TypeAlias = dict[str, Any]
     LlmConfigDictInternal: TypeAlias = dict[str, Any]
     SourceConfigDictInternal: TypeAlias = dict[str, Any]
@@ -41,21 +41,19 @@ if TYPE_CHECKING:  # pragma: no cover
     DiagramConfigDictInternal: TypeAlias = dict[str, Any]
 
 
-CombinePreparedInputs: TypeAlias = bool  # Indicates if pre_execution was successful enough to proceed
-CombineExecutionResult: TypeAlias = None  # This node primarily has side effects (writing files)
+CombinePreparedInputs: TypeAlias = bool
+CombineExecutionResult: TypeAlias = None
 
-# Types related to chapter data
-ChapterOrderListInternal: TypeAlias = list[int]  # Standard list of integers
-ChapterContentListInternal: TypeAlias = list[str]  # Standard list of strings
-IdentifiedScenarioListInternal: TypeAlias = list[str]  # Standard list of strings
+ChapterOrderListInternal: TypeAlias = list[int]
+ChapterContentListInternal: TypeAlias = list[str]
+IdentifiedScenarioListInternal: TypeAlias = list[str]
 
 ChapterTypeLiteral: TypeAlias = Literal["standard", "diagrams", "source_index", "project_review"]
-ChapterFileDataInternal: TypeAlias = dict[str, Any]  # Keep this for assembled chapter data
+ChapterFileDataInternal: TypeAlias = dict[str, Any]
 AllChaptersDataListInternal: TypeAlias = list[ChapterFileDataInternal]
 
-# Types for diagram markups
-DiagramMarkup: TypeAlias = Optional[str]  # Using a simpler name for clarity
-SequenceDiagramsList: TypeAlias = list[DiagramMarkup]  # List of optional strings
+DiagramMarkup: TypeAlias = Optional[str]
+SequenceDiagramsList: TypeAlias = list[DiagramMarkup]
 
 SharedDataForCombineInternal: TypeAlias = dict[str, Any]
 
@@ -90,6 +88,8 @@ LOG_MARKUP_SNIPPET_LEN_COMBINE: Final[int] = 200
 LOG_CONTENT_SNIPPET_LEN_SPECIAL_CHAPTER: Final[int] = 50
 MAX_INT_FOR_SORTING: Final[int] = sys.maxsize
 DEFAULT_DIAGRAM_FORMAT_NODE: Final[str] = "mermaid"
+
+module_logger: logging.Logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -139,13 +139,13 @@ class IndexContext:
     """
 
     project_name: str
-    relationships_data: CodeRelationshipsDict  # Use central type
+    relationships_data: CodeRelationshipsDict
     footer_info: FooterInfo
     repo_url: Optional[str] = None
     local_dir: Optional[str] = None
-    relationship_flowchart_markup: DiagramMarkup = None  # Use renamed type
+    relationship_flowchart_markup: DiagramMarkup = None
     chapter_files_data: AllChaptersDataListInternal = field(default_factory=list)
-    diagram_config: "DiagramConfigDictInternal" = field(default_factory=dict)  # Use TYPE_CHECKING import
+    diagram_config: "DiagramConfigDictInternal" = field(default_factory=dict)
     include_rel_flowchart: bool = field(init=False)
 
     def __post_init__(self) -> None:
@@ -169,7 +169,7 @@ class DiagramMarkupContext:
     """
 
     content_parts: list[str]
-    markup: DiagramMarkup  # Use renamed type
+    markup: DiagramMarkup
     diagram_title: str
     diagram_description: str
     diagram_format: str
@@ -226,7 +226,7 @@ class CombineTutorial(BaseNode[CombinePreparedInputs, CombineExecutionResult]):
     def _add_sequence_diagrams_markup(
         self,
         content_parts: list[str],
-        seq_diag_markups: SequenceDiagramsList,  # Use renamed type
+        seq_diag_markups: SequenceDiagramsList,
         identified_scenarios: IdentifiedScenarioListInternal,
         diagram_format: str,
     ) -> bool:
@@ -248,13 +248,11 @@ class CombineTutorial(BaseNode[CombinePreparedInputs, CombineExecutionResult]):
         )
         valid_markups_with_scenarios: list[tuple[str, str]] = []
         for i, markup_item in enumerate(seq_diag_markups):
-            is_valid_markup_flag = isinstance(markup_item, str) and bool(markup_item.strip())
-            if is_valid_markup_flag:
+            if markup_item is not None and markup_item.strip():  # Check for None before strip
                 scenario_desc = f"Scenario {i + 1}"
                 if i < len(identified_scenarios) and identified_scenarios[i] and identified_scenarios[i].strip():
                     scenario_desc = identified_scenarios[i]
                 valid_markups_with_scenarios.append((scenario_desc, markup_item.strip()))
-            # Removed type: ignore as markup_item is already DiagramMarkup (Optional[str])
 
         if not valid_markups_with_scenarios:
             self._log_warning("No valid sequence diagram markups to add to diagrams chapter.")
@@ -339,10 +337,11 @@ class CombineTutorial(BaseNode[CombinePreparedInputs, CombineExecutionResult]):
                 prev_link_text = f"> Previously, we looked at the [Project Overview]({index_filename})."
             elif i > 0:
                 prev_ch_data = all_chapters_data[i - 1]
-                p_name, p_file = (
-                    str(prev_ch_data.get("name", "")).strip(),
-                    str(prev_ch_data.get("filename", "")).strip(),
-                )
+                p_name_raw: Any = prev_ch_data.get("name")
+                p_file_raw: Any = prev_ch_data.get("filename")
+                p_name: str = str(p_name_raw).strip() if isinstance(p_name_raw, str) else ""
+                p_file: str = str(p_file_raw).strip() if isinstance(p_file_raw, str) else ""
+
                 if p_name and p_file:
                     prev_link_text = f"> Previously, we looked at [{p_name}]({p_file})."
                 else:
@@ -352,10 +351,11 @@ class CombineTutorial(BaseNode[CombinePreparedInputs, CombineExecutionResult]):
             next_link_text: Optional[str] = None
             if i < num_all_chapters - 1:
                 next_ch_data = all_chapters_data[i + 1]
-                n_name, n_file = (
-                    str(next_ch_data.get("name", "")).strip(),
-                    str(next_ch_data.get("filename", "")).strip(),
-                )
+                n_name_raw: Any = next_ch_data.get("name")
+                n_file_raw: Any = next_ch_data.get("filename")
+                n_name: str = str(n_name_raw).strip() if isinstance(n_name_raw, str) else ""
+                n_file: str = str(n_file_raw).strip() if isinstance(n_file_raw, str) else ""
+
                 if n_name and n_file:
                     next_link_text = f"> Next, we will examine [{n_name}]({n_file})."
                 else:
@@ -508,7 +508,7 @@ class CombineTutorial(BaseNode[CombinePreparedInputs, CombineExecutionResult]):
 
     def _prepare_standard_chapters_data(
         self,
-        abstractions: CodeAbstractionsList,  # Use central type
+        abstractions: CodeAbstractionsList,
         chapter_order: ChapterOrderListInternal,
         chapters_content: ChapterContentListInternal,
     ) -> AllChaptersDataListInternal:
@@ -556,7 +556,7 @@ class CombineTutorial(BaseNode[CombinePreparedInputs, CombineExecutionResult]):
             if not (0 <= abstraction_idx < num_abstractions):
                 self._log_warning("Invalid abstraction_idx %d in chapter_order. Skipping std chapter.", abstraction_idx)
                 continue
-            abstraction_item: dict[str, Any] = abstractions[abstraction_idx]  # Use dict[str, Any] for items from list
+            abstraction_item: dict[str, Any] = abstractions[abstraction_idx]
             name_raw_any: Any = abstraction_item.get("name")
             name: str = (
                 str(name_raw_any).strip()
@@ -649,8 +649,8 @@ class CombineTutorial(BaseNode[CombinePreparedInputs, CombineExecutionResult]):
         self,
         all_chapters_list: AllChaptersDataListInternal,
         shared_context: SLSharedContext,
-        output_opts_from_flow_config: "OutputOptionsConfigDictInternal",  # Use TYPE_CHECKING import
-        diagram_cfg_from_flow_config: "DiagramConfigDictInternal",  # Use TYPE_CHECKING import
+        output_opts_from_flow_config: "OutputOptionsConfigDictInternal",
+        diagram_cfg_from_flow_config: "DiagramConfigDictInternal",
         starting_chapter_number: int,
     ) -> int:
         """Add enabled special chapters to the list and assign them sequential numbers.
@@ -732,16 +732,14 @@ class CombineTutorial(BaseNode[CombinePreparedInputs, CombineExecutionResult]):
             A list of `ChapterFileDataInternal` dictionaries, sorted by final assigned number.
         """
         self._log_info("Assembling all chapter data for code analysis output...")
-        resolved_config: "ConfigDataInternal" = cast(
-            "ConfigDataInternal", data_for_combine.get("config", {})
-        )  # Use TYPE_CHECKING
+        resolved_config: "ConfigDataInternal" = cast("ConfigDataInternal", data_for_combine.get("config", {}))
         current_flow_name: str = str(shared_context.get("current_operation_mode", _FLOW_NAME_COMBINE_TUTORIAL))
         flow_specific_settings: dict[str, Any] = cast(dict[str, Any], resolved_config.get(current_flow_name, {}))
 
-        output_opts_cfg: "OutputOptionsConfigDictInternal" = cast(  # Use TYPE_CHECKING
+        output_opts_cfg: "OutputOptionsConfigDictInternal" = cast(
             "OutputOptionsConfigDictInternal", flow_specific_settings.get("output_options", {})
         )
-        diagram_gen_cfg: "DiagramConfigDictInternal" = cast(  # Use TYPE_CHECKING
+        diagram_gen_cfg: "DiagramConfigDictInternal" = cast(
             "DiagramConfigDictInternal", flow_specific_settings.get("diagram_generation", {})
         )
 
@@ -753,7 +751,6 @@ class CombineTutorial(BaseNode[CombinePreparedInputs, CombineExecutionResult]):
         self._logger.info("DEBUG _assemble_chapters: output_opts_cfg = %s", json.dumps(output_opts_cfg, indent=2))
         self._logger.info("DEBUG _assemble_chapters: diagram_gen_cfg = %s", json.dumps(diagram_gen_cfg, indent=2))
 
-        # Use central types
         abstractions: CodeAbstractionsList = cast(CodeAbstractionsList, data_for_combine.get("abstractions", []))
         chapter_order: ChapterOrderListInternal = cast(
             ChapterOrderListInternal, data_for_combine.get("chapter_order", [])
@@ -774,12 +771,14 @@ class CombineTutorial(BaseNode[CombinePreparedInputs, CombineExecutionResult]):
             chapter_info["num"] = i + 1
             name_raw: str = str(chapter_info.get("name", f"chapter-{chapter_info['num']}"))
             ch_type: ChapterTypeLiteral = cast(ChapterTypeLiteral, chapter_info.get("chapter_type", "standard"))
-            name_base = (
+            name_base_for_file = (
                 self._get_special_chapter_base_name(ch_type)
                 if ch_type in ["diagrams", "source_index", "project_review"]
                 else (sanitize_filename(name_raw) or f"chapter-{chapter_info['num']}")
             )
-            chapter_info["filename"] = f"{chapter_info['num']:0{FILENAME_CHAPTER_PREFIX_WIDTH_COMBINE}d}_{name_base}.md"
+            chapter_info["filename"] = (
+                f"{chapter_info['num']:0{FILENAME_CHAPTER_PREFIX_WIDTH_COMBINE}d}_{name_base_for_file}.md"
+            )
 
         self._log_info("Assembled and numbered %d chapters for final output.", len(all_assembled_chapters))
         return all_assembled_chapters
@@ -787,7 +786,7 @@ class CombineTutorial(BaseNode[CombinePreparedInputs, CombineExecutionResult]):
     def _create_diagrams_chapter_content(
         self,
         shared_context: SLSharedContext,
-        diagram_config: "DiagramConfigDictInternal",  # Use TYPE_CHECKING
+        diagram_config: "DiagramConfigDictInternal",
     ) -> Optional[str]:
         """Create the Markdown content for the "Architecture Diagrams" special chapter.
 
@@ -839,7 +838,7 @@ class CombineTutorial(BaseNode[CombinePreparedInputs, CombineExecutionResult]):
                 has_any_diagram_content = True
 
         seq_cfg_val: Any = diagram_config.get("sequence_diagrams", {})
-        seq_cfg: "DiagramConfigDictInternal" = cast("DiagramConfigDictInternal", seq_cfg_val)  # Use TYPE_CHECKING
+        seq_cfg: "DiagramConfigDictInternal" = cast("DiagramConfigDictInternal", seq_cfg_val)
         if bool(seq_cfg.get("enabled", False)):
             scenarios_raw: Any = shared_context.get("identified_scenarios", [])
             markups_list_raw: Any = shared_context.get("sequence_diagrams_markup", [])
@@ -909,13 +908,11 @@ class CombineTutorial(BaseNode[CombinePreparedInputs, CombineExecutionResult]):
         self._add_footers(all_chapters, footer_str)
 
         current_flow_name = str(shared_context.get("current_operation_mode", _FLOW_NAME_COMBINE_TUTORIAL))
-        resolved_config: "ConfigDataInternal" = cast(
-            "ConfigDataInternal", data_for_combine.get("config", {})
-        )  # Use TYPE_CHECKING
+        resolved_config: "ConfigDataInternal" = cast("ConfigDataInternal", data_for_combine.get("config", {}))
         flow_specific_settings_for_index: dict[str, Any] = cast(
             dict[str, Any], resolved_config.get(current_flow_name, {})
         )
-        diag_cfg_for_index: "DiagramConfigDictInternal" = cast(  # Use TYPE_CHECKING
+        diag_cfg_for_index: "DiagramConfigDictInternal" = cast(
             "DiagramConfigDictInternal", flow_specific_settings_for_index.get("diagram_generation", {})
         )
 
@@ -926,9 +923,7 @@ class CombineTutorial(BaseNode[CombinePreparedInputs, CombineExecutionResult]):
 
         idx_ctx = IndexContext(
             project_name=str(data_for_combine.get("project_name", DEFAULT_PROJECT_NAME_COMBINE)),
-            relationships_data=cast(
-                CodeRelationshipsDict, data_for_combine.get("relationships_data", {})
-            ),  # Use central type
+            relationships_data=cast(CodeRelationshipsDict, data_for_combine.get("relationships_data", {})),
             footer_info=footer_info,
             repo_url=cast(Optional[str], data_for_combine.get("repo_url")),
             local_dir=cast(Optional[str], data_for_combine.get("local_dir")),
@@ -959,7 +954,7 @@ class CombineTutorial(BaseNode[CombinePreparedInputs, CombineExecutionResult]):
             self._log_info("Ensured output directory exists: %s", output_path.resolve())
         except OSError as e_dir:
             self._log_error("CRITICAL: Failed to create output directory %s: %s", output_path, e_dir, exc_info=True)
-            raise  # Re-raise to be caught by pre_execution's broader OSError handler
+            raise
 
         index_filepath = output_path / INDEX_FILENAME
         try:
@@ -976,7 +971,7 @@ class CombineTutorial(BaseNode[CombinePreparedInputs, CombineExecutionResult]):
             ch_name = str(ch_info.get("name", "Unknown Chapter"))
             if not (fname_val.strip() and content_val.strip()):
                 self._log_warning("Skipping file write for ch '%s': invalid filename or empty content.", ch_name)
-                if not fname_val.strip():  # If filename is empty, this is a more severe issue for structure
+                if not fname_val.strip():
                     all_writes_ok = False
                 continue
             ch_filepath = output_path / fname_val
@@ -1036,12 +1031,8 @@ class CombineTutorial(BaseNode[CombinePreparedInputs, CombineExecutionResult]):
         """
         self._logger.debug("Initializing data for CombineTutorial node...")
         retrieved_data = self._retrieve_shared_data(shared_context)
-        llm_cfg: "LlmConfigDictInternal" = cast(
-            "LlmConfigDictInternal", retrieved_data.get("llm_config", {})
-        )  # Use TYPE_CHECKING
-        src_cfg: "SourceConfigDictInternal" = cast(
-            "SourceConfigDictInternal", retrieved_data.get("source_config", {})
-        )  # Use TYPE_CHECKING
+        llm_cfg: "LlmConfigDictInternal" = cast("LlmConfigDictInternal", retrieved_data.get("llm_config", {}))
+        src_cfg: "SourceConfigDictInternal" = cast("SourceConfigDictInternal", retrieved_data.get("source_config", {}))
 
         footer_info = FooterInfo(
             provider_name=str(llm_cfg.get("provider", FOOTER_PROVIDER_DEFAULT)),
@@ -1050,11 +1041,16 @@ class CombineTutorial(BaseNode[CombinePreparedInputs, CombineExecutionResult]):
             source_language=str(src_cfg.get("language_name_for_llm", FOOTER_SOURCE_LANG_DEFAULT)),
         )
         project_name_str = str(retrieved_data.get("project_name", DEFAULT_PROJECT_NAME_COMBINE))
-        safe_project_name = sanitize_filename(project_name_str, allow_underscores=False) or DEFAULT_PROJECT_NAME_COMBINE
+        final_project_directory_name = project_name_str
         output_base_dir_str = str(retrieved_data.get("output_dir", DEFAULT_OUTPUT_DIR_COMBINE))
-        output_path_obj = Path(output_base_dir_str) / safe_project_name
+        output_path_obj = Path(output_base_dir_str) / final_project_directory_name
 
-        self._logger.debug("Initialized combine data. Footer: %s, Output Path: %s", footer_info, output_path_obj)
+        self._logger.debug(
+            "Initialized combine data. Footer: %s, Final Project Directory Name: %s, Output Path: %s",
+            footer_info,
+            final_project_directory_name,
+            output_path_obj,
+        )
         return retrieved_data, footer_info, output_path_obj
 
     def pre_execution(self, shared_context: SLSharedContext) -> CombinePreparedInputs:
@@ -1071,11 +1067,14 @@ class CombineTutorial(BaseNode[CombinePreparedInputs, CombineExecutionResult]):
         output_path_for_tutorial: Optional[Path] = None
         try:
             retrieved_data, footer_obj, output_path_for_tutorial = self._initialize_combine_data(shared_context)
-            self._logger.debug("Initialized data for pre_execution. Resolved output path: %s", output_path_for_tutorial)
+            self._log_info("Pre_execution: project_name from context: '%s'", retrieved_data.get("project_name"))
+            self._log_info("Pre_execution: Resolved output path for tutorial: %s", output_path_for_tutorial)
 
             current_flow_name_debug = str(shared_context.get("current_operation_mode", _FLOW_NAME_COMBINE_TUTORIAL))
-            resolved_config_debug = cast("ConfigDataInternal", retrieved_data.get("config", {}))  # Use TYPE_CHECKING
-            flow_specific_debug = cast(dict[str, Any], resolved_config_debug.get(current_flow_name_debug, {}))
+            resolved_config_debug: "ConfigDataInternal" = cast("ConfigDataInternal", retrieved_data.get("config", {}))
+            flow_specific_debug: dict[str, Any] = cast(
+                dict[str, Any], resolved_config_debug.get(current_flow_name_debug, {})
+            )
             log_msg_part1 = f"DEBUG Combine Pre: flow_specific_settings for '{current_flow_name_debug}' "
             log_msg_part2 = f"output_options: {json.dumps(flow_specific_debug.get('output_options', {}))}, "
             log_msg_part3 = f"diagram_generation: {json.dumps(flow_specific_debug.get('diagram_generation', {}))}"
@@ -1093,7 +1092,6 @@ class CombineTutorial(BaseNode[CombinePreparedInputs, CombineExecutionResult]):
             write_success = False
         except OSError as e_os:
             self._log_error("Pre-execution failed (critical filesystem error): %s", e_os, exc_info=True)
-            # Consider if LlmApiError is the right type here, or a more generic FlowError
             raise LlmApiError(f"CombineTutorial failed: critical filesystem error: {e_os!s}") from e_os
         finally:
             if not write_success:

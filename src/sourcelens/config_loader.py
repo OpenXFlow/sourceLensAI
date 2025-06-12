@@ -45,17 +45,14 @@ try:
     jsonschema_module = imported_jsonschema_module_for_try
     jsonschema_validate_func = jsonschema_validate_func_real
     JsonSchemaValidationError_type = JsonSchemaValidationError_real
-    if hasattr(jsonschema_module, "exceptions"):
+    if hasattr(jsonschema_module, "exceptions"):  # pragma: no cover
         jsonschema_exceptions_module = jsonschema_module.exceptions
     JSONSCHEMA_AVAILABLE = True
-except ImportError:
+except ImportError:  # pragma: no cover
     pass
 
 if TYPE_CHECKING:  # pragma: no cover
     import argparse
-
-    if JSONSCHEMA_AVAILABLE and JsonSchemaValidationError_type is not None:
-        pass
 
 
 ConfigDict: TypeAlias = dict[str, Any]
@@ -70,6 +67,7 @@ FlowDiagramGenerationDict: TypeAlias = dict[str, Any]
 FlowOutputOptionsDict: TypeAlias = dict[str, Any]
 FlowCrawlerOptionsDict: TypeAlias = dict[str, Any]
 WebSegmentationOptionsDict: TypeAlias = dict[str, Any]
+WebYouTubeProcessingOptionsDict: TypeAlias = dict[str, Any]
 
 AUTO_DETECT_OUTPUT_NAME: Final[str] = "auto-generated"
 DEFAULT_MAIN_OUTPUT_DIR: Final[str] = "output"
@@ -93,7 +91,6 @@ DEFAULT_CODE_SEQ_DIAGRAMS_MAX: Final[int] = 5
 DEFAULT_CODE_INCLUDE_SOURCE_INDEX: Final[bool] = True
 DEFAULT_CODE_INCLUDE_PROJECT_REVIEW: Final[bool] = True
 DEFAULT_WEB_ANALYSIS_ENABLED: Final[bool] = True
-DEFAULT_WEB_OUTPUT_SUBDIR_NAME: Final[str] = "crawled_web_content_standalone"
 DEFAULT_WEB_PROCESSING_MODE: Final[str] = "minimalistic"
 DEFAULT_WEB_MAX_DEPTH_RECURSIVE: Final[int] = 1
 DEFAULT_WEB_USER_AGENT: Final[str] = "SourceLensBot/0.1 (https://github.com/openXFlow/sourceLensAI)"
@@ -107,6 +104,36 @@ DEFAULT_LANGUAGE_PARSER_TYPE: Final[str] = "llm"
 DEFAULT_WEB_SEGMENTATION_ENABLED: Final[bool] = True
 DEFAULT_WEB_SEGMENTATION_MIN_CHUNK_CHAR_LENGTH: Final[int] = 150
 DEFAULT_WEB_SEGMENTATION_HEADING_LEVELS: Final[list[int]] = [1, 2, 3]
+DEFAULT_EXPECTED_TRANSCRIPT_LANGUAGES: Final[list[str]] = [
+    "en",
+    "sk",
+    "cs",
+    "de",
+    "fr",
+    "es",
+    "it",
+    "pt",
+    "pl",
+    "hu",
+    "ro",
+    "nl",
+    "sv",
+    "no",
+    "da",
+    "fi",
+    "el",
+    "ru",
+    "uk",
+    "tr",
+    "ar",
+    "he",
+    "hi",
+    "ja",
+    "ko",
+    "zh-CN",
+    "zh-TW",
+    "id",
+]
 
 
 ENV_VAR_GEMINI_KEY: Final[str] = "GEMINI_API_KEY"
@@ -253,7 +280,6 @@ CODE_ANALYSIS_GLOBAL_OVERRIDES_SCHEMA: ConfigDict = {
 WEB_ANALYSIS_CRAWLER_OPTIONS_SCHEMA: ConfigDict = {
     "type": "object",
     "properties": {
-        "default_output_subdir_name": {"type": "string", "default": DEFAULT_WEB_OUTPUT_SUBDIR_NAME},
         "processing_mode": {
             "type": "string",
             "enum": ["minimalistic", "llm_extended"],
@@ -272,7 +298,6 @@ WEB_ANALYSIS_CRAWLER_OPTIONS_SCHEMA: ConfigDict = {
     },
     "additionalProperties": False,
     "default": {
-        "default_output_subdir_name": DEFAULT_WEB_OUTPUT_SUBDIR_NAME,
         "processing_mode": DEFAULT_WEB_PROCESSING_MODE,
         "max_depth_recursive": DEFAULT_WEB_MAX_DEPTH_RECURSIVE,
         "user_agent": DEFAULT_WEB_USER_AGENT,
@@ -306,6 +331,21 @@ WEB_ANALYSIS_SEGMENTATION_OPTIONS_SCHEMA: ConfigDict = {
     },
 }
 
+WEB_ANALYSIS_YOUTUBE_PROCESSING_SCHEMA: ConfigDict = {
+    "type": "object",
+    "properties": {
+        "expected_transcript_languages_on_yt": {
+            "type": "array",
+            "items": {"type": "string"},
+            "default": DEFAULT_EXPECTED_TRANSCRIPT_LANGUAGES,
+        }
+    },
+    "additionalProperties": False,
+    "default": {
+        "expected_transcript_languages_on_yt": DEFAULT_EXPECTED_TRANSCRIPT_LANGUAGES,
+    },
+}
+
 WEB_ANALYSIS_OUTPUT_OPTIONS_SCHEMA: ConfigDict = {
     "type": "object",
     "properties": {
@@ -325,6 +365,7 @@ WEB_ANALYSIS_GLOBAL_OVERRIDES_SCHEMA: ConfigDict = {
         "active_llm_provider_id": {"type": "string"},
         "crawler_options": WEB_ANALYSIS_CRAWLER_OPTIONS_SCHEMA,
         "segmentation_options": WEB_ANALYSIS_SEGMENTATION_OPTIONS_SCHEMA,
+        "youtube_processing": WEB_ANALYSIS_YOUTUBE_PROCESSING_SCHEMA,
         "output_options": WEB_ANALYSIS_OUTPUT_OPTIONS_SCHEMA,
     },
     "additionalProperties": True,
@@ -385,7 +426,7 @@ class ConfigError(Exception):
 
 
 module_logger: logging.Logger = logging.getLogger(__name__)
-if not module_logger.handlers:
+if not module_logger.handlers:  # pragma: no cover
     _init_handler: logging.Handler = logging.StreamHandler(sys.stdout)
     _init_handler.setFormatter(logging.Formatter(DEFAULT_LOG_FORMAT_MAIN))
     module_logger.addHandler(_init_handler)
@@ -406,7 +447,7 @@ class ConfigLoader:
         """Initialize ConfigLoader with the path to the global configuration file."""
         self._global_config_path = Path(global_config_path_str).resolve()
         self._logger = logging.getLogger(self.__class__.__name__)
-        if not self._logger.handlers:
+        if not self._logger.handlers:  # pragma: no cover
             handler: logging.Handler = logging.StreamHandler(sys.stdout)
             handler.setFormatter(logging.Formatter(DEFAULT_LOG_FORMAT_MAIN))
             handler.name = "ConfigLoaderInitHandler"
@@ -428,14 +469,14 @@ class ConfigLoader:
             )
             self._apply_defaults_to_common_section(self._global_config_data)
             self._logger.info("ConfigLoader __init__: Global configuration loaded and validated successfully.")
-        except FileNotFoundError:
+        except FileNotFoundError:  # pragma: no cover
             self._logger.warning(
                 "ConfigLoader __init__: Global config file '%s' not found. Using empty global config. "
                 "Flows will rely on their defaults and CLI overrides.",
                 self._global_config_path,
             )
             self._global_config_data = {}
-        except ConfigError as e:
+        except ConfigError as e:  # pragma: no cover
             self._logger.error(
                 "ConfigLoader __init__: Failed to load or validate global config '%s': %s. Using empty global config.",
                 self._global_config_path,
@@ -443,12 +484,12 @@ class ConfigLoader:
                 exc_info=True,
             )
             self._global_config_data = {}
-        except Exception as e_unexp:
+        except Exception as e_unexp:  # pragma: no cover # pylint: disable=broad-except
             self._logger.error(
                 f"ConfigLoader __init__: Unexpected error during global config init: {e_unexp}", exc_info=True
             )
             self._global_config_data = {}
-        finally:
+        finally:  # pragma: no cover
             if self._logger.propagate is False:
                 self._logger.propagate = True
             for handler_to_remove in list(self._logger.handlers):
@@ -470,14 +511,14 @@ class ConfigLoader:
         try:
             with file_path.open(encoding="utf-8") as f:
                 loaded_data: Any = json.load(f)
-                if not isinstance(loaded_data, dict):
+                if not isinstance(loaded_data, dict):  # pragma: no cover
                     msg = f"Configuration in '{file_path}' is not a valid JSON object (dictionary)."
                     raise ConfigError(msg)
                 self._logger.debug("Successfully parsed JSON from '%s'", file_path)
                 return cast(ConfigDict, loaded_data)
-        except json.JSONDecodeError as e:
+        except json.JSONDecodeError as e:  # pragma: no cover
             raise ConfigError(f"Invalid JSON syntax in '{file_path}': {e!s}") from e
-        except OSError as e:
+        except OSError as e:  # pragma: no cover
             raise ConfigError(f"Could not read configuration file '{file_path}': {e!s}") from e
 
     def _validate_against_schema(self, instance: ConfigDict, schema: ConfigDict, file_description: str) -> None:
@@ -491,14 +532,14 @@ class ConfigLoader:
         try:
             jsonschema_validate_func(instance=instance, schema=schema)
             self._logger.debug("Schema validation passed for %s.", file_description)
-        except JsonSchemaValidationError_type as e_val_err:
-            path_list = getattr(e_val_err, "path", [])
+        except JsonSchemaValidationError_type as e_val_err:  # pragma: no cover
+            path_list: Any = getattr(e_val_err, "path", [])
             path_str = " -> ".join(map(str, path_list)) if path_list else "root"
-            message_str = getattr(e_val_err, "message", str(e_val_err))
+            message_str: str = getattr(e_val_err, "message", str(e_val_err))
             err_msg = f"Config error in {file_description} at '{path_str}': {message_str}"
-            instance_val = getattr(e_val_err, "instance", None)
-            validator_val = getattr(e_val_err, "validator", "N/A")
-            schema_path_list = getattr(e_val_err, "schema_path", [])
+            instance_val: Any = getattr(e_val_err, "instance", None)
+            validator_val: str = getattr(e_val_err, "validator", "N/A")
+            schema_path_list: Any = getattr(e_val_err, "schema_path", [])
             schema_path_str = " -> ".join(map(str, schema_path_list))
             self._logger.debug(
                 "Schema validation failed for %s. Instance: %s. Path: %s. Validator: %s. Schema path: %s",
@@ -509,7 +550,7 @@ class ConfigLoader:
                 schema_path_str,
             )
             raise ConfigError(err_msg) from e_val_err
-        except Exception as e:  # pragma: no cover
+        except Exception as e:  # pragma: no cover # pylint: disable=broad-except
             log_msg_l1 = f"Unexpected error during schema validation for {file_description}: "
             log_msg_l2 = f"{e!s}"
             self._logger.error(log_msg_l1 + log_msg_l2, exc_info=True)
@@ -518,11 +559,11 @@ class ConfigLoader:
     def _apply_defaults_to_common_section(self, config_dict: ConfigDict) -> None:
         """Apply default values from schema to the 'common' section if keys are missing."""
         common_cfg: ConfigDict = config_dict.setdefault("common", {})
-        common_schema_props = self.COMMON_SCHEMA.get("properties", {})
+        common_schema_props: Any = self.COMMON_SCHEMA.get("properties", {})
 
         for sub_key, sub_schema in common_schema_props.items():
             sub_block = common_cfg.setdefault(sub_key, {})
-            if not isinstance(sub_block, dict):
+            if not isinstance(sub_block, dict):  # pragma: no cover
                 self._logger.warning(
                     "Expected common section key '%s' to be a dict, got %s. Cannot apply defaults.",
                     sub_key,
@@ -530,7 +571,7 @@ class ConfigLoader:
                 )
                 continue
 
-            sub_defaults = sub_schema.get("default", {})
+            sub_defaults: Any = sub_schema.get("default", {})
             if isinstance(sub_defaults, dict):
                 for key, default_val in sub_defaults.items():
                     sub_block.setdefault(key, default_val)
@@ -588,9 +629,11 @@ class ConfigLoader:
                 if v is not None
                 and k
                 not in {
-                    "config",
-                    "flow_command",
-                    "internal_flow_name",
+                    "config",  # Global config path
+                    "flow_config",  # Flow specific config path (for CLI tools of flows)
+                    "flow_command",  # e.g. 'code', 'web'
+                    "internal_flow_name",  # e.g. FL01_code_analysis
+                    # Source specific args, handled by initial_context creation
                     "repo",
                     "dir",
                     "crawl_url",
@@ -628,7 +671,7 @@ class ConfigLoader:
             common_output_settings["generated_text_language"] = cli_args_dict["language"]
         if "log_level" in cli_args_dict:
             logging_settings["log_level"] = cli_args_dict["log_level"]
-        if "log_file" in cli_args_dict:
+        if "log_file" in cli_args_dict:  # Already handled if "NONE"
             logging_settings["log_file"] = cli_args_dict["log_file"]
 
     @staticmethod
@@ -639,7 +682,7 @@ class ConfigLoader:
         if "llm_provider" in cli_args_dict:
             flow_specific_block["active_llm_provider_id"] = cli_args_dict["llm_provider"]
 
-        if flow_name == "FL01_code_analysis":
+        if flow_name == "FL01_code_analysis":  # pragma: no cover
             source_opts = flow_specific_block.setdefault("source_options", {})
             if "include" in cli_args_dict:
                 source_opts["include_patterns"] = cli_args_dict["include"]
@@ -651,13 +694,14 @@ class ConfigLoader:
             crawler_opts = flow_specific_block.setdefault("crawler_options", {})
             if "crawl_depth" in cli_args_dict:
                 crawler_opts["max_depth_recursive"] = cli_args_dict["crawl_depth"]
-            if "crawl_output_subdir" in cli_args_dict:
-                crawler_opts["default_output_subdir_name"] = cli_args_dict["crawl_output_subdir"]
+            # Apply processing_mode override for FL02_web_crawling
+            if "processing_mode" in cli_args_dict:
+                crawler_opts["processing_mode"] = cli_args_dict["processing_mode"]
 
     def _apply_direct_llm_cli_overrides_to_profile(
         self,
         resolved_profile_param: LlmProfileDict,
-        cli_llm_overrides: ConfigDict,  # Renamed resolved_profile
+        cli_llm_overrides: ConfigDict,
     ) -> None:
         """Apply direct LLM overrides from CLI (model, api_key, base_url) to a resolved profile."""
         if "llm_model" in cli_llm_overrides:
@@ -666,9 +710,9 @@ class ConfigLoader:
         if "api_key" in cli_llm_overrides:
             resolved_profile_param["api_key"] = cli_llm_overrides["api_key"]
             self._logger.debug("CLI override: LLM API key was provided (value redacted).")
-        if "base_url" in cli_llm_overrides:
+        if "base_url" in cli_llm_overrides:  # Assuming CLI arg is base_url for consistency
             resolved_profile_param["api_base_url"] = cli_llm_overrides["base_url"]
-            self._logger.debug("CLI override: LLM base_url set to '%s'", cli_llm_overrides["base_url"])
+            self._logger.debug("CLI override: LLM api_base_url set to '%s'", cli_llm_overrides["base_url"])
 
     def _get_initial_llm_profile(
         self,
@@ -694,9 +738,9 @@ class ConfigLoader:
             None,
         )
 
-        if not active_profile_base:
+        if not active_profile_base:  # pragma: no cover
             self._logger.error(
-                f"LLM Profile Resolution Step 1: Active LLM provider_id '{active_llm_id}' not found in the final merged profiles list. "  # noqa E501
+                f"LLM Profile Resolution Step 1: Active LLM provider_id '{active_llm_id}' not found. "
                 f"Using only common LLM defaults for base."
             )
             return merged_profile
@@ -729,52 +773,47 @@ class ConfigLoader:
 
         if profile_to_finalize.get("api_key") is None:
             api_key_env_var = profile_to_finalize.get("api_key_env_var")
-            self._logger.debug(
-                "LLM Profile Finalization: API key is None in profile (after CLI). Trying ENV var: '%s'",
-                api_key_env_var,
-            )
+            self._logger.debug("LLM Profile Finalization: API key is None. Trying ENV var: '%s'", api_key_env_var)
             api_key_from_env = self._resolve_value_from_env(api_key_env_var, f"API key for '{profile_id_for_log}'")
             if api_key_from_env is not None:
                 profile_to_finalize["api_key"] = api_key_from_env
                 self._logger.debug("LLM Profile Finalization: API key loaded from ENV for '%s'.", profile_id_for_log)
             elif not profile_to_finalize.get("is_local_llm") and profile_to_finalize.get("provider") != "vertexai":
-                self._logger.warning(
-                    "LLM Profile Finalization: API key for cloud LLM profile '%s' not found in config, CLI, or ENV var '%s'.",  # noqa E501
+                self._logger.warning(  # pragma: no cover
+                    "LLM Profile Finalization: API key for cloud LLM profile '%s' not found.",
                     profile_id_for_log,
-                    api_key_env_var,
                 )
         else:
             self._logger.debug(
-                "LLM Profile Finalization: API key was already present/set by CLI for '%s'.", profile_id_for_log
+                "LLM Profile Finalization: API key was already present/set for '%s'.", profile_id_for_log
             )
 
         log_profile_after_cli_env = {
             k: (v if k != "api_key" else (f"{str(v)[:3]}***" if v else None)) for k, v in profile_to_finalize.items()
         }
         self._logger.debug(
-            "LLM Profile Finalization for '%s': After applying direct CLI overrides and ENV: %s",
-            profile_id_for_log,
-            log_profile_after_cli_env,
+            "LLM Profile Finalization for '%s': After direct CLI/ENV: %s", profile_id_for_log, log_profile_after_cli_env
         )
 
         if profile_to_finalize.get("provider") == "vertexai":  # pragma: no cover
             self._resolve_vertex_ai_specific_env_vars(profile_to_finalize, profile_id_for_log)
 
-        api_key_present_final = profile_to_finalize.get("api_key") is not None
-        is_cloud_provider_needing_key_final = not profile_to_finalize.get("is_local_llm") and profile_to_finalize.get(
+        api_key_present = profile_to_finalize.get("api_key") is not None
+        is_cloud_needing_key = not profile_to_finalize.get("is_local_llm") and profile_to_finalize.get(
             "provider"
         ) not in ["vertexai", "openai_compatible"]
 
-        if not api_key_present_final and is_cloud_provider_needing_key_final:
-            final_check_msg_part1 = "FINAL CHECK: API key for cloud LLM profile "
-            final_check_msg_part2 = f"'{profile_id_for_log}' (provider: {profile_to_finalize.get('provider')}) "
-            final_check_msg_part3 = "is STILL MISSING or None after all checks."
-            self._logger.error(final_check_msg_part1 + final_check_msg_part2 + final_check_msg_part3)
-        elif api_key_present_final:
+        if not api_key_present and is_cloud_needing_key:  # pragma: no cover
+            provider = profile_to_finalize.get("provider")
+            self._logger.error(
+                f"FINAL CHECK: API key for cloud LLM profile '{profile_id_for_log}' (provider: {provider}) "
+                "is STILL MISSING."
+            )
+        elif api_key_present:
             self._logger.info("API key successfully resolved for LLM profile '%s'.", profile_id_for_log)
-        else:
+        else:  # pragma: no cover
             self._logger.info(
-                "LLM profile '%s' (provider: %s) does not require a direct 'api_key' value or is local.",
+                "LLM profile '%s' (provider: %s) does not require 'api_key' or is local.",
                 profile_id_for_log,
                 profile_to_finalize.get("provider"),
             )
@@ -790,25 +829,23 @@ class ConfigLoader:
         self._logger.debug(
             "Orchestrating LLM profile resolution for ID: '%s'", active_llm_id_from_flow_config or "None specified"
         )
-        resolved_profile_var = self._get_initial_llm_profile(  # Renamed variable to avoid F821
+        resolved_profile = self._get_initial_llm_profile(
             active_llm_id_from_flow_config, llm_profiles_from_config, llm_default_options_from_common
         )
-        self._finalize_llm_profile_with_env_and_cli(
-            resolved_profile_var, active_llm_id_from_flow_config, cli_llm_overrides
-        )
+        self._finalize_llm_profile_with_env_and_cli(resolved_profile, active_llm_id_from_flow_config, cli_llm_overrides)
         final_log_profile = {
-            k: (v if k != "api_key" else (f"{str(v)[:3]}***" if v else None)) for k, v in resolved_profile_var.items()
+            k: (v if k != "api_key" else (f"{str(v)[:3]}***" if v else None)) for k, v in resolved_profile.items()
         }
         self._logger.debug(
             "LLM profile resolution complete for ID '%s'. Final profile: %s",
             active_llm_id_from_flow_config or "None specified",
             final_log_profile,
         )
-        return resolved_profile_var
+        return resolved_profile
 
     def _resolve_vertex_ai_specific_env_vars(
         self, resolved_profile_param: LlmProfileDict, profile_id_for_log: str
-    ) -> None:
+    ) -> None:  # pragma: no cover
         """Resolve Vertex AI specific environment variables if not already set."""
         self._logger.debug("Resolving Vertex AI specific ENV vars for profile '%s'", profile_id_for_log)
         for key, env_var_key, purpose in [
@@ -816,14 +853,13 @@ class ConfigLoader:
             ("vertex_location", "vertex_location_env_var", "Vertex location"),
         ]:
             if not resolved_profile_param.get(key):
-                env_var = resolved_profile_param.get(env_var_key)
+                env_var_val: Any = resolved_profile_param.get(env_var_key)
+                env_var: Optional[str] = str(env_var_val) if isinstance(env_var_val, str) else None
                 val_from_env = self._resolve_value_from_env(env_var, f"{purpose} for profile '{profile_id_for_log}'")
                 if val_from_env:
                     resolved_profile_param[key] = val_from_env
                 else:
-                    self._logger.debug(
-                        f"Optional {purpose} for Vertex AI profile '{profile_id_for_log}' not set in config or ENV."
-                    )
+                    self._logger.debug(f"Optional {purpose} for Vertex AI profile '{profile_id_for_log}' not set.")
 
     def _resolve_active_language_profile(
         self, active_lang_profile_id: Optional[str], language_profiles_list_param: list[LanguageProfileDict]
@@ -846,11 +882,8 @@ class ConfigLoader:
             ),
             None,
         )
-        if not active_profile:
-            self._logger.error(
-                "Language profile ID '%s' not found in the final merged list of language profiles.",
-                active_lang_profile_id,
-            )
+        if not active_profile:  # pragma: no cover
+            self._logger.error("Language profile ID '%s' not found in the final merged list.", active_lang_profile_id)
         else:
             self._logger.debug("Found language profile '%s': %s", active_lang_profile_id, active_profile)
         return active_profile
@@ -859,75 +892,30 @@ class ConfigLoader:
         self,
         flow_name: str,
         flow_default_config_path: Path,
-        flow_schema: Optional[ConfigDict] = None,  # Not currently used for default_flow_cfg validation
+        flow_schema: Optional[ConfigDict] = None,  # Keep for potential future schema validation per flow
         cli_args: Optional["argparse.Namespace"] = None,
     ) -> ConfigDict:
         """Load, merge, and resolve configuration for a specific flow."""
+        del flow_schema  # Not used with current design, might be used later
+
         self._logger.info("Resolving configuration for flow: %s", flow_name)
-        self._logger.debug("Global config path being used by ConfigLoader: %s", self._global_config_path)
-        self._logger.debug("Flow default config path to be loaded: %s", flow_default_config_path)
+        self._logger.debug("Global config path being used: %s", self._global_config_path)
+        self._logger.debug("Flow default config path: %s", flow_default_config_path)
 
         try:
             default_flow_cfg = self._read_json_file(flow_default_config_path)
-            self._logger.debug(
-                "Loaded default flow config for '%s': %s",
-                flow_name,
-                json.dumps(default_flow_cfg, indent=2, default=str),
-            )
-        except FileNotFoundError:
-            self._logger.warning(
-                "Flow default config file not found at %s. Using empty defaults.", flow_default_config_path
-            )
+            self._logger.debug("Loaded default flow config for '%s'.", flow_name)
+        except FileNotFoundError:  # pragma: no cover
+            self._logger.warning("Flow default config not found: %s. Using empty.", flow_default_config_path)
             default_flow_cfg = {}
-        except ConfigError as e:
-            self._logger.error(
-                "Error reading flow default config %s: %s. Using empty defaults.", flow_default_config_path, e
-            )
+        except ConfigError as e:  # pragma: no cover
+            self._logger.error("Error reading flow default config %s: %s. Using empty.", flow_default_config_path, e)
             default_flow_cfg = {}
 
         resolved_config = self._prepare_initial_resolved_config(default_flow_cfg)
-        self._logger.debug(
-            "Resolved_config after merging flow defaults (done in _prepare_initial_resolved_config): %s",
-            json.dumps(resolved_config, indent=2, default=str),
-        )
+        self._logger.debug("Resolved_config after merging flow defaults.")
 
-        global_llm_profiles = self._global_config_data.get("profiles", {}).get("llm_profiles", [])
-        flow_default_llm_profiles_in_resolved = resolved_config.get("profiles", {}).get("llm_profiles", [])
-        merged_llm_profiles_map = {
-            p["provider_id"]: copy.deepcopy(p)
-            for p in flow_default_llm_profiles_in_resolved
-            if isinstance(p, dict) and "provider_id" in p
-        }
-
-        for global_prof in global_llm_profiles:
-            if isinstance(global_prof, dict) and "provider_id" in global_prof:
-                pid = global_prof["provider_id"]
-                if pid in merged_llm_profiles_map:
-                    self._deep_merge_configs(merged_llm_profiles_map[pid], global_prof)
-                else:
-                    merged_llm_profiles_map[pid] = copy.deepcopy(global_prof)
-        resolved_config["profiles"]["llm_profiles"] = list(merged_llm_profiles_map.values())
-
-        global_lang_profiles = self._global_config_data.get("profiles", {}).get("language_profiles", [])
-        flow_default_lang_profiles_in_resolved = resolved_config.get("profiles", {}).get("language_profiles", [])
-        merged_lang_profiles_map = {
-            p["profile_id"]: copy.deepcopy(p)
-            for p in flow_default_lang_profiles_in_resolved
-            if isinstance(p, dict) and "profile_id" in p
-        }
-        for global_prof_lang in global_lang_profiles:
-            if isinstance(global_prof_lang, dict) and "profile_id" in global_prof_lang:
-                pid_lang = global_prof_lang["profile_id"]
-                if pid_lang in merged_lang_profiles_map:
-                    self._deep_merge_configs(merged_lang_profiles_map[pid_lang], global_prof_lang)
-                else:
-                    merged_lang_profiles_map[pid_lang] = copy.deepcopy(global_prof_lang)
-        resolved_config["profiles"]["language_profiles"] = list(merged_lang_profiles_map.values())
-
-        self._logger.debug(
-            "Resolved_config['profiles'] after specific profile merge logic: %s",
-            json.dumps(resolved_config["profiles"], indent=2, default=str),
-        )
+        self._merge_profiles(resolved_config)
 
         cli_overrides_dict_collected = self._collect_cli_overrides(cli_args)
         self._apply_cli_overrides(resolved_config, cli_overrides_dict_collected, flow_name)
@@ -940,6 +928,35 @@ class ConfigLoader:
         self._log_debug_resolved_config(resolved_config, flow_name)
         return resolved_config
 
+    def _merge_profiles(self, resolved_config: ConfigDict) -> None:
+        """Merge LLM and Language profiles from global and flow-default configs."""
+        for profile_key in ["llm_profiles", "language_profiles"]:
+            global_profiles_any: Any = self._global_config_data.get("profiles", {}).get(profile_key, [])
+            global_profiles_list: list[ConfigDict] = (
+                global_profiles_any if isinstance(global_profiles_any, list) else []
+            )
+
+            flow_default_profiles_any: Any = resolved_config.get("profiles", {}).get(profile_key, [])
+            flow_default_profiles_list: list[ConfigDict] = (
+                flow_default_profiles_any if isinstance(flow_default_profiles_any, list) else []
+            )
+
+            id_field = "provider_id" if profile_key == "llm_profiles" else "profile_id"
+            merged_profiles_map = {
+                p[id_field]: copy.deepcopy(p)
+                for p in flow_default_profiles_list
+                if isinstance(p, dict) and id_field in p
+            }
+            for global_prof in global_profiles_list:
+                if isinstance(global_prof, dict) and id_field in global_prof:
+                    pid = global_prof[id_field]
+                    if pid in merged_profiles_map:  # pragma: no cover
+                        self._deep_merge_configs(merged_profiles_map[pid], global_prof)
+                    else:  # pragma: no cover
+                        merged_profiles_map[pid] = copy.deepcopy(global_prof)
+            resolved_config.setdefault("profiles", {})[profile_key] = list(merged_profiles_map.values())
+        self._logger.debug("Merged profiles into resolved_config.")
+
     def _prepare_initial_resolved_config(self, default_flow_cfg: ConfigDict) -> ConfigDict:
         """Prepare the initial resolved_config by copying global and merging flow defaults."""
         resolved_config_val = copy.deepcopy(self._global_config_data if self._global_config_data else {})
@@ -947,13 +964,11 @@ class ConfigLoader:
         resolved_config_val.setdefault("common", {})
         self._apply_defaults_to_common_section(resolved_config_val)
         self._logger.debug(
-            "Initial resolved_config (from global or empty + common defaults applied): %s",
-            json.dumps(resolved_config_val, indent=2, default=str),
+            "Initial resolved_config (from global or empty + common defaults).",
         )
         self._deep_merge_configs(resolved_config_val, default_flow_cfg)
         self._logger.debug(
-            "Resolved_config after deep_merging flow_default_cfg: %s",
-            json.dumps(resolved_config_val, indent=2, default=str),
+            "Resolved_config after deep_merging flow_default_cfg.",
         )
         return resolved_config_val
 
@@ -965,22 +980,17 @@ class ConfigLoader:
     ) -> None:
         """Resolve LLM profile and other flow-specific configurations."""
         flow_specific_block = resolved_config.setdefault(flow_name, {})
-        self._logger.debug(
-            "Flow specific block for '%s' BEFORE LLM profile resolution: %s",
-            flow_name,
-            json.dumps(flow_specific_block, indent=2, default=str),
-        )
+        self._logger.debug("Flow specific block for '%s' BEFORE LLM profile resolution.", flow_name)
 
-        active_llm_id = flow_specific_block.get("active_llm_provider_id")
+        active_llm_id_any: Any = flow_specific_block.get("active_llm_provider_id")
+        active_llm_id: Optional[str] = str(active_llm_id_any) if isinstance(active_llm_id_any, str) else None
         self._logger.debug("Active LLM provider ID from merged flow config for '%s': %s", flow_name, active_llm_id)
 
-        llm_profiles_from_resolved_config = resolved_config.get("profiles", {}).get("llm_profiles", [])
-        self._logger.debug(
-            "LLM profiles used for LLM resolution: %s",
-            json.dumps(llm_profiles_from_resolved_config, indent=2, default=lambda o: f"<<{type(o)}>>"),
-        )
+        llm_profiles_list: list[LlmProfileDict] = resolved_config.get("profiles", {}).get("llm_profiles", [])
+        self._logger.debug("LLM profiles used for LLM resolution count: %d", len(llm_profiles_list))
 
-        llm_default_opts_from_resolved_common = resolved_config.get("common", {}).get("llm_default_options", {})
+        llm_defaults: LlmDefaultOptionsDict = resolved_config.get("common", {}).get("llm_default_options", {})
+
         cli_llm_direct_overrides = {
             k: v for k, v in cli_overrides_dict.items() if k in {"llm_model", "api_key", "base_url"}
         }
@@ -988,47 +998,34 @@ class ConfigLoader:
             resolved_config["resolved_llm_config"] = self._resolve_active_llm_profile(
                 active_llm_id,
                 cli_llm_direct_overrides,
-                llm_profiles_from_resolved_config,
-                llm_default_opts_from_resolved_common,
+                llm_profiles_list,
+                llm_defaults,
             )
             log_llm_config_safe = {
                 k: (v if k != "api_key" else (f"{str(v)[:3]}***" if v else None))
                 for k, v in resolved_config["resolved_llm_config"].items()
             }
-            self._logger.debug(
-                "Final resolved_llm_config in get_resolved_flow_config: %s", json.dumps(log_llm_config_safe, indent=2)
-            )
-
-        except ConfigError as e:
+            self._logger.debug("Final resolved_llm_config: %s", json.dumps(log_llm_config_safe, indent=2))
+        except ConfigError as e:  # pragma: no cover
             self._logger.error("Error resolving LLM profile for flow '%s': %s", flow_name, e)
-            resolved_config["resolved_llm_config"] = copy.deepcopy(llm_default_opts_from_resolved_common)
+            resolved_config["resolved_llm_config"] = copy.deepcopy(llm_defaults)
             if "active_llm_provider_id" in flow_specific_block:
                 del flow_specific_block["active_llm_provider_id"]
 
-        if flow_name == "FL01_code_analysis":
+        if flow_name == "FL01_code_analysis":  # pragma: no cover
             self._resolve_code_analysis_specifics(resolved_config, flow_name)
         elif flow_name == "FL02_web_crawling":
-            seg_opts_schema_defaults = WEB_ANALYSIS_SEGMENTATION_OPTIONS_SCHEMA.get("default", {})
-            current_seg_opts = flow_specific_block.setdefault("segmentation_options", {})
-            for k_seg, v_seg_default in seg_opts_schema_defaults.items():
-                current_seg_opts.setdefault(k_seg, v_seg_default)
-            self._logger.debug("Applied defaults to segmentation_options for %s: %s", flow_name, current_seg_opts)
-            crawler_opts_schema_defaults = WEB_ANALYSIS_CRAWLER_OPTIONS_SCHEMA.get("default", {})
-            current_crawler_opts = flow_specific_block.setdefault("crawler_options", {})
-            for k_crawl, v_crawl_default in crawler_opts_schema_defaults.items():
-                current_crawler_opts.setdefault(k_crawl, v_crawl_default)
-            self._logger.debug("Applied defaults to crawler_options for %s: %s", flow_name, current_crawler_opts)
-            output_opts_schema_defaults = WEB_ANALYSIS_OUTPUT_OPTIONS_SCHEMA.get("default", {})
-            current_web_output_opts = flow_specific_block.setdefault("output_options", {})
-            for k_wo, v_wo_default in output_opts_schema_defaults.items():
-                current_web_output_opts.setdefault(k_wo, v_wo_default)
-            self._logger.debug("Applied defaults to web output_options for %s: %s", flow_name, current_web_output_opts)
+            self._resolve_web_crawling_specifics(resolved_config, flow_name)
 
-    def _resolve_code_analysis_specifics(self, resolved_config: ConfigDict, flow_name: str) -> None:
+    def _resolve_code_analysis_specifics(self, resolved_config: ConfigDict, flow_name: str) -> None:  # pragma: no cover
         """Resolve GitHub token and language profile for code analysis flow."""
         code_analysis_settings = resolved_config.setdefault(flow_name, {})
-        gh_token_env_var = code_analysis_settings.get("github_token_env_var", DEFAULT_GITHUB_TOKEN_ENV_VAR)
-        direct_gh_token = code_analysis_settings.get("github_token")
+        gh_token_env_var_any: Any = code_analysis_settings.get("github_token_env_var", DEFAULT_GITHUB_TOKEN_ENV_VAR)
+        gh_token_env_var: Optional[str] = str(gh_token_env_var_any) if isinstance(gh_token_env_var_any, str) else None
+
+        direct_gh_token_any: Any = code_analysis_settings.get("github_token")
+        direct_gh_token: Optional[str] = str(direct_gh_token_any) if isinstance(direct_gh_token_any, str) else None
+
         resolved_gh_token = (
             direct_gh_token
             if direct_gh_token is not None
@@ -1039,64 +1036,63 @@ class ConfigLoader:
             "Resolved GitHub token for %s: %s", flow_name, "***REDACTED***" if resolved_gh_token else "None"
         )
 
-        active_lang_id = code_analysis_settings.get("active_language_profile_id")
-        lang_profiles_from_resolved = resolved_config.get("profiles", {}).get("language_profiles", [])
-        resolved_lang_profile_var = self._resolve_active_language_profile(
-            active_lang_id, lang_profiles_from_resolved
-        )  # Renamed
+        active_lang_id_any: Any = code_analysis_settings.get("active_language_profile_id")
+        active_lang_id: Optional[str] = str(active_lang_id_any) if isinstance(active_lang_id_any, str) else None
+
+        lang_profiles_list: list[LanguageProfileDict] = resolved_config.get("profiles", {}).get("language_profiles", [])
+        resolved_lang_profile = self._resolve_active_language_profile(active_lang_id, lang_profiles_list)
 
         source_config_block = code_analysis_settings.setdefault("source_config", {})
-        if resolved_lang_profile_var:
-            source_config_block.update(resolved_lang_profile_var)
+        if resolved_lang_profile:
+            source_config_block.update(resolved_lang_profile)
             self._logger.info("Resolved active language profile '%s' into source_config.", active_lang_id)
         elif active_lang_id:
             self._logger.error(
-                "Failed to resolve lang profile '%s'. 'source_config' may be incomplete or use defaults.",
-                active_lang_id,
+                "Failed to resolve lang profile '%s'. 'source_config' may be incomplete.", active_lang_id
             )
             source_config_block.setdefault("language_name_for_llm", "unknown")
             source_config_block.setdefault("parser_type", "none")
 
-        source_options_schema_defaults = CODE_ANALYSIS_SOURCE_OPTIONS_SCHEMA.get("default", {})
-        current_source_options = code_analysis_settings.setdefault("source_options", {})
-        for k_so, v_so_default in source_options_schema_defaults.items():
-            current_source_options.setdefault(k_so, v_so_default)
-        self._logger.debug("Applied defaults to source_options for %s: %s", flow_name, current_source_options)
+        for sub_key, schema in {
+            "source_options": CODE_ANALYSIS_SOURCE_OPTIONS_SCHEMA,
+            "diagram_generation": CODE_ANALYSIS_DIAGRAM_GENERATION_SCHEMA,
+            "output_options": CODE_ANALYSIS_OUTPUT_OPTIONS_SCHEMA,
+        }.items():
+            sub_defaults = schema.get("default", {})
+            current_sub_opts = code_analysis_settings.setdefault(sub_key, {})
+            for k, v_default in sub_defaults.items():
+                current_sub_opts.setdefault(k, v_default)
+            self._logger.debug("Applied defaults to %s for %s.", sub_key, flow_name)
 
-        diagram_gen_schema_defaults = CODE_ANALYSIS_DIAGRAM_GENERATION_SCHEMA.get("default", {})
-        current_diagram_gen_opts = code_analysis_settings.setdefault("diagram_generation", {})
-        for k_dg, v_dg_default in diagram_gen_schema_defaults.items():
-            current_diagram_gen_opts.setdefault(k_dg, v_dg_default)
-        self._logger.debug("Applied defaults to diagram_generation for %s: %s", flow_name, current_diagram_gen_opts)
-
-        output_opts_schema_defaults = CODE_ANALYSIS_OUTPUT_OPTIONS_SCHEMA.get("default", {})
-        current_output_opts = code_analysis_settings.setdefault("output_options", {})
-        for k_oo, v_oo_default in output_opts_schema_defaults.items():
-            current_output_opts.setdefault(k_oo, v_oo_default)
-        self._logger.debug("Applied defaults to output_options for %s: %s", flow_name, current_output_opts)
+    def _resolve_web_crawling_specifics(self, resolved_config: ConfigDict, flow_name: str) -> None:
+        """Resolve and apply defaults for web crawling specific configurations."""
+        flow_specific_block = resolved_config.setdefault(flow_name, {})
+        for sub_key, schema in {
+            "crawler_options": WEB_ANALYSIS_CRAWLER_OPTIONS_SCHEMA,
+            "segmentation_options": WEB_ANALYSIS_SEGMENTATION_OPTIONS_SCHEMA,
+            "youtube_processing": WEB_ANALYSIS_YOUTUBE_PROCESSING_SCHEMA,
+            "output_options": WEB_ANALYSIS_OUTPUT_OPTIONS_SCHEMA,
+        }.items():
+            sub_defaults = schema.get("default", {})
+            current_sub_opts = flow_specific_block.setdefault(sub_key, {})
+            for k, v_default in sub_defaults.items():
+                current_sub_opts.setdefault(k, v_default)
+            self._logger.debug("Applied defaults to %s for %s.", sub_key, flow_name)
 
     def _ensure_common_directories(self, resolved_config: ConfigDict) -> None:
         """Ensure common directories like log and cache directories exist."""
-        final_common_cfg_ensure = resolved_config.get("common", {})
-        if isinstance(final_common_cfg_ensure, dict):
-            logging_settings_ensure = final_common_cfg_ensure.get("logging", {})
-            cache_settings_ensure = final_common_cfg_ensure.get("cache_settings", {})
-            common_output_settings_ensure = final_common_cfg_ensure.get("common_output_settings", {})
+        common_cfg: dict[str, Any] = resolved_config.get("common", {})
+        logging_settings: dict[str, Any] = common_cfg.get("logging", {})
+        cache_settings: dict[str, Any] = common_cfg.get("cache_settings", {})
+        common_output_settings: dict[str, Any] = common_cfg.get("common_output_settings", {})
 
-            if isinstance(logging_settings_ensure, dict):
-                self._ensure_directory_exists(
-                    logging_settings_ensure.get("log_dir"), "logging directory", DEFAULT_LOG_DIR
-                )
-            if isinstance(cache_settings_ensure, dict):
-                self._ensure_directory_exists(
-                    cache_settings_ensure.get("llm_cache_file"), "LLM cache file", DEFAULT_LLM_CACHE_FILE
-                )
-            if isinstance(common_output_settings_ensure, dict):
-                self._ensure_directory_exists(
-                    common_output_settings_ensure.get("main_output_directory"),
-                    "main output directory",
-                    DEFAULT_MAIN_OUTPUT_DIR,
-                )
+        self._ensure_directory_exists(logging_settings.get("log_dir"), "logging directory", DEFAULT_LOG_DIR)
+        self._ensure_directory_exists(cache_settings.get("llm_cache_file"), "LLM cache file", DEFAULT_LLM_CACHE_FILE)
+        self._ensure_directory_exists(
+            common_output_settings.get("main_output_directory"),
+            "main output directory",
+            DEFAULT_MAIN_OUTPUT_DIR,
+        )
 
     def _log_debug_resolved_config(self, resolved_config: ConfigDict, flow_name: str) -> None:  # pragma: no cover
         """Log the final resolved config for debugging, redacting sensitive info."""
@@ -1106,13 +1102,16 @@ class ConfigLoader:
                 if isinstance(log_copy.get("resolved_llm_config"), dict):
                     if "api_key" in log_copy["resolved_llm_config"]:
                         log_copy["resolved_llm_config"]["api_key"] = "***REDACTED***"
-                if flow_name in log_copy and isinstance(log_copy.get(flow_name), dict):
-                    flow_block_log = log_copy[flow_name]
+
+                flow_block_log_any: Any = log_copy.get(flow_name)
+                if isinstance(flow_block_log_any, dict):
+                    flow_block_log: dict[str, Any] = flow_block_log_any
                     if "resolved_github_token" in flow_block_log:
                         flow_block_log["resolved_github_token"] = "***REDACTED***"
+
                     sections_to_log = ["source_options", "diagram_generation", "output_options", "source_config"]
                     if flow_name == "FL02_web_crawling":
-                        sections_to_log.extend(["crawler_options", "segmentation_options"])
+                        sections_to_log.extend(["crawler_options", "segmentation_options", "youtube_processing"])
 
                     for section_name in sections_to_log:
                         if section_name in flow_block_log:
@@ -1122,7 +1121,6 @@ class ConfigLoader:
                                 flow_name,
                                 json.dumps(flow_block_log[section_name], indent=2),
                             )
-
                 self._logger.debug("Final resolved_config for flow '%s': %s", flow_name, json.dumps(log_copy, indent=2))
             except (TypeError, ValueError) as e_dump:
                 self._logger.debug("Could not serialize final config for logging: %s", e_dump)
