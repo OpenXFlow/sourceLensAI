@@ -1,0 +1,17 @@
+{
+    "name": "sourcelens/sample-project-2",
+    "description": "A sample PHP project with a clear separation of concerns, equivalent to the Python sample project.",
+    "type": "project",
+    "authors": [
+        {
+            "name": "SourceLens AI",
+            "email": "assistant@example.com"
+        }
+    ],
+    "require": {},
+    "autoload": {
+        "psr-4": {
+            "SampleProject2\\": "./"
+        }
+    }
+}

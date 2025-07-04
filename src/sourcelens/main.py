@@ -23,7 +23,7 @@ with subcommands 'code' and 'web'.
 
 import argparse
 import contextlib
-import importlib
+import importlib.resources
 import json
 import logging
 import os
@@ -322,17 +322,27 @@ def _initialize_app_config_and_logging(args: argparse.Namespace) -> tuple[Resolv
         config_loader_instance_obj = ConfigLoader(str(args.config))
         internal_flow_name_str_val: str = args.internal_flow_name
 
-        current_script_dir_path_obj: Path = Path(__file__).resolve().parent
-        project_src_root_path_obj: Path = current_script_dir_path_obj.parent
+        # --- MODIFICATION START ---
+        # Use importlib.resources to find the path to the config file within the package
         flow_default_config_filename_str_val: str = "config.default.json"
-        flow_default_path_obj_val: Path = (
-            project_src_root_path_obj / internal_flow_name_str_val / flow_default_config_filename_str_val
-        )
+        try:
+            # This context manager finds the resource and provides a valid Path object
+            # that works whether the code is run from source or an installed package.
+            with importlib.resources.path(internal_flow_name_str_val, flow_default_config_filename_str_val) as p:
+                flow_default_path_obj_val: Path = p
+        except FileNotFoundError as e:
+            err_msg_str_val: str = (
+                f"Default config for flow '{internal_flow_name_str_val}' not found within the package. "
+                f"Searched for '{flow_default_config_filename_str_val}' in package '{internal_flow_name_str_val}'."
+            )
+            print(f"CRITICAL ERROR: {err_msg_str_val}", file=sys.stderr)
+            raise ConfigError(err_msg_str_val) from e
+        # --- MODIFICATION END ---
 
         if not flow_default_path_obj_val.is_file():  # pragma: no cover
-            err_msg_str_val: str = (
+            err_msg_str_val = (
                 f"Default config for flow '{internal_flow_name_str_val}' "
-                f"not found at expected path: {flow_default_path_obj_val}"
+                f"not found at resolved path: {flow_default_path_obj_val}"
             )
             print(f"CRITICAL ERROR: {err_msg_str_val}", file=sys.stderr)
             raise ConfigError(err_msg_str_val)

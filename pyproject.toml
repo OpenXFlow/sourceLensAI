@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "sourcelens" # This remains the main package name
-version = "0.2.0" # INCREMENTED VERSION due to significant refactoring
-description = "AI-powered tool to generate tutorials from source code or web content." # Updated description
+name = "sourcelens"
+version = "0.2.0" # Assuming current version, adjust if necessary
+description = "AI-powered tool to generate tutorials from source code or web content."
 readme = "README.md"
 authors = [
   { name = "Jozef Darida", email = "darijo2@yahoo.com" },
@@ -23,48 +23,34 @@ classifiers = [
 ]
 dependencies = [
     "PyYAML>=6.0",
-    "attrs>=21.3.0", # Used in dataclasses, flow engine
+    "attrs>=21.3.0",
     "typing-extensions>=4.0.0",
-    "jsonschema>=4.0.1", # For ConfigLoader
-    "python-dotenv>=1.0.0", # For ConfigLoader to load .env files
-    "requests>=2.28.0", # Used by ConfigLoader (potentially) and utils._cloud_llm_api, FetchWebPage
-    # Core LLM libraries that are common or default
-    # Consider moving to extras if more granularity is desired
-    "google-generativeai>=0.8.0", # Example, if Gemini is a common/default provider
-    "google-cloud-aiplatform>=1.25.0", # If VertexAI is a supported option
-    # "openai>=1.0.0", # Example: if OpenAI is supported
-    # "anthropic>=0.20.0", # Example: if Anthropic is supported
+    "jsonschema>=4.0.1",
+    "python-dotenv>=1.0.0",
+    "requests>=2.28.0",
+    "google-generativeai>=0.8.0",
+    "google-cloud-aiplatform>=1.25.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/OpenXFlow/sourceLensAI" # Updated repo name
+Homepage = "https://github.com/OpenXFlow/sourceLensAI"
 Repository = "https://github.com/OpenXFlow/sourceLensAI"
 
 [project.scripts]
 sourcelens = "sourcelens.main:main"
-# Optionally, add scripts for standalone flows:
-# sourcelens-code = "FL01_code_analysis.cli:run_standalone_code_analysis"
-# sourcelens-web = "FL02_web_crawling.cli:run_standalone_web_crawling"
 
 [project.optional-dependencies]
 code_analysis = [
     "GitPython>=3.1.0",
-    # Add other libraries specific to code analysis here if needed (e.g., for other AST parsers)
 ]
 web_crawling = [
-    "crawl4ai>=0.6.3", # Main dependency for web crawling
-    # crawl4ai should pull in playwright, beautifulsoup4 etc. as its transitive dependencies
+    "crawl4ai>=0.6.3",
+    "yt-dlp>=2023.12.30",
+    "webvtt-py>=0.5.1",
 ]
-# Example for specific LLM provider SDKs if we want to make them optional:
-# openai_llm = ["openai>=1.0.0"]
-# anthropic_llm = ["anthropic>=0.20.0"]
-# perplexity_llm = ["requests>=2.28.0"] # requests is already in core, just an example
-
-all = [ # To install sourcelens with all optional flow functionalities
+all = [
     "sourcelens[code_analysis]",
     "sourcelens[web_crawling]",
-    # "sourcelens[openai_llm]", # Example of including optional LLM SDK
-    # "sourcelens[anthropic_llm]", # Example
 ]
 dev = [
     "pytest>=7.0",
@@ -72,19 +58,23 @@ dev = [
     "mypy>=1.0",
     "pre-commit>=3.0",
     "build>=0.10.0",
-    "types-PyYAML", # Moved from main dependencies, primarily for dev type checking
-    "types-requests", # Moved from main dependencies
-    "types-jsonschema", # Moved from main dependencies
+    "types-PyYAML",
+    "types-requests",
+    "types-jsonschema",
 ]
+
+[tool.setuptools]
+# We don't need include-package-data = true when using package_data directly.
 
 [tool.setuptools.packages.find]
 where = ["src"]
-# If auto-discovery fails, we might need to explicitly include:
-# include = ["sourcelens*", "FL01_code_analysis*", "FL02_web_crawling*"]
-# The "*" helps include sub-packages like sourcelens.core, FL01_code_analysis.nodes etc.
+
+[tool.setuptools.package-data]
+"FL01_code_analysis" = ["*.json"]
+"FL02_web_crawling" = ["*.json"]
+
 
 [tool.ruff]
-# ... (existing Ruff settings) ...
 line-length = 120
 target-version = "py39"
 
@@ -97,7 +87,7 @@ select = [
     "ANN001", "ANN002", "ANN003", "ANN201", "ANN202", "ANN204", "ANN205", "ANN206",
     "UP006", "UP007",
     "TC001", "TC002",
-    "C901", "PLR0912", "PLR0915", "PLW0603", "PLR2004", "PLE1206",
+    "C901", "PLR0912", "PLR0915", "PLW0603", "PLR2004", "PLE1206", "PLR0913",
     "RET504", "PTH", "FBT001", "FBT002", "PGH003", "SIM105", "F821", "F841", "RUF100"
 ]
 ignore = [
@@ -115,16 +105,14 @@ indent-style = "space"
 python_version = "3.9"
 warn_return_any = true
 warn_unused_configs = true
-# Tell Mypy where to find packages
 package_path = "src"
-# Explicitly list top-level packages to be checked
 packages = ["sourcelens", "FL01_code_analysis", "FL02_web_crawling"]
-# For third-party libraries without stubs:
-# [[tool.mypy.overrides]]
-# module = [
-#    "git.*", # Example for GitPython if it lacks stubs or has partial typing
-#    "crawl4ai.*" # Example for crawl4ai
-# ]
-# ignore_missing_imports = true
 
-# End of pyproject.toml
+# This section tells Mypy to ignore missing type information for these specific modules.
+[[tool.mypy.overrides]]
+module = [
+    "yt_dlp.*",
+    "crawl4ai.*",
+    "webvtt.*"
+]
+ignore_missing_imports = true

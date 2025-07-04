@@ -3,11 +3,11 @@
     "common_output_settings": {
       "default_output_name": "auto-generated",
       "main_output_directory": "output",
-      "generated_text_language": "slovak"
+      "generated_text_language": "english"
     },
     "logging": {
       "log_dir": "logs",
-      "log_level": "DEBUG"
+      "log_level": "INFO"
     },
     "cache_settings": {
       "use_llm_cache": true,

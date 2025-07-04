@@ -1,0 +1,162 @@
+> Previously, we looked at [Konfigurationsverwaltung](06_konfigurationsverwaltung.md).
+
+# Architecture Diagrams
+## Class Diagram
+Key classes and their relationships in **20250704_1309_code-cpp-sample-project**.
+```mermaid
+classDiagram
+    class DataHandler {
+        +load_data() : bool
+    }
+    class Item {
+        +id: int
+        +name: string
+    }
+    class ItemProcessor {
+        +process_item(item: Item) : bool
+    }
+    ItemProcessor ..> Item : Processes
+    DataHandler ..> Item : Manages
+```
+## Package Dependencies
+High-level module and package structure of **20250704_1309_code-cpp-sample-project**.
+```mermaid
+graph TD
+    A["main.cpp"]
+    B["Config.h"]
+    C["DataHandler.h"]
+    D["Item.h"]
+    E["ItemProcessor.h"]
+    A --> B
+    A --> C
+    C --> D
+    C --> E
+    E --> D
+```
+## Sequence Diagrams
+These diagrams illustrate various interaction scenarios, showcasing operations between components for specific use cases.
+### Loading the application with configuration and initializing data structures.
+```mermaid
+sequenceDiagram
+    participant User
+    participant Application
+    participant ConfigurationManager
+    participant DataInitializer
+    User->>Application: Start Application
+    activate Application
+    Application->>ConfigurationManager: Load Configuration
+    activate ConfigurationManager
+    ConfigurationManager-->>Application: Configuration Data
+    deactivate ConfigurationManager
+    Application->>DataInitializer: Initialize Data Structures
+    activate DataInitializer
+    DataInitializer-->>Application: Data Structures Initialized
+    deactivate DataInitializer
+    Application-->>User: Application Ready
+    deactivate Application
+```
+### Defining a new article using the application interface and persisting it.
+```mermaid
+sequenceDiagram
+    participant User
+    participant API
+    participant Database
+    User->>API: Define new article (title, content)
+    activate API
+    API->>Database: Store article data
+    activate Database
+    alt Success
+        Database-->>API: Article ID
+        API-->>User: Article created (ID)
+    else Failure
+        Database-->>API: Error message
+        API-->>User: Error creating article
+    end
+    deactivate Database
+    deactivate API
+```
+### Processing a data input, including validation and updating relevant article information.
+```mermaid
+sequenceDiagram
+    participant User
+    participant API
+    participant DataValidator
+    participant ArticleManager
+    participant Database
+    User->>API: Send data input
+    activate API
+    API->>DataValidator: Validate data
+    activate DataValidator
+    DataValidator-->>API: Validation result
+    deactivate DataValidator
+    alt Validation successful
+        API->>ArticleManager: Update article information
+        activate ArticleManager
+        ArticleManager->>Database: Update database
+        activate Database
+        Database-->>ArticleManager: Update confirmation
+        deactivate Database
+        ArticleManager-->>API: Article updated
+        deactivate ArticleManager
+        API-->>User: Success response
+    else Validation failed
+        API-->>User: Error response
+    end
+    deactivate API
+```
+### Updating an existing article's definition and saving the changes.
+```mermaid
+sequenceDiagram
+    participant User
+    participant UI
+    participant API
+    participant Database
+    User->>UI: Edit article definition
+    activate UI
+    UI->>API: Send update request
+    deactivate UI
+    activate API
+    API->>Database: Fetch article
+    activate Database
+    Database-->>API: Article data
+    deactivate Database
+    API->>Database: Update article
+    activate Database
+    Database-->>API: Update confirmation
+    deactivate Database
+    API-->>User: Success response
+    deactivate API
+```
+### Handling an invalid configuration file during application startup.
+```mermaid
+sequenceDiagram
+    participant User
+    participant Application
+    participant ConfigurationManager
+    participant Logger
+    User->>Application: Start application
+    activate Application
+    Application->>ConfigurationManager: Load configuration file
+    activate ConfigurationManager
+    alt Configuration file is valid
+        ConfigurationManager-->>Application: Configuration data
+        Application->>Application: Initialize components
+        Application-->>User: Application started successfully
+    else Configuration file is invalid
+        ConfigurationManager-->>Application: Error: Invalid configuration
+        Application->>Logger: Log error: Invalid configuration
+        activate Logger
+        Logger-->>Application: Logged error
+        deactivate Logger
+        Application-->>User: Error: Application failed to start
+    end
+    deactivate ConfigurationManager
+    deactivate Application
+```
+
+> Next, we will examine [Code Inventory](08_code_inventory.md).
+
+
+---
+
+*Generated by [SourceLens AI](https://github.com/openXFlow/sourceLensAI) using LLM: `gemini` (cloud) - model: `gemini-2.0-flash` | Language Profile: `Python`*
