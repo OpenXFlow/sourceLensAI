@@ -1,126 +1,135 @@
-<h1 align="center">sourceLens:  AI-powered tool to generate tutorials from source code or codebase .</h1>
+<h1 align="center">SourceLens: AI-Powered Code and Web Content Analysis & Documentation</h1>
 
 <p align="center">
   <a href="https://www.gnu.org/licenses/gpl-3.0"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPL v3"></a>
+  <a href="https://github.com/openXFlow/sourceLensAI/stargazers"><img src="https://img.shields.io/github/stars/openXFlow/sourceLensAI" alt="GitHub Stars"></a>
+  <a href="https://github.com/openXFlow/sourceLensAI/blob/main/pyproject.toml"><img src="https://img.shields.io/badge/python-3.9+-blue.svg" alt="Python 3.9+"></a>
 </p>
-
-`sourceLens` uses AI (Cloud LLM / Local LLM) to analyze code repositories ( GitHub repo / Local repo) and automatically generate beginner-friendly tutorials explaining how it works.
-
 
 <p align="center">
-  <img src="./docs/assets/banner1.png" alt="sourceLens Banner" width="600"/>
+  <img src="./docs/assets/banner1.png" alt="sourceLens Banner" width="700"/>
 </p>
 
+## ✨ Why SourceLens?
 
+*   **Automate Documentation:** Transform entire codebases or websites into structured, human-readable tutorials and summaries in minutes.
+*   **Visualize Architecture:** Automatically generate Mermaid diagrams (flowcharts, class, package, sequence) to understand complex systems at a glance.
+*   **Deep Content Analysis:** Go beyond simple parsing. Use LLMs to identify key concepts, analyze relationships, and get high-level project reviews.
+*   **Versatile & Extensible:** Analyze code in numerous languages or crawl web content, including **YouTube video transcripts**, all driven by a flexible, modular pipeline.
 
-## Key Features
+#### Demo
 
-*   **Code Input:** Fetches code from GitHub repositories (public/private) or local directories.
-*   **AI Analysis:** Uses configurable Large Language Models (LLMs like Gemini, Anthropic ,Openai ,Vertexai ,Perplexity etc.) to identify core concepts, map their relationships, and determine a logical learning path.
-*   **Tutorial Generation:** Creates structured Markdown tutorials with an index, individual chapters, and explanations in potentially multiple languages.
-*   **Filtering:** Supports include/exclude patterns and file size limits for focused analysis. Supported languages like python, java, javascript, typescript, csharp, cpp/c, php , swift, go, ruby ,rust . Easily extensible for other programming languages
-
-*   **Configurable:** Operation is controlled via a `config.json` file, with support for environment variables for secrets.
-
-*   **Example of generated tutorials:** 
-
-    [python Sample Tutorial (eng) ](./output/python-sample-project/index.md)
-
-
-## Installation
-
-**Prerequisites:**
-
-*   Python 3.9 or higher
-*   Git
-<p align="left">
-  <img src="./docs/assets/banner3.png" alt="sourceLens Banner" width="180"/>
+<p align="center">
+  <img src="./docs/assets/sorceLens.gif" alt="SourceLens Demo" width="800"/>
 </p>
 
-**Steps:**
+---
 
-1.  **Clone:**
+## 📦 Installation
+
+The easiest way to install `sourceLens` is directly from the official GitHub Release using `pip`.
+
+1.  **Prerequisites:** Ensure you have Python 3.9+ and pip installed.
+
+2.  **Install `sourceLens`:**
+    Run the following command in your terminal. This will download and install the latest stable version and its dependencies.
     ```bash
-    git clone https://github.com/openXFlow/sourceLensAI
+    pip install https://github.com/openXFlow/sourceLensAI/releases/download/v0.2.1/sourcelens-0.2.1-py3-none-any.whl
+    ```
+    *(For future versions, check the [Releases page](https://github.com/openXFlow/sourceLensAI/releases) for the latest URL.)*
+
+3.  **Install Browser Drivers (for Web Crawling):**
+    This step is **only required** if you plan to use the `web` analysis flow.
+    ```bash
+    playwright install
+    ```
+
+After installation, the `sourcelens` command will be available globally in your terminal.
+
+---
+
+## ⚙️ Configuration
+
+`sourceLens` is a highly configurable tool. You can set API keys, switch between LLMs (like Gemini, or a local Ollama instance), add support for new programming languages, and fine-tune the analysis process.
+
+For detailed instructions, please see our configuration guides:
+
+*   **[General info](./docs/how_to/how_to_configure.md)**
+*   **[How to Configure Code Analysis](./docs/how_to/how_to_configure_code_analysis.md)**
+*   **[How to Configure Web Crawling](./docs/how_to/how_to_configure_web_crawling.md)**
+*   **[How to Add a New LLM Provider](./docs/how_to/how_to_add_new_LLM_provider_to_sourceLens.md)**
+
+---
+
+## 🚀 Quick Start for Developers
+
+If you want to contribute to the project or run the latest development code from the `main` branch, follow these steps.
+
+1.  **Clone & Install:**
+    ```bash
+    git clone https://github.com/openXFlow/sourceLensAI.git
     cd sourceLensAI
+    python -m venv venv && source venv/bin/activate
+    pip install -e ".[all,dev]"
     ```
-
-2.  **Set up Virtual Environment:**
-    *   Linux/macOS: `python3 -m venv venv && source venv/bin/activate`
-    *   Windows: `python -m venv venv && .\venv\Scripts\activate`
-    *(Your prompt should show `(venv)`)*
-
-3.  **Install Dependencies:**
+2.  **Configure:** Copy `config.example.json` to `config.json` and add your API keys (or set environment variables).
+3.  **Run:**
     ```bash
-    pip install -e .[dev]
+    sourcelens code --dir ./tests/python_sample_project
     ```
 
-## Configuration
+---
 
-Configuration is primarily handled via `config.json`.
+## Usage Examples
 
-1.  **Copy Example:** `cp config.example.json config.json`
+*   **Analyze a local directory:**
+    ```bash
+    sourcelens code --dir /path/to/your/project
+    ```
+*   **Analyze a GitHub repository:**
+    ```bash
+    sourcelens code --repo https://github.com/pallets/flask
+    ```
+*   **Analyze a web page and its links (up to depth 1):**
+    ```bash
+    sourcelens web --crawl-url https://docs.python.org/3/ --crawl-depth 1
+    ```
+*   **Analyze a YouTube video transcript:**
+    ```bash
+    sourcelens web --crawl-file "https://www.youtube.com/watch?v=some_video_id"
+    ```
 
-2.  **Set Secrets (API Keys/Tokens):** You have two options:
-    *   **(Recommended) Use Environment Variables:**
-        *   In `config.json`, set the relevant `api_key` (under `llm.providers`) and `token` (under `github`) fields to `null`.
-        *   Before running `sourcelens`, set the corresponding environment variables in your shell:
-            ```bash
-            # Example for Linux/macOS
-            export GEMINI_API_KEY="your_gemini_key_here" # Or OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.
-            export GITHUB_TOKEN="your_github_token_here"
-            sourcelens ...
-            ```
-        *   The tool checks for standard variables like `GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `PERPLEXITY_API_KEY`, `GITHUB_TOKEN`, etc., if the config value is `null`.
-    *   **(Less Secure) Edit `config.json` Directly:**
-        *   Place your API key directly into the `"api_key": "..."` field for the active LLM provider.
-        *   Place your GitHub Token directly into the `"token": "..."` field under `github`.
-        *   **WARNING:** If you use this method, ensure `config.json` is never committed to Git.
+### 📋 Examples of Generated Output
 
-3.  **Adjust Other Settings:** Review `config.json` and modify other settings (LLM model, active language profile, file filters, output directory) as needed.
+The following are static examples of documentation generated by `sourceLens`, committed to the repository for you to explore.
 
-    **IMPORTANT:** `config.json` is ignored by Git (`.gitignore`). Even if using environment variables, **do NOT commit `config.json`** as it might contain other configuration details or accidentally hold secrets later.
+*   **[Index of Local Code Project Analyses](./output/index_Code_Analysis_Local_Projects.md)**
+    *   Lists all tutorials generated from local source code directories.
 
+*   **[Index of GitHub Repository Analyses](./output/index_Code_Analysis_GitHub_Repository.md)**
+    *   Lists all tutorials generated from remote GitHub repositories.
 
-## Usage
+*   **[Index of Web Content & YouTube Analyses](./output/index_Web_Content_Analysis.md)**
+    *   Lists all summaries and analyses generated from web pages, sitemaps, and YouTube videos.
 
-Run from the command line, providing a source:
+---
 
-```bash
-sourcelens [OPTIONS] (--repo REPO_URL | --dir LOCAL_DIR)
-```
+## 📚 Documentation
 
-**Common Options:**
+Our documentation is split into user guides and technical deep-dives to help you get the most out of `sourceLens`.
 
-*   `--repo REPO_URL`: URL of the GitHub repository.
-*   `--dir LOCAL_DIR`: Path to the local codebase directory.
-*   `--config FILE_PATH`: Path to config file (default: `config.json`).
-*   `--name NAME`: Override the project name for the tutorial.
-*   `--output DIR`: Override the base output directory.
-*   `--include PATTERN`: Add an include file pattern (can use multiple).
-*   `--exclude PATTERN`: Add an exclude file pattern (can use multiple).
-*   `--language LANG`: Override the output tutorial language.
+*   **[View All User & Configuration Guides](./docs/how_to/index_how_to.md)**
+    *   Learn how to run, configure, and troubleshoot `sourceLens`.
 
-**Examples:**
+*   **[View Technical & Developer Documentation](./docs/architecture/index_architecture.md)**
+    *   Dive into the project's architecture and learn how to contribute.
 
-```bash
-# Analyze a GitHub repo (assuming keys are in environment variables or config.json)
-sourcelens --repo https://github.com/The-Pocket/PocketFlow
+## 🤝 Contributing
 
-# Analyze a local directory
-sourcelens --dir ../my-local-project/src
+Contributions are welcome! Whether it's improving the documentation, adding support for a new language, or refining the LLM prompts, we appreciate your help.
 
-# Analyze with overrides
-sourcelens --repo https://github.com/some/repo --name "My Tutorial" --language spanish
-```
+Please see the developer documentation for guides on how to add new nodes, diagram types, or LLM providers. Before submitting a pull request, please ensure your code is formatted and passes all checks.
 
-Generated tutorials appear in the configured output directory (e.g., `output/your-project-name/`).
+## 📜 License
 
-## License
-
-This project is licensed under the GNU GPL v3 License - see the LICENSE file for details.
-<p align="left">
-  <img src="./docs/assets/banner2.png" alt="sourceLens Banner". 
-  width="100"/>
-</p>
-```
+This project is licensed under the GNU General Public License v3.0 or later. See the `LICENSE` file for details.

@@ -1,0 +1,6 @@
+# MANIFEST.in
+
+# This tells the build system to recursively search the 'src' directory
+# and include all files with a .json extension. This is essential for
+# packaging the `config.default.json` files within each flow.
+recursive-include src *.json
