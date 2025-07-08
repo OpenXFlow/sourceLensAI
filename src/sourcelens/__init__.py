@@ -23,7 +23,7 @@ diagrams, and identifying use case scenarios.
 
 # Define package version.
 # This version should be kept in sync with the version in pyproject.toml.
-__version__ = "0.2.0"  # Version was 0.1.1, assuming an update.
+__version__ = "0.3.0"  
 
 # It's generally cleaner to let users import directly from submodules
 # (e.g., from sourcelens.main import main) rather than re-exporting too much here,

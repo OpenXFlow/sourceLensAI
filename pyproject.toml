@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sourcelens"
-version = "0.2.0" # Assuming current version, adjust if necessary
+version = "0.3.0"
 description = "AI-powered tool to generate tutorials from source code or web content."
 readme = "README.md"
 authors = [

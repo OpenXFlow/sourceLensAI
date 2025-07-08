@@ -1,0 +1,28 @@
+* Variable Gain Amplifier (VGA) Subcircuit
+* The gain is controlled by the resistance of a Verilog-A VCR.
+
+.SUBCKT vga_stage v_in v_out v_control
+
+* Include the Verilog-A model for the voltage-controlled resistor
+.HSPICE
+.INCLUDE "voltage_controlled_resistor.va"
+.ENDHSPICE
+
+* Op-amp in a non-inverting configuration.
+* The gain is approximately 1 + (R2 / R_vcr).
+R1 v_out 2 10k
+
+* Voltage Controlled Resistor (VCR) as the feedback element.
+* Its resistance is determined by the v_control node.
+X_VCR 2 0 v_control vcr
+
+* The actual op-amp for the gain stage.
+* pins: non-inverting_in, inverting_in, v_out
+X_OPAMP_VGA v_in 2 v_out opamp_vga_core
+
+.ENDS vga_stage
+
+* Core op-amp model for the VGA
+.SUBCKT opamp_vga_core v_plus v_minus v_out
+E_VGA_GAIN v_out 0 v_plus v_minus 100e3
+.ENDS opamp_vga_core

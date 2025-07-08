@@ -1,0 +1,122 @@
+# Simple RISC-V Processor Project
+
+This document provides an overview of the `simple_riscv_processor` project, including its file structure and links to individual file analyses. This project defines a basic 5-stage pipelined processor core using SystemVerilog.
+
+## Project Structure
+
+The project is logically structured into directories for RTL source code (`rtl`), testbenches (`tb`), and synthesis constraints (`constraints`). This organization separates design files from simulation and implementation details, which is a standard practice in digital hardware design.
+
+```bash
+digital_design_sample_project/
+├── README.md
+├── constraints/
+│   └── processor.xdc
+├── rtl/
+│   ├── alu.sv
+│   ├── pipeline_stage_ex.sv
+│   ├── pipeline_stage_id.sv
+│   ├── pipeline_stage_if.sv
+│   ├── pipeline_stage_mem.sv
+│   ├── pipeline_stage_wb.sv
+│   ├── reg_file.sv
+│   └── top_processor.sv
+└── tb/
+    ├── sim.tcl
+    └── tb_top_processor.sv
+```
+
+## File Index and Descriptions
+
+Below is a list of all key files within the project. Each link leads to a detailed breakdown of the file's purpose and content.
+
+*   **[README.md](./README.md)**: Describes the 5-stage pipeline architecture and overall project goals.
+
+### `rtl/` Directory - Register-Transfer Level Source
+
+*   **[rtl/top_processor.sv](./rtl/top_processor.sv)**: The top-level module that instantiates and connects all five pipeline stages.
+*   **[rtl/pipeline_stage_if.sv](./rtl/pipeline_stage_if.sv)**: Implements the Instruction Fetch (IF) stage of the pipeline.
+*   **[rtl/pipeline_stage_id.sv](./rtl/pipeline_stage_id.sv)**: Implements the Instruction Decode (ID) stage, including interaction with the register file.
+*   **[rtl/pipeline_stage_ex.sv](./rtl/pipeline_stage_ex.sv)**: Implements the Execute (EX) stage, primarily containing the ALU.
+*   **[rtl/pipeline_stage_mem.sv](./rtl/pipeline_stage_mem.sv)**: Implements the Memory Access (MEM) stage for load/store operations.
+*   **[rtl/pipeline_stage_wb.sv](./rtl/pipeline_stage_wb.sv)**: Implements the Write Back (WB) stage to write results back to the register file.
+*   **[rtl/reg_file.sv](./rtl/reg_file.sv)**: A behavioral model of the processor's 32-register file.
+*   **[rtl/alu.sv](./rtl/alu.sv)**: The Arithmetic Logic Unit, which performs core calculations like add, subtract, and logical operations.
+
+### `tb/` Directory - Testbench and Simulation
+
+*   **[tb/tb_top_processor.sv](./tb/tb_top_processor.sv)**: The SystemVerilog testbench for simulating the `top_processor` module.
+*   **[tb/sim.tcl](./tb/sim.tcl)**: A Tcl script for automating simulation tasks like compiling sources and adding waves in a simulator.
+
+### `constraints/` Directory - Physical Constraints
+
+*   **[constraints/processor.xdc](./constraints/processor.xdc)**: A Xilinx Design Constraints file specifying timing requirements, such as the clock period, for synthesis and implementation on an FPGA.
+
+## Project Configuration
+
+The following settings from `config.json` were used for the analysis of this project.
+
+> **Note:** The configuration shown below is a simplified subset specific to this analysis run (e.g., for a command like `sourcelens --language english code --dir tests/digital_design_sample_project`). A complete `config.json` file for full application functionality must include all profiles (language and LLM) and configuration blocks for all supported flows (e.g., `FL01_code_analysis`, `FL02_web_crawling`).
+
+```json
+{
+  "common": {
+    "common_output_settings": {
+      "default_output_name": "auto-generated",
+      "main_output_directory": "output",
+      "generated_text_language": "english"
+    },
+    "logging": {
+      "log_dir": "logs",
+      "log_level": "INFO"
+    },
+    "cache_settings": {
+      "use_llm_cache": true,
+      "llm_cache_file": ".cache/llm_cache.json"
+    },
+    "llm_default_options": {
+      "max_retries": 5,
+      "retry_wait_seconds": 20
+    }
+  },
+  "FL01_code_analysis": {
+    "enabled": true,
+    "active_language_profile_id": "digital_design_llm_default",
+    "active_llm_provider_id": "gemini_flash_main",
+    "diagram_generation": {
+      "enabled": true,
+      "include_package_diagram": true,
+      "include_sequence_diagrams": true
+    },
+    "output_options": {
+      "include_source_index": true,
+      "include_project_review": true
+    }
+  },
+  "profiles": {
+    "language_profiles": [
+      {
+        "profile_id": "digital_design_llm_default",
+        "language_name_for_llm": "Digital HDL Design (VHDL/Verilog)",
+        "parser_type": "llm",
+        "include_patterns": [
+          "*.vhd", "*.vhdl", "*.v", "*.sv", "*.svh", "*.xdc", "*.sdc",
+          "*.tcl", "*.do", "*.md", "*.txt"
+        ]
+      }
+    ],
+    "llm_profiles": [
+      {
+        "provider_id": "gemini_flash_main",
+        "is_local_llm": false,
+        "provider": "gemini",
+        "model": "gemini-2.0-flash",
+        "api_key_env_var": "GEMINI_API_KEY",
+        "api_key": "Your_GEMINI_API_KEY"
+      }
+    ]
+  }
+}
+```
+---
+
+*Generated by [SourceLens AI](https://github.com/openXFlow/sourceLensAI) using LLM: `gemini` (cloud) - model: `gemini-2.0-flash` | Language Profile: `Digital HDL Design (VHDL/Verilog)`*

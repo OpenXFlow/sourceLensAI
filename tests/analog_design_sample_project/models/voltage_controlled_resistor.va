@@ -1,0 +1,35 @@
+// Voltage Controlled Resistor (VCR)
+// The resistance is inversely proportional to the control voltage.
+`include "disciplines.vams"
+
+module vcr(p, n, vc);
+    inout p, n;
+    input vc;
+    electrical p, n, vc;
+
+    parameter real r_min = 1k; // Minimum resistance
+    parameter real r_max = 100k; // Maximum resistance
+    parameter real v_ref = 1.0; // Reference control voltage
+
+    real resistance;
+
+    analog begin
+        @(initial_step) begin
+            resistance = r_max;
+        end
+
+        // Resistance is high for low Vc, and low for high Vc
+        resistance = r_max / (V(vc)/v_ref + 1.0);
+        
+        // Clamp the resistance to its min/max values
+        if (resistance < r_min) begin
+            resistance = r_min;
+        end
+        if (resistance > r_max) begin
+            resistance = r_max;
+        end
+
+        // Ohm's Law
+        V(p, n) <+ resistance * I(p, n);
+    end
+endmodule

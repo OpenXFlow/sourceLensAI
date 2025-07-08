@@ -1,0 +1,15 @@
+# Default values for guestbook chart.
+frontend:
+  replicaCount: 1
+  image: "gcr.io/google-samples/gb-frontend:v4"
+  port: 80
+
+redis:
+  leader:
+    replicaCount: 1
+    image: "redis:6.0.5"
+    port: 6379
+  follower:
+    replicaCount: 2
+    image: "redis:6.0.5"
+    port: 6379

@@ -206,6 +206,74 @@
           "config.ru", "*.yaml", "*.yml", "*.json", "README.md", "Dockerfile",
           "*.sh"
         ]
+      },
+      {
+        "profile_id": "matlab_llm_default",
+        "language_name_for_llm": "MATLAB",
+        "parser_type": "llm",
+        "include_patterns": [
+          "*.m", "*.mlx", "*.mlapp", "*.fig", "*.mat", "*.slx", "README.md", "*.txt"
+        ]
+      },
+      {
+        "profile_id": "analog_design_llm_default",
+        "language_name_for_llm": "Analog Circuit Design (SPICE, Verilog-A)",
+        "parser_type": "llm",
+        "include_patterns": [
+          "*.sp", "*.spice", "*.cir", "*.net", "*.va", "*.vams", "*.scs",
+          "*.inc", "*.lib", "*.md", "*.txt"
+        ]
+      },
+      {
+        "profile_id": "digital_design_llm_default",
+        "language_name_for_llm": "Digital HDL Design (VHDL/Verilog)",
+        "parser_type": "llm",
+        "include_patterns": [
+          "*.vhd", "*.vhdl", "*.v", "*.sv", "*.svh", "*.xdc", "*.sdc",
+          "*.tcl", "*.do", "*.md", "*.txt"
+        ]
+      },
+      {
+        "profile_id": "database_sql_default",
+        "language_name_for_llm": "SQL Database Schema",
+        "parser_type": "llm",
+        "include_patterns": [
+          "*.sql", "*.ddl", "schema.rb", "*.prisma", "README.md"
+        ]
+      },
+      {
+        "profile_id": "devops_iac_default",
+        "language_name_for_llm": "DevOps & Infrastructure-as-Code (Terraform, Ansible, Docker)",
+        "parser_type": "llm",
+        "include_patterns": [
+          "*.tf", "*.tfvars", "*.hcl", "*.yaml", "*.yml", "playbook.yml",
+          "inventory.ini", "Dockerfile", "docker-compose.yml", "*.sh", "*.ps1", "README.md"
+        ]
+      },
+      {
+        "profile_id": "kubernetes_yaml_default",
+        "language_name_for_llm": "Kubernetes Configurations (YAML)",
+        "parser_type": "llm",
+        "include_patterns": [
+          "*.yaml", "*.yml", "kustomization.yaml", "Chart.yaml", "values.yaml", "README.md"
+        ]
+      },
+      {
+        "profile_id": "vue_llm_default",
+        "language_name_for_llm": "Vue.js Frontend Project",
+        "parser_type": "llm",
+        "include_patterns": [
+          "*.vue", "*.js", "*.ts", "main.js", "main.ts", "router.js",
+          "store.js", "package.json", "README.md"
+        ]
+      },
+      {
+        "profile_id": "shell_scripting_default",
+        "language_name_for_llm": "Shell Scripting (Bash/PowerShell)",
+        "parser_type": "llm",
+        "include_patterns": [
+          "*.sh", "*.bash", "*.ps1", "Makefile", "*.cmd", "*.bat"
+        ]
       }
     ],
     "llm_profiles": [

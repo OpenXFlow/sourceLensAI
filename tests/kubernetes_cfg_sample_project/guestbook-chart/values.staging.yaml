@@ -1,0 +1,6 @@
+# Staging specific values
+frontend:
+  replicaCount: 1 # Keep it low for staging
+redis:
+  follower:
+    replicaCount: 1

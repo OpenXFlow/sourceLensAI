@@ -1,0 +1,11 @@
+* Simple Peak Detector Circuit
+* Consists of a diode and a capacitor to charge up to the peak voltage.
+
+.SUBCKT peak_detector_circuit v_in v_out
+D1 v_in 1 d_model
+C1 1 v_out 10nF
+RLoad v_out 0 1M  ; Slow discharge resistor
+
+* Ideal Diode Model
+.MODEL d_model D(Is=1e-14 N=1)
+.ENDS peak_detector_circuit

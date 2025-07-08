@@ -1,0 +1,23 @@
+# Jinja2 template for Docker Compose file
+# Allows for dynamic configuration based on Ansible variables.
+version: '3.8'
+
+services:
+  {% if 'webservers' in group_names %}
+  web:
+    image: nginx:latest
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+  {% endif %}
+
+  {% if 'appservers' in group_names %}
+  app:
+    image: my-flask-app:1.0 # Assumes this image is pre-built and available
+    restart: always
+    environment:
+      - DATABASE_URL={{ lookup('env', 'DATABASE_URL') | default('postgresql://user:pass@host:port/db') }}
+    ports:
+      - "5000:5000"
+  {% endif %}

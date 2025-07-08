@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-frontend
+  labels:
+    {{- include "guestbook.labels" . | nindent 8 }}
+    app.kubernetes.io/component: frontend
+spec:
+  replicas: {{ .Values.frontend.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: frontend
+  template:
+    metadata:
+      labels:
+        {{- include "guestbook.labels" . | nindent 12 }}
+        app.kubernetes.io/component: frontend
+    spec:
+      containers:
+      - name: php-redis
+        image: {{ .Values.frontend.image }}
+        ports:
+        - containerPort: {{ .Values.frontend.port }}

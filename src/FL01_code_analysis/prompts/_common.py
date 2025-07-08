@@ -23,13 +23,7 @@ modules and nodes. General types are imported from `sourcelens.core.common_types
 from dataclasses import dataclass
 from typing import Final, Optional
 
-# Import shared types from the central common_types module
-from sourcelens.core.common_types import (
-    ChapterMetadata,  # Used by WriteChapterContext
-    # SequenceDiagramContext is now imported from common_types by modules needing it
-    # CodeAbstractionsList, # No longer needed directly here, SequenceDiagramContext will import it
-    # CodeRelationshipsDict, # No longer needed directly here, SequenceDiagramContext will import it
-)
+from sourcelens.core.common_types import ChapterMetadata
 
 # --- Constants specific to Code Analysis Prompts (FL01 only) ---
 CODE_BLOCK_MAX_LINES_FOR_CHAPTERS: Final[int] = 20
@@ -50,8 +44,10 @@ class WriteChapterContext:
         previous_context_info: Summaries of previously generated chapters.
         file_context_str: String containing relevant code snippets.
         language: Target language for the tutorial chapter.
-        prev_chapter_meta: Metadata of the preceding chapter (uses common ChapterMetadata).
-        next_chapter_meta: Metadata of the succeeding chapter (uses common ChapterMetadata).
+        source_code_language_name: The name of the source code's language
+                                   (e.g., "Python", "MATLAB") for the LLM's role.
+        prev_chapter_meta: Metadata of the preceding chapter.
+        next_chapter_meta: Metadata of the succeeding chapter.
     """
 
     project_name: str
@@ -62,21 +58,14 @@ class WriteChapterContext:
     previous_context_info: str
     file_context_str: str
     language: str
+    source_code_language_name: str
     prev_chapter_meta: Optional[ChapterMetadata] = None
     next_chapter_meta: Optional[ChapterMetadata] = None
 
 
-# SequenceDiagramContext is now defined in sourcelens.core.common_types
-# Modules in FL01 that need SequenceDiagramContext (like n06_generate_diagrams.py
-# or prompts/sequence_diagram_prompts.py if it were flow-specific, which it isn't)
-# should import it from sourcelens.core.common_types.
-
 __all__ = [
-    # Specific constants for FL01
     "CODE_BLOCK_MAX_LINES_FOR_CHAPTERS",
-    # Specific dataclasses for FL01 prompt contexts
     "WriteChapterContext",
-    # SequenceDiagramContext is no longer defined or re-exported here.
 ]
 
 # End of src/FL01_code_analysis/prompts/_common.py

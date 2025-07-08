@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-redis-leader
+  labels:
+    app.kubernetes.io/component: redis-leader
+spec:
+  replicas: {{ .Values.redis.leader.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: redis-leader
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: redis-leader
+    spec:
+      containers:
+      - name: redis-leader
+        image: {{ .Values.redis.leader.image }}
+        ports:
+        - containerPort: {{ .Values.redis.leader.port }}

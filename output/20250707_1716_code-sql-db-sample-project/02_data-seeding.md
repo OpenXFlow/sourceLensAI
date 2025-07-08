@@ -1,0 +1,53 @@
+> Previously, we looked at [Constraints (Primary Keys, Checks)](01_constraints-primary-keys-checks.md).
+
+# Chapter 2: Data Seeding
+Let's begin exploring this concept. This chapter focuses on *data seeding*, the process of populating our database tables with initial sample data. Think of it like planting seeds in a garden - we're providing the initial data that allows our application to grow and flourish.
+**Why Data Seeding?**
+Imagine building a house. You wouldn't start by furnishing it without first constructing the basic structure. Similarly, we need some initial data in our database to test and demonstrate the application's functionality. Data seeding allows us to:
+*   **Test the application:** We can verify that our application interacts with the database correctly, retrieving, updating, and deleting data as expected.
+*   **Demonstrate functionality:** Sample data makes it easier to showcase the application's features and how they work. For instance, a product catalog needs products to be visible!
+*   **Provide a starting point:** When developers start working on the project, they have a pre-populated database to explore and experiment with.
+*   **Ensure data integrity:** By inserting sample data that adheres to our [Constraints (Primary Keys, Checks)](02_constraints-primary-keys-checks.md) and [Relationships (Foreign Keys)](04_relationships-foreign-keys.md), we can verify that our database schema is working as intended.
+**How Data Seeding Works**
+Data seeding typically involves running a script or set of scripts that contain `INSERT` statements. These statements add rows to our database tables, filling them with predefined values. The order in which we insert data is important. We must insert data into tables without foreign key constraints before inserting data into tables that *have* those constraints, since the foreign keys need to reference existing rows in other tables.
+**Code Example: Seeding Our Database**
+The `data/01_seed_data.sql` file contains the SQL statements for seeding our database.
+```python
+--- File: data/01_seed_data.sql ---
+-- 01_seed_data.sql
+-- Populates the database with some initial sample data.
+INSERT INTO users (email, password_hash, first_name, last_name) VALUES
+('john.doe@example.com', 'hashed_pw_1', 'John', 'Doe'),
+('jane.smith@example.com', 'hashed_pw_2', 'Jane', 'Smith');
+INSERT INTO products (sku, name, description, price, stock_quantity) VALUES
+('LPTP-001', 'Pro Laptop', 'A high-performance laptop for professionals.', 1200.00, 50),
+('SMT-002', 'Smart Mouse', 'An ergonomic wireless mouse.', 75.50, 200),
+('KBD-003', 'Mechanical Keyboard', 'A backlit mechanical keyboard for typing enthusiasts.', 150.00, 100);
+-- Note: Orders would typically be placed via the stored procedure.
+-- This is a manual insertion for demonstration.
+INSERT INTO orders (user_id, status, total_amount) VALUES
+(1, 'shipped', 1275.50);
+INSERT INTO order_items (order_id, product_id, quantity, price_per_unit) VALUES
+(1, 1, 1, 1200.00),
+(1, 2, 1, 75.50);
+INSERT INTO product_reviews (product_id, user_id, rating, comment) VALUES
+(1, 2, 5, 'Absolutely fantastic laptop! Fast and reliable.'),
+(3, 1, 4, 'Great keyboard, very clicky. A bit loud but feels great.');
+```
+This script performs the following actions:
+1.  **Inserts Users:** Adds two sample users to the `users` table.
+2.  **Inserts Products:** Adds three sample products to the `products` table. This sets up our initial [Product Catalog](06_product-catalog.md).
+3.  **Inserts Orders and Order Items:** Adds a sample order and its associated order items, linking them to a user and products. Note that in a real application, orders would typically be placed via a [Stored Procedure](09_stored-procedures.md). This is included here as manual seeding for example purposes.
+4.  **Inserts Product Reviews:** Adds two sample product reviews, linking them to products and users.
+**Running the Seed Script**
+The exact method for running the seed script depends on your database system. Typically, it involves using a command-line tool or a database management tool (like Dbeaver or pgAdmin) to execute the SQL statements in the `01_seed_data.sql` file. The command is something like `psql -U your_user -d your_database -f data/01_seed_data.sql` for PostgreSQL, replacing `your_user` and `your_database` appropriately.
+**Ensuring Referential Integrity**
+When seeding data with foreign key relationships, it's crucial to insert data in the correct order. For example, we must insert users and products *before* inserting orders and order items, since the `orders` and `order_items` tables have foreign keys that reference the `users` and `products` tables respectively. If we tried to insert an order for a user that doesn't exist, the database would reject the insertion due to the foreign key constraint.
+This concludes our look at this topic.
+
+> Next, we will examine [Database Tables](03_database-tables.md).
+
+
+---
+
+*Generated by [SourceLens AI](https://github.com/openXFlow/sourceLensAI) using LLM: `gemini` (cloud) - model: `gemini-2.0-flash` | Language Profile: `Python`*

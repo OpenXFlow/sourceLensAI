@@ -1,0 +1,7 @@
+# This patch increases the number of frontend replicas for production.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: guestbook-kustomized-frontend
+spec:
+  replicas: 5 # Scale up for production traffic

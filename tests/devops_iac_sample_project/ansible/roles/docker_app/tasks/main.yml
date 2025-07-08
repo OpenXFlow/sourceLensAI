@@ -1,0 +1,16 @@
+---
+- name: Create directory for docker-compose file
+  file:
+    path: /opt/app
+    state: directory
+    mode: '0755'
+
+- name: Template the docker-compose file to the server
+  template:
+    src: docker-compose.yml.j2
+    dest: /opt/app/docker-compose.yml
+
+- name: Run Docker Compose to start containers
+  community.docker.docker_compose:
+    project_src: /opt/app
+    state: present
